@@ -9,11 +9,18 @@
 // replaced here, and no binding returns a fabricated success.
 #include "game_overrides.h"
 #include "ps2_runtime.h"
+#include "runtime/ps2_rom_device.h"
 
 #include <cstdint>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 namespace {
+constexpr const char* kElfName = "SLES_546.27";
+constexpr uint32_t kEntry = 0x00100008;
+constexpr uint32_t kElfCrc32 = 0xC804E2C1;
+
 struct Binding {
     uint32_t address;
     const char* handler;
@@ -37,14 +44,44 @@ constexpr Binding kBindings[] = {
     {0x003B1BD0, "sceSifAllocSysMemory"}, // rpc 4, send {size, mode, addr}
     {0x003B1C50, "sceSifFreeIopHeap"},    // rpc 2, send {addr}
 
+    // fileio (SID 0x80000001, served by FILEIO from IOPRP300.IMG, which the
+    // emulated IOP does not run). Its only callers, 0x379908 and 0x38AFE0,
+    // read rom0:ROMVER; the second is reached at boot through
+    // main 0x21B3F8 -> 0x207820 -> 0x1B48F8 -> 0x1E6EB8 -> 0x38B0F8 -> 0x38AFE0.
+    {0x003B1468, "sceOpen"},  // uses SceStdioOpenSema, called as (path, 1)
+    {0x003B16F8, "sceClose"}, // uses SceStdioCloseSema
+    {0x003B1878, "sceRead"},  // uses SceStdioReadSema, called as (fd, buf, n)
+
     // libcdvd (cdvdfsv SIDs 0x80000592 init, 0x80000593 S-cmd, 0x8000059A/C disk ready)
     {0x00377CA0, "sceCdInit"},
     {0x00378458, "sceCdGetDiskType"}, // S-cmd 3, -1 mapped to 0
     {0x00378480, "sceCdMmode"},       // S-cmd 0x22
     {0x003781A0, "sceCdDiskReady"},   // falls back to the 0x8000059A variant at 0x377F88
     {0x00378558, "sceCdReadClock"},   // S-cmd 1, 16-byte reply, callers decode BCD
+    // Internal entry points, only called from the functions above. Bound too
+    // so that no path can reach the guest S-cmd and DiskReady bind loops.
+    {0x00377F88, "sceCdDiskReady"},   // old-protocol DiskReady (SID 0x8000059A)
+    {0x003783C0, "sceCdGetDiskType"}, // S-cmd 3 core, without the -1 -> 0 mapping
+    {0x00377AD8, "sceCdSyncS"},       // polls sceSifCheckStatRpc on the S-cmd client
 };
 // clang-format on
+
+// rom0:ROMVER as a European console stores it: "VVVVRTYYYYMMDD", '\n' and a
+// NUL, 16 bytes in the ROMDIR. The runtime's default file holds only the 14
+// visible characters. 0x379908 reads the file one byte at a time up to the NUL
+// and parses the 9 bytes before it as a date (> 20010608), so a missing
+// terminator makes it read past the end of the file.
+[[maybe_unused]] const bool kRomProfileRegistered = [] {
+    PS2RomProfile profile;
+    profile.id = "burnout-dominator-pal";
+    profile.provider = "burnout";
+    profile.matcher = {kElfName, kEntry, kElfCrc32};
+    constexpr char kRomVersion[] = "0200EC20040614\n";
+    static_assert(sizeof(kRomVersion) == 16);
+    profile.files["ROMVER"] = std::vector<uint8_t>(kRomVersion, kRomVersion + sizeof(kRomVersion));
+    PS2RomDevice::registerProfile(std::move(profile));
+    return true;
+}();
 
 void apply(PS2Runtime& runtime) {
     unsigned bound = 0;
@@ -59,4 +96,4 @@ void apply(PS2Runtime& runtime) {
 }
 } // namespace
 
-PS2_REGISTER_GAME_OVERRIDE("Burnout Dominator PAL", "SLES_546.27", 0x00100008, 0xC804E2C1, apply)
+PS2_REGISTER_GAME_OVERRIDE("Burnout Dominator PAL", kElfName, kEntry, kElfCrc32, apply)
