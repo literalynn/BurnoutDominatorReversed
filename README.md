@@ -48,7 +48,9 @@ Le diagnostic sans fenêtre s’arrête sur une fonction manquante. Le code 124 
 
 ## Linux et macOS
 
-Utiliser les mêmes commandes Python/CMake sans `--generator` ni `--arch`, avec GCC/Clang et les bibliothèques de développement demandées par raylib et FFmpeg. Le programme se situe alors généralement sous `build/ps2xRuntime/burnout_dominator`. Les chemins du disque sont configurés à l’extraction ; aucune lettre de lecteur n’est intégrée dans le code C++.
+Utiliser les mêmes commandes Python/CMake sans `--arch` ; `--generator Ninja` est conseillé. `configure` ajoute `-msse4.1` sur x86-64. Le programme se situe alors sous `build/ps2xRuntime/burnout_dominator`. Les chemins du disque sont configurés à l’extraction ; aucune lettre de lecteur n’est intégrée dans le code C++.
+
+Paquets Ubuntu 24.04 utilisés pour la vérification : `ninja-build libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev`. Avec GCC 13, les outils, le runtime et tous les tests compilent et réussissent (lancer `ps2x_tests` depuis la racine du dépôt). Le jeu n’y a pas encore été compilé.
 
 Le runtime upstream possède un chemin SSE vers NEON pour ARM64. La compilation macOS, le comportement sur Apple Silicon et les performances du jeu restent à vérifier sur ces systèmes.
 
