@@ -52,4 +52,11 @@ if(TARGET ps2_runtime AND TARGET ps2_test_function_table)
     if(COMMAND ps2x_stage_ffmpeg_runtime_dlls)
         ps2x_stage_ffmpeg_runtime_dlls(burnout_overrides_tests)
     endif()
+    # Same optimization settings as ps2x_tests: with LTO on, ps2_runtime holds
+    # IPO objects (LLVM bitcode with Clang) that a non-IPO link cannot read.
+    # ReleaseMode.cmake sets IPO_SUPPORTED in the including scope.
+    include("${PROJECT_SOURCE_DIR}/ps2xRuntime/cmake/ReleaseMode.cmake")
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        EnableFastReleaseMode(burnout_overrides_tests)
+    endif()
 endif()
