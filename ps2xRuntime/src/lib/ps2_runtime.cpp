@@ -2552,6 +2552,11 @@ PS2Runtime::RunResult PS2Runtime::runHeadless(const RunOptions &options)
     return result;
 }
 
+PS2Runtime::RunResult PS2Runtime::run()
+{
+    return run(RunOptions{});
+}
+
 PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
 {
     RunResult result;
