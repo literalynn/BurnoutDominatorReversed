@@ -37,3 +37,19 @@ if(BDR_BUILD_GAME)
         target_compile_options(ps2EntryRunner PRIVATE /bigobj /utf-8 "/MP${BDR_COMPILER_WORKERS}")
     endif()
 endif()
+
+# Checks the Burnout bindings and ROM0 profile without generated guest code.
+if(TARGET ps2_runtime AND TARGET ps2_test_function_table)
+    add_executable(burnout_overrides_tests
+        "${PROJECT_SOURCE_DIR}/tests/native/burnout_overrides_tests.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
+        $<TARGET_OBJECTS:ps2_test_function_table>)
+    target_include_directories(burnout_overrides_tests PRIVATE "${PROJECT_SOURCE_DIR}/ps2xRuntime/include")
+    target_link_libraries(burnout_overrides_tests PRIVATE ps2_runtime)
+    if(MSVC)
+        target_compile_options(burnout_overrides_tests PRIVATE /utf-8)
+    endif()
+    if(COMMAND ps2x_stage_ffmpeg_runtime_dlls)
+        ps2x_stage_ffmpeg_runtime_dlls(burnout_overrides_tests)
+    endif()
+endif()
