@@ -28,6 +28,21 @@ constexpr Binding kBindings[] = {
     {0x003B0848, "sceSifCallRpc"},
     {0x003B2320, "sceSifSyncIop"},
     {0x003B2370, "sceSifRebootIop"},
+
+    // loadfile (SID 0x80000006): wrapper of _SifLoadModule(path, argc, argv, &res, 0)
+    {0x003B2180, "sceSifLoadModule"},
+
+    // iopheap (SID 0x80000003)
+    {0x003B1B48, "sceSifInitIopHeap"},
+    {0x003B1BD0, "sceSifAllocSysMemory"}, // rpc 4, send {size, mode, addr}
+    {0x003B1C50, "sceSifFreeIopHeap"},    // rpc 2, send {addr}
+
+    // libcdvd (cdvdfsv SIDs 0x80000592 init, 0x80000593 S-cmd, 0x8000059A/C disk ready)
+    {0x00377CA0, "sceCdInit"},
+    {0x00378458, "sceCdGetDiskType"}, // S-cmd 3, -1 mapped to 0
+    {0x00378480, "sceCdMmode"},       // S-cmd 0x22
+    {0x003781A0, "sceCdDiskReady"},   // falls back to the 0x8000059A variant at 0x377F88
+    {0x00378558, "sceCdReadClock"},   // S-cmd 1, 16-byte reply, callers decode BCD
 };
 // clang-format on
 
