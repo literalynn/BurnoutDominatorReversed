@@ -19,6 +19,7 @@
 #include <array>
 #include <mutex>
 #include <filesystem>
+#include <chrono>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -288,7 +289,29 @@ public:
     bool initialize(const char *title = "PS2 Game");
     bool syncCoreSubsystems();
     bool loadELF(const std::string &elfPath);
-    void run();
+
+    // Optional bounds and observations for a run. Zero durations disable the
+    // corresponding feature; an empty dump directory disables frame dumps.
+    struct RunOptions
+    {
+        std::chrono::milliseconds timeLimit{0};
+        std::chrono::milliseconds statusInterval{0};
+        std::filesystem::path frameDumpDirectory;
+        std::chrono::milliseconds frameDumpInterval{1000};
+    };
+    struct RunResult
+    {
+        bool deadlineReached = false;
+        bool gameThreadFinished = false;
+        bool gameThreadFailed = false;
+        uint32_t framesDumped = 0;
+    };
+    RunResult run(const RunOptions &options = {});
+    // Same guest execution as run() without a host window, audio device or
+    // presentation loop. Requires memory()/syncCoreSubsystems() initialized.
+    RunResult runHeadless(const RunOptions &options);
+    bool dumpPresentationFrame(const std::filesystem::path &file);
+    void printRunStatus(std::ostream &out);
 
     [[nodiscard]] ps2x::iop::ModuleLoadResult loadIopModule(std::string_view path, const void *arguments = nullptr, uint32_t argumentSize = 0);
     [[nodiscard]] ps2x::iop::ModuleLoadResult loadIopModuleBuffer(uint32_t guestAddress, const void *arguments = nullptr, uint32_t argumentSize = 0);
@@ -487,6 +510,7 @@ private:
     void notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer);
     void advanceIopEeCycles(uint64_t eeCycles) noexcept;
     void resetIop();
+    void prepareGuestExecution();
 
     friend class PS2IopTransport;
     friend class EeScheduler;

@@ -2,6 +2,10 @@ include(CheckIPOSupported)
 
 check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
 
+# Whole-program optimization makes linking tens of thousands of generated
+# functions take very long; projects can turn it off while iterating.
+option(PS2X_ENABLE_LTO "Use /GL + /LTCG (MSVC) or IPO for release runtime targets" ON)
+
 function(EnableFastReleaseMode TargetName)
     message("> Enabling optimization for: ${TargetName}")
     if(MSVC)
@@ -10,7 +14,7 @@ function(EnableFastReleaseMode TargetName)
                 /O2 # speed
                 /Ob2 # inline aggressively
                 /Oi # intrinsics
-                /GL # whole program opt
+                $<$<BOOL:${PS2X_ENABLE_LTO}>:/GL> # whole program opt
                 /Gy # function-level linking
                 /Gw # global data in COMDAT
                 /GF # string pooling
@@ -26,7 +30,7 @@ function(EnableFastReleaseMode TargetName)
         if(TARGET ${TargetName})
             target_link_options(${TargetName} PRIVATE
                 $<$<CONFIG:Release>:
-                    /LTCG # link-time code generation
+                    $<$<BOOL:${PS2X_ENABLE_LTO}>:/LTCG> # link-time code generation
                     /OPT:REF # remove unreferenced
                     /OPT:ICF # fold identical COMDATs
                 >
@@ -34,9 +38,11 @@ function(EnableFastReleaseMode TargetName)
         endif()
     endif()
 
-    if(IPO_SUPPORTED)
+    if(NOT PS2X_ENABLE_LTO)
+        message(STATUS "LTO disabled for ${TargetName}")
+    elseif(IPO_SUPPORTED)
         set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     else()
         message(WARNING "Interprocedural optimization not supported: ${ipo_error}")
     endif()
-endfunction()
+endfunction()

@@ -1,26 +1,35 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
 #include "ps2_runtime.h"
-#include "runtime/ee_scheduler.h"
 
 #include <chrono>
-#include <condition_variable>
 #include <filesystem>
 #include <iostream>
-#include <mutex>
 #include <stdexcept>
 #include <string>
-#include <thread>
 
 namespace {
 struct Options {
-    std::filesystem::path elf, iso, disc, saves;
+    std::filesystem::path elf, iso, disc, saves, dumpFrames;
     bool headless = false;
-    int seconds = 10;
+    int seconds = 0;          // 0: unbounded (windowed only)
+    int statusMs = 0;         // 0: no periodic status line
+    int dumpEveryMs = 1000;
 };
 
+constexpr const char* kUsage =
+    "Usage: burnout_dominator <ELF> --iso <ISO> --disc <directory> --save <directory>\n"
+    "       [--headless] [--seconds N] [--status-ms N] [--dump-frames <directory> [--dump-every-ms N]]";
+
+int parseInt(const std::string& key, const char* text, int low, int high) {
+    std::size_t consumed = 0;
+    const int value = std::stoi(text, &consumed);
+    if (consumed != std::string(text).size() || value < low || value > high)
+        throw std::runtime_error(key + " must be " + std::to_string(low) + ".." + std::to_string(high));
+    return value;
+}
+
 Options parse(int argc, char** argv) {
-    if (argc < 2)
-        throw std::runtime_error("Usage: burnout_dominator <ELF> --iso <ISO> --disc <directory> --save <directory> [--headless --seconds 10]");
+    if (argc < 2) throw std::runtime_error(kUsage);
     Options options;
     options.elf = std::filesystem::absolute(argv[1]);
     options.disc = options.elf.parent_path();
@@ -32,13 +41,13 @@ Options parse(int argc, char** argv) {
         if (key == "--iso") options.iso = std::filesystem::absolute(argv[i]);
         else if (key == "--disc") options.disc = std::filesystem::absolute(argv[i]);
         else if (key == "--save") options.saves = std::filesystem::absolute(argv[i]);
-        else if (key == "--seconds") {
-            std::size_t consumed = 0;
-            options.seconds = std::stoi(argv[i], &consumed);
-            if (consumed != std::string(argv[i]).size() || options.seconds < 1 || options.seconds > 300)
-                throw std::runtime_error("--seconds must be 1..300");
-        } else throw std::runtime_error("Unknown option " + key);
+        else if (key == "--seconds") options.seconds = parseInt(key, argv[i], 1, 86400);
+        else if (key == "--status-ms") options.statusMs = parseInt(key, argv[i], 10, 600000);
+        else if (key == "--dump-frames") options.dumpFrames = std::filesystem::absolute(argv[i]);
+        else if (key == "--dump-every-ms") options.dumpEveryMs = parseInt(key, argv[i], 16, 600000);
+        else throw std::runtime_error("Unknown option " + key + "\n" + kUsage);
     }
+    if (options.headless && options.seconds == 0) options.seconds = 10;
     if (!std::filesystem::is_regular_file(options.elf) || !std::filesystem::is_regular_file(options.iso))
         throw std::runtime_error("Original guest ELF and ISO must exist. Use tools/project.py to verify their identity.");
     if (!std::filesystem::is_directory(options.disc))
@@ -46,43 +55,17 @@ Options parse(int argc, char** argv) {
     return options;
 }
 
-int diagnose(PS2Runtime& runtime, int seconds) {
-    auto* ram = runtime.memory().getRDRAM();
-    runtime.initializeEeKernelState(ram);
-    runtime.cpu().r[4] = _mm_setzero_si128();
-    runtime.cpu().r[5] = _mm_setzero_si128();
-    runtime.cpu().r[29] = _mm_set_epi64x(0, PS2_RAM_SIZE - 0x10u);
-    const auto initialPc = runtime.cpu().pc;
-    runtime.eeScheduler().reset(ram, runtime.cpu());
-    std::mutex mutex;
-    std::condition_variable condition;
-    bool finished = false;
-    bool deadlineReached = false;
-    std::thread watchdog([&] {
-        std::unique_lock lock(mutex);
-        if (!condition.wait_for(lock, std::chrono::seconds(seconds), [&] { return finished; })) {
-            deadlineReached = true;
-            runtime.requestStop();
-        }
-    });
-    std::exception_ptr failure;
-    try { runtime.eeScheduler().run(); }
-    catch (...) { failure = std::current_exception(); }
-    {
-        std::lock_guard lock(mutex);
-        finished = true;
-    }
-    condition.notify_all();
-    watchdog.join();
-    std::cout << "[BDR smoke] entry=0x" << std::hex << initialPc
-              << " pc=0x" << runtime.cpu().pc << std::dec
-              << " deadline=" << deadlineReached
-              << " missing_function=" << runtime.hasReportedMissingFunction() << '\n';
-    if (failure) std::rethrow_exception(failure);
+int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
+    std::cout << "[BDR] result: deadline=" << result.deadlineReached
+              << " finished=" << result.gameThreadFinished
+              << " failed=" << result.gameThreadFailed
+              << " missing_function=" << runtime.hasReportedMissingFunction()
+              << " frames_dumped=" << result.framesDumped
+              << " pc=0x" << std::hex << runtime.m_debugPc.load() << std::dec << '\n';
+    if (result.gameThreadFailed) return 1;
     if (runtime.hasReportedMissingFunction()) return 3;
-    // A watchdog stop is a bounded observation, never a successful game test.
-    if (deadlineReached) return 124;
-    std::cout << "[BDR smoke] Scheduler returned; gameplay remains unverified.\n";
+    // A time-limited stop is a bounded observation, never a successful game test.
+    if (result.deadlineReached) return 124;
     return 0;
 }
 } // namespace
@@ -95,7 +78,7 @@ int main(int argc, char** argv) {
         if (options.headless) {
             if (!runtime.memory().initialize() || !runtime.syncCoreSubsystems())
                 throw std::runtime_error("Memory/core initialization failed");
-        } else if (!runtime.initialize("Burnout Dominator — recompilation experiment"))
+        } else if (!runtime.initialize("Burnout Dominator - recompilation experiment"))
             throw std::runtime_error("Graphics/audio initialization failed");
         if (!runtime.loadELF(options.elf.string()))
             throw std::runtime_error("ELF loading failed");
@@ -108,9 +91,14 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(options.saves);
         PS2Runtime::setIoPaths(paths);
         std::cout << "[BDR] Original ISO: " << options.iso << '\n';
-        if (options.headless) return diagnose(runtime, options.seconds);
-        runtime.run();
-        return runtime.hasReportedMissingFunction() ? 3 : 0;
+
+        PS2Runtime::RunOptions run;
+        run.timeLimit = std::chrono::seconds(options.seconds);
+        run.statusInterval = std::chrono::milliseconds(options.statusMs);
+        run.frameDumpDirectory = options.dumpFrames;
+        run.frameDumpInterval = std::chrono::milliseconds(options.dumpEveryMs);
+        const auto result = options.headless ? runtime.runHeadless(run) : runtime.run(run);
+        return exitCode(runtime, result);
     } catch (const std::exception& error) {
         std::cerr << "[BDR] " << error.what() << '\n';
         return 1;
