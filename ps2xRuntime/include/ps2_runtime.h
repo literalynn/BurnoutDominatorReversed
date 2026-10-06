@@ -354,6 +354,10 @@ public:
     void setMissingFunctionPolicy(MissingFunctionPolicy policy);
     MissingFunctionPolicy missingFunctionPolicy() const;
     void resetMissingFunctionReportOnce();
+    bool hasReportedMissingFunction() const
+    {
+        return m_missingFunctionReported.load(std::memory_order_acquire);
+    }
 
     static const IoPaths &getIoPaths();
     static void setIoPaths(const IoPaths &paths);

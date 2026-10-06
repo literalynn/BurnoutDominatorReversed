@@ -1,0 +1,14 @@
+{
+  "game": "Burnout Dominator",
+  "platform": "PlayStation 2",
+  "region": "Europe",
+  "boot_path": "SLES_546.27",
+  "elf_size": 3472132,
+  "elf_sha256": "fe8b4b28e165620a35e55bcf6fb452de16cf7982ea6584ab28dc5f6b4b187301",
+  "iso_size": 4660166656,
+  "iso_sha256": "dc4fc4e9700d6a5ae26531618d880541b1ff2d2deaf191f1359b98d3f63f96a5",
+  "entry": "0x00100008",
+  "ps2recomp_commit": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
+  "rea_commit": "50787b2faf1a4bea799d041960ca2b91199ef403",
+  "status": "in-progress"
+}

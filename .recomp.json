@@ -1,0 +1,9 @@
+{
+  "game": "Burnout Dominator",
+  "system": "PS2",
+  "type": "recomp",
+  "toolchain": "PS2Recomp",
+  "status": "in-progress",
+  "original": { "region": "Europe", "serial": "SLES-54627" },
+  "targets": ["Windows", "Linux", "macOS"]
+}

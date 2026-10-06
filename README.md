@@ -1,202 +1,57 @@
-## PS2Recomp: PlayStation 2 Static Recompiler (Experimental)
+# Burnout Dominator Reversed
 
-[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/JQ8mawxUEf)
+Projet de recompilation statique de **Burnout Dominator PS2, version européenne SLES_546.27**, pour Windows. L’architecture C++20/CMake prépare Linux et macOS, qui doivent être validés séparément.
 
-Also check our [WIKI](https://github.com/ran-j/PS2Recomp/wiki)
+**Projet en cours : la rétro-ingénierie intégrale et le jeu jouable ne sont pas encore établis.** La génération C++ et une compilation native ne prouvent pas la fidélité des graphismes, de l’audio, de la physique, des sauvegardes ou de tous les chemins d’exécution. Les résultats réels et les blocages sont consignés dans [docs/STATUS.md](docs/STATUS.md).
 
+La base est un instantané de [PS2Recomp](https://github.com/ran-j/PS2Recomp), identifié dans `UPSTREAM.json`. [REA](https://github.com/morluto/rea) sert de méthode d’investigation ; son fournisseur Ghidra Windows x86-64 PE ne prend pas en charge ce binaire PS2. Le jeu est un ELF MIPS R5900 dépourvu de symboles. Son identité exacte est verrouillée dans `project.json`.
 
-This project statically recompiles PS2 ELF binaries into C++ and provides a runtime to execute the generated code.
+## Préparer les fichiers locaux
 
-### Modules
+Python 3.11+, CMake 3.21+, compilateur C++20. Sur Windows : MSVC x64 avec SDK Windows ; la construction initiale utilise Visual Studio 2026. Les outils n’installent aucune configuration globale.
 
-* `ps2xAnalyzer`: scans ELF/functions and writes TOML config (`stubs`, `skip`, instruction patches).
-* `ps2xRecomp`: reads TOML + ELF, decodes R5900 instructions, and generates C++ output.
-* `ps2xRuntime`: hosts memory, function registration, syscall dispatch, and hardware stubs.
-* `ps2xIOP`: R3000A IRX execution, a virtual IOP kernel, and generic HLE fallbacks.
-
-### Features
-
-* Translates MIPS R5900 instructions to C++ code
-* PS2-specific MMI and VU0 macro support.
-* Single-file or multi-file output.
-* Configurable stubs, skips, and instruction patches.
-* Instruction-driven syscall handling.
-
-### How It Works
-PS2Recomp works by:
-
-* Parsing a PS2 ELF file to extract functions, symbols, and relocations
-* Decoding the MIPS R5900 instructions in each function
-* Translating those instructions to equivalent C++ code
-* Generating a runtime that can execute the recompiled code
-
-The translated code is very literal, with each MIPS instruction mapping to a C++ operation. For example, `addiu $r4, $r4, 0x20` becomes `ctx->r4 = ADD32(ctx->r4, 0X20);`.
-
-### Current Behavior
-
-* `stubs` entries generate wrappers that call known runtime syscall/stub handlers by name.
-* `stubs` also supports address bindings with `handler@0xADDRESS` for stripped games (for example `sceCdRead@0x00123456`).
-* Address bindings also support generic return handlers for triage: `ret0`, `ret1`, `reta0`.
-* Recompiler now tries relocation-symbol auto-binding at callsites (`J/JAL`) before raw address dispatch; when relocation symbol is known (for example `sceCdRead`), it can call runtime handlers without manual address mapping.
-* Recompiler discovers additional internal static entry targets and emits `entry_...` wrappers for those addresses.
-* For unresolved static `J/JAL` sites, generated code falls back to `runtime->lookupFunction(0x...)`.
-* `skip` entries are not recompiled and generate explicit `ps2_stubs::TODO_NAMED(...)` wrappers.
-* Recompiled `SYSCALL` now calls `runtime->handleSyscall(...)` with the encoded syscall immediate.
-* Runtime syscall dispatch tries encoded syscall ID first, then falls back to `$v1`.
-
-### Requirements
-
-* CMake 3.20+
-* C++20 compiler (currently tested mainly with MSVC)
-* SSE4/AVX host support for some vector paths
-
-### Build
-
-```bash
-git clone --recurse-submodules https://github.com/ran-j/PS2Recomp.git
-cd PS2Recomp
-
-cmake -S . -B out/build
-cmake --build out/build --config Debug
+```powershell
+python tools/project.py extract --iso "D:\ISO EMU\PS2\Burnout Dominator (Europe) (En,Fr,De,Es,It).iso" --all --hash-iso
+python -m unittest discover -s tests/python -v
 ```
 
-### Usage
+`local/disc/` reçoit les 570 fichiers du disque, dont l’exécutable et les 12 IRX ; l’ISO d’origine reste requise pour conserver les adresses de secteurs. L’inventaire complet, les segments ELF, les sections, les chaînes et les SHA256 sont dans `local/`. Ces fichiers, les sauvegardes et `generated/` sont ignorés par Git.
 
-Preferred workflow for retail or stripped games:
+## Construire les outils et traduire
 
-1. Open the ELF in Ghidra.
-2. Run `ps2xRecomp/tools/ghidra/ExportPS2Functions.java`.
-3. Use the exported TOML and CSV map.
-4. Recompile with the exported TOML:
-
-```bash
-./ps2_recomp config.toml
+```powershell
+python tools/project.py configure --generator "Visual Studio 18 2026" --arch x64
+python tools/project.py build --jobs 4
 ```
 
-Fallback workflow for quick local experiments or ELFs with debug symbol :
+Les dépendances sont téléchargées par CMake aux versions fixées dans les fichiers du projet. Les outils compilés sont `ps2_recomp` et `ps2_analyzer`. Les chemins exacts varient selon le générateur ; avec MSVC ils sont sous `build/ps2xRecomp/Release/` et `build/ps2xAnalyzer/Release/`.
 
-```bash
-./ps2_analyzer your_game.elf config.toml
+Pour ce jeu sans symboles, utiliser Ghidra avec l’extension Emotion Engine et `ps2xRecomp/tools/ghidra/ExportPS2Functions.java`. Conserver la base d’analyse et exporter la carte CSV. La section `.data` porte aussi le drapeau exécutable dans ce disque : les limites de fonctions doivent être examinées, faute de quoi des données sont traduites en fausses instructions.
+
+```powershell
+python tools/project.py generate --tool build/ps2xRecomp/Release/ps2_recomp.exe --function-map local/analysis/ghidra/functions.csv
+python tools/project.py audit
 ```
 
-See the [Ghidra Workflow](ps2xAnalyzer/Readme.md#3-ghidra-integration-for-retail-and-stripped-games-preferred) for ghdira instructions.
+La génération ne force aucune fonction à retourner une réussite et ne configure ni `skip`, ni remplacement arbitraire d’instructions. `local/translation_audit.json` contient les erreurs réelles du recompileur et les comptes statiques. Le mode sans `--function-map` est une expérience heuristique ; il ne justifie pas une couverture complète. `--regenerate` conserve les sources précédentes dans `local/backups/`.
 
-Then build generated output and link with `ps2xRuntime`.
+## Compiler et essayer le jeu
 
-### Configuration
-
-Main fields in `config.toml`:
-
-* `general.input`: source ELF path.
-* `general.ghidra_output`: recommended function map CSV exported from Ghidra.
-* `general.output`: generated C++ output folder.
-* `general.single_file_output`: one combined cpp or one file per function.
-* `general.low_memory_mode`: reduce peak output-generation memory by avoiding retained disassembly strings and forcing serial output generation. Generated instruction comments are still emitted; disassembly text is produced while writing each output file instead of being kept in memory.
-* `general.output_worker_threads`: number of output-generation workers (clamped to nproc * 2). A positive value uses exactly that many workers. `0` uses `nproc - 1` when at least two hardware threads are available, otherwise serial output generation. `1` forces serial output generation.
-* `general.patch_syscalls`: apply configured patches to `SYSCALL` instructions (`false` recommended).
-* `general.patch_cop0`: apply configured patches to COP0 instructions.
-* `general.patch_cache`: apply configured patches to CACHE instructions.
-* `general.stubs`: names to force as stubs. Also accepts `handler@0xADDRESS` to bind a stripped function address directly to a runtime syscall/stub handler. Includes generic handlers `ret0`, `ret1`, `reta0`.
-* `general.skip`: names to force as skipped wrappers.
-* `patches.instructions`: raw instruction replacements by address.
-
-Address binding for stripped ELFs:
-
-* Use `handler@0xADDRESS` inside `general.stubs` to map a stripped function start directly to a runtime handler.
-* Example: `sceCdRead@0x00123456` binds function start `0x00123456` to `ps2_stubs::sceCdRead(...)`.
-* Generic temporary handlers are available: `ret0@0xADDR`, `ret1@0xADDR`, `reta0@0xADDR`.
-* Before manual binding, prefer recompilation from a Ghidra-exported TOML/CSV first. The extra boundaries and synthetic entry points are usually more important than manual early triage.
-* The address must be the function start in that exact ELF build.
-* Addresses are not portable across different games/regions/builds.
-* The handler name must exist in runtime call lists (`PS2_SYSCALL_LIST` or `PS2_STUB_LIST`).
-
-Example:
-
-```toml
-# stripped function binding by address:
-stubs = ["sceCdRead@0x00123456", "SifLoadModule@0x00127890"]
-# temporary return handlers:
-stubs = ["ret0@0x001D9410", "ret1@0x001D5BC8", "reta0@0x0024B7C0"]
-# mixed example:
-stubs = ["printf", "sceCdRead@0x00123456", "SifLoadModule@0x00127890"] 
+```powershell
+python tools/project.py configure --game --generator "Visual Studio 18 2026" --arch x64
+python tools/project.py build --game --jobs 4
+python tools/project.py run --exe build/ps2xRuntime/Release/burnout_dominator.exe --smoke-seconds 10
+python tools/project.py run --exe build/ps2xRuntime/Release/burnout_dominator.exe
 ```
 
-### Runtime
+Le diagnostic sans fenêtre s’arrête sur une fonction manquante. Le code 124 indique que le délai a été atteint ; il ne constitue pas une validation de jouabilité. Les journaux sont sous `local/logs/`. FFmpeg est activé pour le décodage vidéo ; `--no-ffmpeg` sert uniquement à un diagnostic limité et remplace les vidéos par des images factices.
 
-To execute the recompiled code.
+## Linux et macOS
 
-`ps2xRuntime` currently provides:
+Utiliser les mêmes commandes Python/CMake sans `--generator` ni `--arch`, avec GCC/Clang et les bibliothèques de développement demandées par raylib et FFmpeg. Le programme se situe alors généralement sous `build/ps2xRuntime/burnout_dominator`. Les chemins du disque sont configurés à l’extraction ; aucune lettre de lecteur n’est intégrée dans le code C++.
 
-* Guest memory model and function dispatch table.
-* Some syscall dispatcher with common kernel IDs.
-* Basic GS/VU/file/system stubs.
-* Foundation to expand and port your game.
-* `ps2xIOP` execution of original IRX modules with generic HLE fallbacks.
+Le runtime upstream possède un chemin SSE vers NEON pour ARM64. La compilation macOS, le comportement sur Apple Silicon et les performances du jeu restent à vérifier sur ces systèmes.
 
-See [IOP emulation](ps2xIOP/README.md) for module execution and the service boundary.
+## Licence et provenance
 
-### Game Override Hooks
-
-Game overrides are runtime-side, build-scoped patch modules.
-
-A game override is C++ code that runs during `loadELF` and can replace EE function bindings by address for one specific game build. IOP RPC/DMA behavior is handled by the `ps2xIOP` emulator and its runtime transport. This is separate from recompilation output and separate from global runtime stubs/syscalls.
-
-API:
-
-* Header: `ps2xRuntime/include/game_overrides.h`
-* Register macro: `PS2_REGISTER_GAME_OVERRIDE(name, elfName, entry, crc32, applyFn)`
-* Direct bind helper: `ps2_game_overrides::bindAddressHandler(runtime, addr, "handler")`
-
-Use Game Override modules when:
-
-* You need per-game/per-build routing or patches without polluting global behavior.
-* You need to bind many addresses, or install custom replacement logic for a specific title.
-
-#### Recommended Iteration Loop
-
-1. Run with minimal config and no aggressive skipping.
-2. Fix hard blockers first (`function not found`, syscall TODO, critical IO stubs).
-3. Use temporary return stubs only to classify call importance.
-4. Promote temporary fixes to real implementations.
-5. Move per-game hacks into game overrides keyed by ELF metadata.
-6. Re-test from cold boot after each batch.
-
-### Describing Your Game Project
-
-A game project built with PS2Recomp can describe itself in a `.recomp.json` file at the root of its repository. Lists of recomp and decomp projects, such as [recomp.board](https://recomp.fyi), read that file instead of guessing the game, system and status from the README.
-
-> [!NOTE]
-> This file is optional: PS2Recomp does not read it and works the same without it. `.recomp.json` and recomp.board are third-party projects; the PS2Recomp developers have no ties to them.
-
-Starter file:
-
-```json
-{
-  "$schema": "https://recomp.fyi/schema/v1.json",
-  "game": "<title as it shipped>",
-  "system": "PS2",
-  "type": "recomp",
-  "toolchain": "PS2Recomp",
-  "status": "in-progress",
-  "original": { "region": "USA", "serial": "SLUS-20312" }
-}
-```
-
-* `original` is the release a user must own. On retail discs the ELF is named after the serial (`SLUS_203.12` is `SLUS-20312`), and the prefix gives the region: `SLUS`/`SCUS` USA, `SLES`/`SCES` Europe, `SLPS`/`SLPM`/`SCPS` Japan.
-* `status` is one of `exploring`, `in-progress`, `playable`, `released`, `complete`, `paused`. Edit it when the project moves on: a stale status is worse than none.
-* Never put a game file, or a link to one, in the file.
-
-Other fields (Wikidata item, target platforms, maintainers, links, what help is wanted) and the JSON Schema are in the [specification](https://recomp.fyi/spec).
-
-### Limitations
- 
-* Performance is very bad for VU and GS
-* Hardware emulation is partial and many paths are stubbed.
-
-###  Acknowledgments
-
-* Inspired by N64Recomp
-* Uses ELFIO for ELF parsing
-* Uses toml11 for TOML parsing
-* Uses fmt for string formatting
-* Reference for runtime PCSX2
+Les sources PS2Recomp incluses conservent leur licence GPLv3, dans `LICENSE`. Le code d’intégration ajouté est sous la même licence. Les fichiers extraits du jeu et le C++ dérivé ne reçoivent pas une licence open source par cette opération et restent locaux. [docs/CHANGES.md](docs/CHANGES.md) décrit les modifications par rapport à l’instantané upstream.

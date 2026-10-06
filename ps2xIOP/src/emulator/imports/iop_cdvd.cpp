@@ -4,6 +4,7 @@
 #include "../core/iop_kernel.h"
 #include "../core/iop_memory.h"
 #include "ps2x/iop/iop_host.h"
+#include "ps2x/iop/iso9660.h"
 #include "ps2x/iop/ps2_path.h"
 
 #include <algorithm>
@@ -202,6 +203,7 @@ namespace ps2x::iop::detail
             nodes.clear();
             metadataSectors.clear();
             imageHandle = 0u;
+            imageOpenedPath.clear();
         }
 
         bool dispatchImport(uint16_t ordinal, IopCpuState &cpu)
@@ -377,6 +379,7 @@ namespace ps2x::iop::detail
             if (imageHandle != 0u)
                 host.closeHostFile(imageHandle);
             imageHandle = 0u;
+            imageOpenedPath.clear();
             for (IsoNode &node : nodes)
             {
                 if (node.handle != 0u)
@@ -600,6 +603,27 @@ namespace ps2x::iop::detail
                 return false;
 
             const std::string guestPath = memory.readString(nameAddress, 1024u);
+            const std::string imagePath = host.hostPath(HostPathKind::CdImage);
+            if (!imagePath.empty())
+            {
+                uint64_t imageSize = 0u;
+                Iso9660File original;
+                if (!ensureImageHandle(imagePath) || !host.hostFileSize(imageHandle, imageSize) ||
+                    !findIso9660File(imageReader(), imageSize, guestPath, original))
+                {
+                    lastError = kCdvdErrorRead;
+                    return false;
+                }
+                std::array<uint8_t, 32u> result{};
+                writeLe32(result.data(), original.lsn);
+                writeLe32(result.data() + 4u, original.size);
+                std::memcpy(result.data() + 8u, original.name.data(), std::min<size_t>(16u, original.name.size()));
+                std::copy(original.date.begin(), original.date.end(), result.begin() + 24u);
+                const bool written = memory.writeRam(resultAddress, result.data(), result.size());
+                lastError = written ? kCdvdErrorNone : kCdvdErrorRead;
+                return written;
+            }
+
             IsoNode *node = findVirtualIsoNode(guestPath);
             if (!node)
                 return false;
@@ -671,21 +695,12 @@ namespace ps2x::iop::detail
             const std::string imagePath = host.hostPath(HostPathKind::CdImage);
             if (!imagePath.empty())
             {
-                if (imageHandle == 0u)
-                    imageHandle = host.openHostFile(imagePath);
-                if (imageHandle != 0u)
-                {
-                    size_t bytesRead = 0u;
-                    read = host.readHostFile(imageHandle,
-                                             static_cast<uint64_t>(lsn) * kSectorSize,
-                                             bytes.data(),
-                                             byteCount,
-                                             bytesRead) &&
-                           bytesRead == byteCount;
-                }
+                uint64_t imageSize = 0u;
+                read = ensureImageHandle(imagePath) && host.hostFileSize(imageHandle, imageSize) &&
+                       readIso9660Sectors(imageReader(), imageSize, lsn, sectors, bytes.data(), byteCount);
             }
 
-            if (!read && buildVirtualIso())
+            if (imagePath.empty() && buildVirtualIso())
             {
                 read = true;
                 for (uint32_t sector = 0u; sector < sectors; ++sector)
@@ -707,6 +722,29 @@ namespace ps2x::iop::detail
             return true;
         }
 
+        bool ensureImageHandle(const std::string &imagePath)
+        {
+            if (imageOpenedPath != imagePath)
+            {
+                if (imageHandle != 0u)
+                    host.closeHostFile(imageHandle);
+                imageHandle = 0u;
+                imageOpenedPath = imagePath;
+            }
+            if (imageHandle == 0u)
+                imageHandle = host.openHostFile(imagePath);
+            return imageHandle != 0u;
+        }
+
+        Iso9660ReadAt imageReader()
+        {
+            return [this](uint64_t offset, void *destination, size_t count)
+            {
+                size_t bytesRead = 0u;
+                return host.readHostFile(imageHandle, offset, destination, count, bytesRead) && bytesRead == count;
+            };
+        }
+
         IopHost &host;
         IopMemory &memory;
         IopKernel &kernel;
@@ -720,6 +758,7 @@ namespace ps2x::iop::detail
         uint32_t lastReadTimeout = 0u;
         int interruptEventFlagId = 0;
         uint64_t imageHandle = 0u;
+        std::string imageOpenedPath;
         bool virtualIsoBuilt = false;
         bool virtualIsoValid = false;
         uint32_t volumeSectors = 0u;

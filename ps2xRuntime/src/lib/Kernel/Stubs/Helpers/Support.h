@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include "ps2x/iop/iso9660.h"
 
 namespace
 {
@@ -12,6 +13,8 @@ namespace
         uint32_t sizeBytes = 0;
         uint32_t baseLbn = 0;
         uint32_t sectors = 0;
+        std::string discName;
+        std::array<uint8_t, 8> date{};
     };
 
     std::unordered_map<std::string, CdFileEntry> g_cdFilesByKey;
@@ -20,6 +23,7 @@ namespace
     std::filesystem::path g_cdLeafIndexRoot;
     bool g_cdLeafIndexBuilt = false;
     uint32_t g_nextPseudoLbn = kCdPseudoLbnStart;
+    std::filesystem::path g_cdFilesSourceImage;
     std::filesystem::path g_cdImageSizePath;
     uint64_t g_cdImageSizeBytes = 0;
     bool g_cdImageSizeValid = false;
@@ -181,6 +185,18 @@ namespace
         return PS2Runtime::getIoPaths().cdImage;
     }
 
+    void synchronizeCdFileSource()
+    {
+        const std::filesystem::path image = getCdImagePath();
+        if (image != g_cdFilesSourceImage)
+        {
+            // Never reuse synthetic LBAs after switching to an original image.
+            g_cdFilesByKey.clear();
+            g_nextPseudoLbn = kCdPseudoLbnStart;
+            g_cdFilesSourceImage = image;
+        }
+    }
+
     bool tryGetCdImageTotalSectors(uint64_t &totalSectorsOut)
     {
         const std::filesystem::path imagePath = getCdImagePath();
@@ -189,13 +205,11 @@ namespace
             return false;
         }
 
-        if (!g_cdImageSizeValid || g_cdImageSizePath != imagePath)
-        {
-            std::error_code ec;
-            g_cdImageSizeBytes = static_cast<uint64_t>(std::filesystem::file_size(imagePath, ec));
-            g_cdImageSizePath = imagePath;
-            g_cdImageSizeValid = !ec;
-        }
+        std::error_code ec;
+        const uint64_t currentSize = std::filesystem::file_size(imagePath, ec);
+        g_cdImageSizeBytes = ec ? 0u : currentSize;
+        g_cdImageSizePath = imagePath;
+        g_cdImageSizeValid = !ec;
         if (!g_cdImageSizeValid)
         {
             return false;
@@ -324,6 +338,29 @@ namespace
 
     bool registerCdFile(const std::string &ps2Path, CdFileEntry &entryOut)
     {
+        synchronizeCdFileSource();
+        const std::filesystem::path image = getCdImagePath();
+        if (!image.empty())
+        {
+            ps2x::iop::Iso9660File original;
+            if (!ps2x::iop::findIso9660File(image, ps2Path, original))
+            {
+                g_lastCdError = -1;
+                return false;
+            }
+            CdFileEntry entry;
+            entry.hostPath = getCdRootPath() / std::filesystem::path(original.path);
+            entry.sizeBytes = original.size;
+            entry.baseLbn = original.lsn;
+            entry.sectors = sectorsForBytes(original.size);
+            entry.discName = original.name;
+            entry.date = original.date;
+            g_cdFilesByKey.insert_or_assign(toLowerAscii(original.path), entry);
+            entryOut = std::move(entry);
+            g_lastCdError = 0;
+            return true;
+        }
+
         const std::string key = cdPathKey(ps2Path);
         if (key.empty())
         {
@@ -434,6 +471,18 @@ namespace
 
     bool readCdSectors(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount)
     {
+        synchronizeCdFileSource();
+        const std::filesystem::path cdImage = getCdImagePath();
+        if (!cdImage.empty())
+        {
+            // The original image is authoritative, including sector padding
+            // and reads spanning files. A failed original read must not use
+            // extracted files or synthetic sectors as an alternative.
+            const bool read = ps2x::iop::readIso9660Sectors(cdImage, lbn, sectors, dst, byteCount);
+            g_lastCdError = read ? 0 : -1;
+            return read;
+        }
+
         for (const auto &[key, entry] : g_cdFilesByKey)
         {
             const uint32_t endLbn = entry.baseLbn + entry.sectors;
@@ -447,25 +496,6 @@ namespace
             return readHostRange(entry.hostPath, offset, dst, byteCount);
         }
 
-        const std::filesystem::path cdImage = getCdImagePath();
-        if (!cdImage.empty())
-        {
-            uint64_t totalSectors = 0;
-            if (tryGetCdImageTotalSectors(totalSectors))
-            {
-                const uint64_t start = static_cast<uint64_t>(lbn);
-                const uint64_t end = start + static_cast<uint64_t>(sectors);
-                if (start >= totalSectors || end > totalSectors)
-                {
-                    g_lastCdError = -1;
-                    return false;
-                }
-            }
-
-            const uint64_t offset = static_cast<uint64_t>(lbn) * kCdSectorSize;
-            return readHostRange(cdImage, offset, dst, byteCount);
-        }
-
         std::cerr << "sceCdRead unresolved LBN 0x" << std::hex << lbn
                   << " sectors=" << std::dec << sectors
                   << " (no mapped file and no configured CD image)" << std::endl;
@@ -475,6 +505,12 @@ namespace
 
     bool isResolvableCdLbn(uint32_t lbn)
     {
+        synchronizeCdFileSource();
+        if (!getCdImagePath().empty())
+        {
+            uint64_t sectors = 0;
+            return tryGetCdImageTotalSectors(sectors) && static_cast<uint64_t>(lbn) < sectors;
+        }
         for (const auto &[key, entry] : g_cdFilesByKey)
         {
             const uint32_t endLbn = entry.baseLbn + entry.sectors;
@@ -495,6 +531,7 @@ namespace
 
     bool findRegisteredCdFileForLbn(uint32_t lbn, CdFileEntry &entryOut)
     {
+        synchronizeCdFileSource();
         for (const auto &[key, entry] : g_cdFilesByKey)
         {
             const uint32_t endLbn = entry.baseLbn + entry.sectors;
@@ -527,13 +564,19 @@ namespace
         }
 
         std::array<uint8_t, 32> packed{};
-        std::memcpy(packed.data() + 0, &entry.baseLbn, sizeof(entry.baseLbn));
-        std::memcpy(packed.data() + 4, &entry.sizeBytes, sizeof(entry.sizeBytes));
+        for (size_t i = 0; i < 4; ++i)
+        {
+            packed[i] = static_cast<uint8_t>(entry.baseLbn >> (i * 8));
+            packed[4 + i] = static_cast<uint8_t>(entry.sizeBytes >> (i * 8));
+        }
 
         std::filesystem::path leafPath(normalizeCdPathNoPrefix(ps2Path));
         std::string leaf = leafPath.filename().string();
         leaf = stripIsoVersionSuffix(std::move(leaf));
-        std::strncpy(reinterpret_cast<char *>(packed.data() + 8), leaf.c_str(), 15);
+        if (!entry.discName.empty())
+            leaf = entry.discName;
+        std::memcpy(packed.data() + 8, leaf.data(), std::min<size_t>(16, leaf.size()));
+        std::copy(entry.date.begin(), entry.date.end(), packed.begin() + 24);
 
         std::memcpy(fileStruct, packed.data(), packed.size());
         return true;

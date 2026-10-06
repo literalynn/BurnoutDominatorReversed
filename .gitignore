@@ -23,3 +23,19 @@ android/app/.cxx/
 android/local.properties
 android/.gradle/ 
 .idea/
+
+# Locally supplied game content, translated derivatives, caches and saves.
+/local/
+/generated/
+/dist/
+/tools-cache/
+__pycache__/
+*.pyc
+*.iso
+*.ISO
+*.irx
+*.IRX
+*.elf
+*.ELF
+SLES_*
+SLUS_*
