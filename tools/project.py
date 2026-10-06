@@ -18,7 +18,23 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = json.loads((ROOT / "project.json").read_text(encoding="utf-8"))
-LOCAL = ROOT / "local"
+
+
+def work_root() -> Path:
+    """Heavy local data (disc, analysis, generated C++, builds) may live outside
+    the repository, e.g. when the checkout sits in a cloud-synced folder.
+    Priority: BDR_WORK_DIR, then work.json (ignored by Git), then the checkout."""
+    if os.environ.get("BDR_WORK_DIR"):
+        return Path(os.environ["BDR_WORK_DIR"]).resolve()
+    config = ROOT / "work.json"
+    if config.is_file():
+        return Path(json.loads(config.read_text(encoding="utf-8"))["work_dir"]).resolve()
+    return ROOT
+
+
+WORK = work_root()
+LOCAL = WORK / "local"
+GENERATED = WORK / "generated"
 
 
 def sha256(path: Path) -> str:
@@ -75,7 +91,7 @@ def toml_string(value: str) -> str:
 
 def generate(args) -> None:
     elf = checked_elf()
-    output = ROOT / "generated"
+    output = GENERATED
     if output.exists() and any(output.iterdir()):
         if not args.regenerate:
             raise RuntimeError("generated/ is nonempty. Use --regenerate to preserve it in local/backups/ before generating again.")
@@ -114,7 +130,7 @@ def generate(args) -> None:
 
 def audit(args) -> None:
     checked_elf()
-    files = sorted((ROOT / "generated").glob("*.cpp"))
+    files = sorted(GENERATED.glob("*.cpp"))
     if not files:
         raise RuntimeError("No generated C++ to audit")
     addresses: set[int] = set()
@@ -177,11 +193,24 @@ def configure(args) -> None:
                "-DPS2X_IOP_BUILD_TESTS=ON", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF",
                "-DPS2X_ENABLE_FFMPEG=" + ("OFF" if args.no_ffmpeg else "ON"),
                "-DCMAKE_BUILD_TYPE=Release", "-DBDR_BUILD_GAME=" + ("ON" if args.game else "OFF")]
+    command.append("-DBDR_GENERATED_DIR=" + GENERATED.as_posix())
+    # Optional offline dependency cache: <work>/deps-src/<name>-src.
+    deps = WORK / "deps-src"
+    for name in ["elfio", "toml11", "fmt", "libdwarf", "rabbitizer", "nlohmann_json", "raylib"]:
+        if (deps / f"{name}-src").is_dir():
+            command.append(f"-DFETCHCONTENT_SOURCE_DIR_{name.upper()}={(deps / f'{name}-src').as_posix()}")
     if args.generator:
         command += ["-G", args.generator]
     if args.arch:
         command += ["-A", args.arch]
     run(command, "configure.log")
+
+
+def set_work_dir(args) -> None:
+    target = args.path.resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    write_json(ROOT / "work.json", {"work_dir": str(target)})
+    print(f"Work directory: {target}")
 
 
 def build(args) -> None:
@@ -205,7 +234,7 @@ def build(args) -> None:
 
 def launch(args) -> None:
     elf = checked_elf()
-    if not (ROOT / "generated" / "generation.json").is_file():
+    if not (GENERATED / "generation.json").is_file():
         raise RuntimeError("Generate code before launching")
     paths = json.loads((LOCAL / "paths.json").read_text(encoding="utf-8"))
     iso = Path(paths["iso"])
@@ -222,6 +251,9 @@ def launch(args) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
+    p = sub.add_parser("workdir", help="Store local data outside the checkout (writes work.json)")
+    p.add_argument("path", type=Path)
+    p.set_defaults(func=set_work_dir)
     p = sub.add_parser("extract")
     p.add_argument("--iso", required=True, type=Path)
     p.add_argument("--all", action="store_true", help="Extract all disc files for runtime path opens")
@@ -237,7 +269,7 @@ def main() -> int:
     for name, function in [("configure", configure), ("build", build)]:
         p = sub.add_parser(name)
         p.add_argument("--cmake", default="cmake")
-        p.add_argument("--build-dir", default=ROOT / "build", type=Path)
+        p.add_argument("--build-dir", default=WORK / "build", type=Path)
         p.add_argument("--game", action="store_true")
         if name == "configure":
             p.add_argument("--generator")

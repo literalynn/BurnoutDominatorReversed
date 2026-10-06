@@ -39,3 +39,4 @@ __pycache__/
 *.ELF
 SLES_*
 SLUS_*
+/work.json
