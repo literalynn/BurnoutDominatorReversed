@@ -21,6 +21,7 @@
 #include <cctype>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <sstream>
 #include <utility>
@@ -136,6 +137,7 @@ namespace ps2x::iop::detail
             servicingDmaInterrupts = false;
             servicingGuestCallbacks = false;
             callDepth = 0u;
+            reportedMissingImports.clear();
             secrMcCommandHandler = {};
             secrMcDevIdHandler = {};
             checkKelfPathCallback = {};
@@ -237,6 +239,29 @@ namespace ps2x::iop::detail
             Missing,
         };
 
+        // Built-in libraries without an export fallback leave v0 unchanged on an
+        // unknown ordinal; report each such import once so it is not silent.
+        ImportDisposition missingBuiltinImport(const IopImportCall &call, const CpuState &cpu)
+        {
+            if (reportedMissingImports.emplace(asciiLower(call.library), call.ordinal).second)
+            {
+                std::ostringstream out;
+                out << "[IOP] unhandled built-in import " << call.library << ':' << call.ordinal
+                    << " version=0x" << std::hex << call.version << " pc=0x" << cpu.pc
+                    << " (v0 left unchanged)";
+                log(LogLevel::Warning, out.str());
+            }
+            return ImportDisposition::Missing;
+        }
+
+        static std::string asciiLower(std::string_view text)
+        {
+            std::string lower(text);
+            std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)
+                           { return static_cast<char>(std::tolower(c)); });
+            return lower;
+        }
+
         ImportDisposition dispatchImport(const IopImportCall &call, CpuState &cpu)
         {
             const uint32_t a0 = cpu.gpr[4];
@@ -270,25 +295,25 @@ namespace ps2x::iop::detail
             {
                 return kernel.dispatchThreadImport(call.ordinal, cpu, totalCycles)
                            ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                           : missingBuiltinImport(call, cpu);
             }
             if (iequals(call.library, "thsemap"))
             {
                 return kernel.dispatchSemaphoreImport(call.ordinal, cpu)
                            ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                           : missingBuiltinImport(call, cpu);
             }
             if (iequals(call.library, "thevent"))
             {
                 return kernel.dispatchEventImport(call.ordinal, cpu)
                            ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                           : missingBuiltinImport(call, cpu);
             }
             if (iequals(call.library, "sifcmd"))
             {
                 return rpc.dispatchSifCmdImport(call.ordinal, cpu)
                            ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                           : missingBuiltinImport(call, cpu);
             }
             if (iequals(call.library, "intrman") && intrman.dispatchImport(call.ordinal, cpu, *this))
                 return ImportDisposition::Handled;
@@ -320,7 +345,7 @@ namespace ps2x::iop::detail
             {
                 return rpc.dispatchSifManImport(call.ordinal, cpu)
                            ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                           : missingBuiltinImport(call, cpu);
             }
             if (iequals(call.library, "vblank") && vblank.dispatchImport(call.ordinal, cpu, totalCycles))
                 return ImportDisposition::Handled;
@@ -337,7 +362,7 @@ namespace ps2x::iop::detail
             {
                 return sysclib.dispatchImport(call.ordinal, cpu)
                            ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                           : missingBuiltinImport(call, cpu);
             }
             if (iequals(call.library, "heaplib") && heaplib.dispatchImport(call.ordinal, cpu))
                 return ImportDisposition::Handled;
@@ -707,6 +732,7 @@ namespace ps2x::iop::detail
         bool servicingDmaInterrupts = false;
         bool servicingGuestCallbacks = false;
         uint32_t callDepth = 0u;
+        std::set<std::pair<std::string, uint16_t>> reportedMissingImports;
         GuestCallback secrMcCommandHandler;
         GuestCallback secrMcDevIdHandler;
         GuestCallback checkKelfPathCallback;

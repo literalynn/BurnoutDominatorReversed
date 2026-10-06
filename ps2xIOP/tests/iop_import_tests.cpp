@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -274,6 +275,73 @@ namespace
         return passed;
     }
 
+    int fromBcd(uint8_t value)
+    {
+        return (value >> 4) * 10 + (value & 0x0Fu);
+    }
+
+    // Days since 1970-01-01 of a proleptic Gregorian date.
+    int64_t daysFromCivil(int year, int month, int day)
+    {
+        year -= month <= 2;
+        const int64_t era = (year >= 0 ? year : year - 399) / 400;
+        const int64_t yearOfEra = year - era * 400;
+        const int64_t dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+        const int64_t dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+        return era * 146097 + dayOfEra - 719468;
+    }
+
+    bool testCdvdReadClock()
+    {
+        NullHost host;
+        IopMemory memory;
+        IopKernel kernel(memory);
+        kernel.reset();
+        IopCdvd cdvd(host, memory, kernel);
+        cdvd.reset();
+
+        constexpr uint32_t clockAddress = 0x2600u;
+        IopCpuState cpu{};
+        cpu.gpr[4] = clockAddress;
+        const std::time_t before = std::time(nullptr);
+        if (!expect(cdvd.dispatchImport(24u, cpu), "cdvdman:24 sceCdReadClock was not handled") ||
+            !expect(cpu.gpr[2] == 1u, "sceCdReadClock did not report success"))
+            return false;
+        const std::time_t after = std::time(nullptr);
+
+        uint8_t clock[8] = {};
+        for (uint32_t i = 0; i < 8u; ++i)
+            clock[i] = memory.read8(clockAddress + i);
+        for (uint32_t i : {1u, 2u, 3u, 5u, 6u, 7u})
+        {
+            if (!expect((clock[i] & 0x0Fu) <= 9u && (clock[i] >> 4) <= 9u, "sceCdReadClock field is not BCD"))
+                return false;
+        }
+        // The RTC holds Japan Standard Time: decoded fields minus 9 hours = UTC.
+        const int64_t seconds = daysFromCivil(2000 + fromBcd(clock[7]), fromBcd(clock[6]), fromBcd(clock[5])) * 86400 +
+                                fromBcd(clock[3]) * 3600 + fromBcd(clock[2]) * 60 + fromBcd(clock[1]) - 9 * 3600;
+        if (!expect(clock[0] == 0u && clock[4] == 0u, "sceCdReadClock status/padding bytes are not zero") ||
+            !expect(seconds >= static_cast<int64_t>(before) - 1 && seconds <= static_cast<int64_t>(after) + 1,
+                    "sceCdReadClock does not return the current time as JST"))
+            return false;
+
+        cpu = {};
+        cpu.gpr[4] = 0u;
+        return expect(cdvd.dispatchImport(24u, cpu), "sceCdReadClock(NULL) was not handled") &&
+               expect(cpu.gpr[2] == 0u, "sceCdReadClock(NULL) reported success");
+    }
+
+    bool testThreadSystemTimeLow()
+    {
+        IopMemory memory;
+        IopKernel kernel(memory);
+        kernel.reset();
+        IopCpuState cpu{};
+        constexpr uint64_t cycle = 0x0000000312345678ull;
+        return expect(kernel.dispatchThreadImport(43u, cpu, cycle), "thbase:43 GetSystemTimeLow was not handled") &&
+               expect(cpu.gpr[2] == 0x12345678u, "GetSystemTimeLow did not return the low word of the system time");
+    }
+
     bool testTimrmanPeriodicCallback()
     {
         IopTimrman timrman;
@@ -331,7 +399,7 @@ namespace
 int main()
 {
     if (!testLoadcoreRebootLibraryMode() || !testCdvdSpecialControl() || !testCdvdSearchFile() ||
-        !testTimrmanPeriodicCallback())
+        !testCdvdReadClock() || !testThreadSystemTimeLow() || !testTimrmanPeriodicCallback())
         return 1;
     std::cout << "ps2xIOP import tests passed\n";
     return 0;

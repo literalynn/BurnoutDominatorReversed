@@ -267,6 +267,9 @@ namespace ps2x::iop::detail
             m_memory.write32(cpu.gpr[4] + 4u, static_cast<uint32_t>(currentCycle >> 32u));
             setV0(0);
             return true;
+        case 43: // GetSystemTimeLow
+            setV0(static_cast<int32_t>(static_cast<uint32_t>(currentCycle)));
+            return true;
         case 35:
         case 36:
         case 37:

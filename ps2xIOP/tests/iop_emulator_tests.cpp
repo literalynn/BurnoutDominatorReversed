@@ -479,6 +479,46 @@ namespace
         std::memcpy(host.guest.data() + address + codeOffset + 0x40u, importTable, sizeof(importTable));
     }
 
+    // Entry calls thbase ordinal 99, which no IOP kernel exports, twice.
+    void writeUnknownBuiltinImportIrx(TestHost &host, uint32_t address)
+    {
+        constexpr uint32_t codeOffset = 0x100u;
+        constexpr uint32_t loadAddress = 0x00011000u;
+        constexpr uint32_t importTableAddress = loadAddress + 0x40u;
+        constexpr uint32_t importStubAddress = importTableAddress + 20u;
+
+        ElfHeader header{};
+        header.ident[0] = 0x7Fu; header.ident[1] = 'E'; header.ident[2] = 'L'; header.ident[3] = 'F';
+        header.ident[4] = 1u; header.ident[5] = 1u; header.ident[6] = 1u;
+        header.type = 2u; header.machine = 8u; header.version = 1u;
+        header.entry = loadAddress; header.phoff = sizeof(ElfHeader);
+        header.ehsize = sizeof(ElfHeader); header.phentsize = sizeof(ProgramHeader); header.phnum = 1u;
+
+        ProgramHeader program{};
+        program.type = 1u; program.offset = codeOffset; program.vaddr = loadAddress; program.paddr = loadAddress;
+        program.filesz = 0x80u; program.memsz = 0x80u; program.flags = 7u; program.align = 4u;
+
+        const uint32_t stubCall = 0x0C000000u | ((importStubAddress >> 2u) & 0x03FFFFFFu);
+        const uint32_t code[] = {
+            0x27BDFFF0u, 0xAFBF000Cu,
+            stubCall, 0x00000000u,
+            stubCall, 0x00000000u,
+            0x8FBF000Cu, 0x00001021u, // lw ra; move v0, zero
+            0x03E00008u, 0x27BD0010u,
+        };
+        const uint32_t importTable[] = {
+            0x41E00000u, 0u, 0x00000101u,
+            0x61626874u, 0x00006573u, // "thbase"
+            0x03E00008u, 0x24000063u, 0u, 0u,
+        };
+
+        std::memset(host.guest.data() + address, 0, codeOffset + program.filesz);
+        std::memcpy(host.guest.data() + address, &header, sizeof(header));
+        std::memcpy(host.guest.data() + address + sizeof(header), &program, sizeof(program));
+        std::memcpy(host.guest.data() + address + codeOffset, code, sizeof(code));
+        std::memcpy(host.guest.data() + address + codeOffset + 0x40u, importTable, sizeof(importTable));
+    }
+
     void writeVblankSchedulingIrx(TestHost &host, uint32_t address)
     {
         constexpr uint32_t codeOffset = 0x100u;
@@ -987,6 +1027,16 @@ int main()
     const ModuleLoadResult exportConsumer = iop.loadModuleBuffer(0x500u);
     if (!expect(exportConsumer.handled && exportConsumer.startResult == 0x42,
                 "IRX export ordinal was shifted by implicit function slots")) return 1;
+
+    iop.reset();
+    host.logs.clear();
+    writeUnknownBuiltinImportIrx(host, 0x500u);
+    const ModuleLoadResult unknownImport = iop.loadModuleBuffer(0x500u);
+    const auto unknownImportWarnings = std::count_if(host.logs.begin(), host.logs.end(), [](const std::string &line)
+                                                     { return line.find("unhandled built-in import thbase:99") != std::string::npos; });
+    if (!expect(unknownImport.handled && unknownImport.startResult == 0,
+                "Module calling an unknown built-in import did not start") ||
+        !expect(unknownImportWarnings == 1, "Unknown built-in import was not reported exactly once")) return 1;
 
     iop.reset();
     constexpr uint32_t eeSource = 0x100u;

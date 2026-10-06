@@ -11,6 +11,7 @@
 #include <array>
 #include <cctype>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -345,6 +346,10 @@ namespace ps2x::iop::detail
                 cpu.gpr[2] = 1u;
                 return true;
 
+            case 24: // sceCdReadClock
+                cpu.gpr[2] = readClock(a0) ? 1u : 0u;
+                return true;
+
             default:
                 return false;
             }
@@ -358,6 +363,30 @@ namespace ps2x::iop::detail
         }
 
     private:
+        // sceCdCLOCK: stat, second, minute, hour, pad, day, month, year (BCD).
+        // The console RTC keeps Japan Standard Time (UTC+9), like the EE
+        // sceCdReadClock handler of the runtime.
+        bool readClock(uint32_t address)
+        {
+            const auto bcd = [](int value)
+            {
+                return static_cast<uint8_t>(((value / 10) << 4) | (value % 10));
+            };
+            const std::time_t jst = std::time(nullptr) + 9 * 60 * 60;
+            std::tm time{};
+#ifdef _WIN32
+            if (gmtime_s(&time, &jst) != 0)
+                return false;
+#else
+            if (!gmtime_r(&jst, &time))
+                return false;
+#endif
+            const uint8_t clock[8] = {
+                0u, bcd(time.tm_sec), bcd(time.tm_min), bcd(time.tm_hour),
+                0u, bcd(time.tm_mday), bcd(time.tm_mon + 1), bcd((time.tm_year + 1900) % 100)};
+            return address != 0u && memory.writeRam(address, clock, sizeof(clock));
+        }
+
         int ensureInterruptEventFlag()
         {
             if (interruptEventFlagId == 0)
