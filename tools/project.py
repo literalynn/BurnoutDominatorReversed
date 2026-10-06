@@ -192,7 +192,11 @@ def configure(args) -> None:
                "-DPS2X_BUILD_STUDIO=OFF", "-DPS2X_ENABLE_DEBUG_UI=OFF", "-DPS2X_BUILD_TEST=ON",
                "-DPS2X_IOP_BUILD_TESTS=ON", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF",
                "-DPS2X_ENABLE_FFMPEG=" + ("OFF" if args.no_ffmpeg else "ON"),
-               "-DCMAKE_BUILD_TYPE=Release", "-DBDR_BUILD_GAME=" + ("ON" if args.game else "OFF")]
+               "-DCMAKE_BUILD_TYPE=Release", "-DBDR_BUILD_GAME=" + ("ON" if args.game else "OFF"),
+               # LTO turns the link of ~49k generated functions into a very long
+               # single step; keep it for distribution builds only.
+               "-DPS2X_ENABLE_LTO=" + ("ON" if args.lto else "OFF"),
+               "-DPS2X_SHOW_WINDOWS_CONSOLE=ON"]
     command.append("-DBDR_GENERATED_DIR=" + GENERATED.as_posix())
     # Optional offline dependency cache: <work>/deps-src/<name>-src.
     deps = WORK / "deps-src"
@@ -232,20 +236,62 @@ def build(args) -> None:
     run(command, "native-build.log")
 
 
-def launch(args) -> None:
-    elf = checked_elf()
-    if not (GENERATED / "generation.json").is_file():
-        raise RuntimeError("Generate code before launching")
+def verified_iso() -> Path:
     paths = json.loads((LOCAL / "paths.json").read_text(encoding="utf-8"))
     iso = Path(paths["iso"])
     if not iso.is_file():
         raise RuntimeError("Original ISO is missing; run extract --iso <new location> to update its path")
-    if iso.stat().st_size != LOCK["iso_size"] or sha256(iso) != LOCK["iso_sha256"]:
+    stat = iso.stat()
+    stamp = {"path": str(iso), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    cache = LOCAL / "iso_verified.json"
+    # Hashing 4.6 GB on every launch is slow: reuse a verification of the same file.
+    if cache.is_file() and json.loads(cache.read_text(encoding="utf-8")) == {**stamp, "sha256": LOCK["iso_sha256"]}:
+        return iso
+    if stat.st_size != LOCK["iso_size"] or sha256(iso) != LOCK["iso_sha256"]:
         raise RuntimeError("Original disc does not match the ISO SHA256 in project.json")
-    command = [str(args.exe.resolve()), str(elf), "--iso", str(iso), "--disc", str(LOCAL / "disc"), "--save", str(LOCAL / "saves")]
-    if args.smoke_seconds:
-        command += ["--headless", "--seconds", str(args.smoke_seconds)]
-    run(command, "smoke.log" if args.smoke_seconds else "run.log", timeout=args.smoke_seconds + 15 if args.smoke_seconds else None)
+    write_json(cache, {**stamp, "sha256": LOCK["iso_sha256"]})
+    return iso
+
+
+def default_exe() -> Path:
+    for candidate in [WORK / "build" / "ps2xRuntime" / "Release" / "burnout_dominator.exe",
+                      WORK / "build" / "ps2xRuntime" / "burnout_dominator"]:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError("Game executable not found; build it with: project.py build --game")
+
+
+def launch(args) -> None:
+    elf = checked_elf()
+    if not (GENERATED / "generation.json").is_file():
+        raise RuntimeError("Generate code before launching")
+    iso = verified_iso()
+    exe = args.exe.resolve() if args.exe else default_exe()
+    command = [str(exe), str(elf), "--iso", str(iso), "--disc", str(LOCAL / "disc"), "--save", str(LOCAL / "saves")]
+    seconds = args.seconds or args.smoke_seconds
+    if args.headless or args.smoke_seconds:
+        command.append("--headless")
+    if seconds:
+        command += ["--seconds", str(seconds)]
+    if args.status_ms:
+        command += ["--status-ms", str(args.status_ms)]
+    if args.dump_frames:
+        command += ["--dump-frames", str(args.dump_frames.resolve()), "--dump-every-ms", str(args.dump_every_ms)]
+    log = LOCAL / "logs" / (args.log or ("smoke.log" if "--headless" in command else "run.log"))
+    log.parent.mkdir(parents=True, exist_ok=True)
+    print("Running:", subprocess.list2cmdline(command), flush=True)
+    with log.open("w", encoding="utf-8") as f:
+        try:
+            result = subprocess.run(command, cwd=WORK, stdout=f, stderr=subprocess.STDOUT,
+                                    timeout=seconds + 60 if seconds else None)
+            code = result.returncode
+        except subprocess.TimeoutExpired:
+            code = "host-timeout"
+    tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-args.tail:]
+    print("\n".join(tail))
+    print(f"Log: {log}\nExit code: {code}")
+    if code not in (0, 124):
+        raise RuntimeError(f"Game exited with {code} (124 = time limit, 3 = missing function)")
 
 
 def main() -> int:
@@ -275,12 +321,20 @@ def main() -> int:
             p.add_argument("--generator")
             p.add_argument("--arch")
             p.add_argument("--no-ffmpeg", action="store_true", help="Diagnostic build only; video becomes stub frames")
+            p.add_argument("--lto", action="store_true", help="Whole-program optimization (slow link; distribution builds)")
         else:
             p.add_argument("--jobs", default=4, type=int)
         p.set_defaults(func=function)
     p = sub.add_parser("run")
-    p.add_argument("--exe", required=True, type=Path)
-    p.add_argument("--smoke-seconds", default=0, type=int)
+    p.add_argument("--exe", type=Path, help="Defaults to the game executable in <work>/build")
+    p.add_argument("--headless", action="store_true", help="No window, audio device or presentation loop")
+    p.add_argument("--seconds", default=0, type=int, help="Stop after N seconds (exit code 124)")
+    p.add_argument("--smoke-seconds", default=0, type=int, help="Same as --headless --seconds N")
+    p.add_argument("--status-ms", default=0, type=int, help="Print a scheduler/IOP status line every N ms")
+    p.add_argument("--dump-frames", type=Path, help="Save the presented GS frame as PNG periodically")
+    p.add_argument("--dump-every-ms", default=1000, type=int)
+    p.add_argument("--log", help="Log file name under <work>/local/logs")
+    p.add_argument("--tail", default=40, type=int, help="Log lines printed after the run")
     p.set_defaults(func=launch)
     args = parser.parse_args()
     try:

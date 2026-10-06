@@ -2339,7 +2339,116 @@ void PS2Runtime::HandleIntegerOverflow(R5900Context *ctx)
     raiseCop0Exception(ctx, EXCEPTION_INTEGER_OVERFLOW);
 }
 
-void PS2Runtime::run()
+namespace
+{
+    std::thread launchGuestThread(PS2Runtime &runtime,
+                                  std::atomic<bool> &finished,
+                                  std::atomic<bool> &failed)
+    {
+        return std::thread([&runtime, &finished, &failed]()
+                           {
+            ThreadNaming::SetCurrentThreadName("GameThread");
+            try
+            {
+                runtime.eeScheduler().reset(runtime.memory().getRDRAM(), runtime.cpu());
+                runtime.eeScheduler().run();
+                const uint32_t pc = runtime.m_debugPc.load(std::memory_order_relaxed);
+                RUNTIME_LOG("Game thread returned. PC=0x" << std::hex << pc
+                          << " RA=0x" << static_cast<uint32_t>(_mm_extract_epi32(runtime.cpu().r[31], 0)) << std::dec << std::endl);
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Error during program execution: " << e.what() << std::endl;
+                failed.store(true, std::memory_order_release);
+            }
+            catch (...)
+            {
+                std::cerr << "Error during program execution: unknown exception" << std::endl;
+                failed.store(true, std::memory_order_release);
+            }
+            finished.store(true, std::memory_order_release); });
+    }
+
+    // Time limit, periodic status lines and framebuffer dumps shared by the
+    // windowed and headless loops.
+    class RunObserver
+    {
+    public:
+        explicit RunObserver(const PS2Runtime::RunOptions &options)
+            : m_options(options),
+              m_start(std::chrono::steady_clock::now()),
+              m_nextStatus(m_start + options.statusInterval),
+              m_nextDump(m_start + options.frameDumpInterval)
+        {
+        }
+
+        void poll(PS2Runtime &runtime, PS2Runtime::RunResult &result)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (m_options.statusInterval.count() > 0 && now >= m_nextStatus)
+            {
+                runtime.printRunStatus(std::cout);
+                m_nextStatus = now + m_options.statusInterval;
+            }
+            if (!m_options.frameDumpDirectory.empty() &&
+                m_options.frameDumpInterval.count() > 0 &&
+                now >= m_nextDump)
+            {
+                char name[32];
+                std::snprintf(name, sizeof(name), "frame_%05u.png", m_dumpIndex++);
+                if (runtime.dumpPresentationFrame(m_options.frameDumpDirectory / name))
+                {
+                    ++result.framesDumped;
+                }
+                m_nextDump = now + m_options.frameDumpInterval;
+            }
+            if (m_options.timeLimit.count() > 0 && now - m_start >= m_options.timeLimit && !result.deadlineReached)
+            {
+                result.deadlineReached = true;
+                std::cout << "[run] time limit reached" << std::endl;
+                runtime.requestStop();
+            }
+        }
+
+    private:
+        const PS2Runtime::RunOptions &m_options;
+        std::chrono::steady_clock::time_point m_start;
+        std::chrono::steady_clock::time_point m_nextStatus;
+        std::chrono::steady_clock::time_point m_nextDump;
+        uint32_t m_dumpIndex = 0;
+    };
+
+    const char *threadStatusName(EeThreadStatus status)
+    {
+        switch (status)
+        {
+        case EeThreadStatus::Running: return "run";
+        case EeThreadStatus::Ready: return "rdy";
+        case EeThreadStatus::Waiting: return "wait";
+        case EeThreadStatus::WaitingSuspended: return "wsus";
+        case EeThreadStatus::Suspended: return "sus";
+        case EeThreadStatus::Dormant: return "dorm";
+        }
+        return "?";
+    }
+
+    const char *waitReasonName(EeWaitReason reason)
+    {
+        switch (reason)
+        {
+        case EeWaitReason::None: return "";
+        case EeWaitReason::Sleep: return "/sleep";
+        case EeWaitReason::Semaphore: return "/sema";
+        case EeWaitReason::EventFlag: return "/evf";
+        case EeWaitReason::VSync: return "/vsync";
+        case EeWaitReason::External: return "/ext";
+        case EeWaitReason::Mpeg: return "/mpeg";
+        }
+        return "/?";
+    }
+}
+
+void PS2Runtime::prepareGuestExecution()
 {
     m_stopRequested.store(false, std::memory_order_relaxed);
     ps2_stubs::resetSifState();
@@ -2356,6 +2465,97 @@ void PS2Runtime::run()
     m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
 
     RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
+}
+
+bool PS2Runtime::dumpPresentationFrame(const std::filesystem::path &file)
+{
+    std::vector<uint8_t> pixels;
+    uint32_t width = 0u;
+    uint32_t height = 0u;
+    m_gs.latchHostPresentationFrame();
+    if (!m_gs.copyLatchedHostPresentationFrame(pixels, width, height) ||
+        width == 0u || height == 0u ||
+        pixels.size() < static_cast<size_t>(width) * height * 4u)
+    {
+        return false;
+    }
+    // PS2 framebuffer alpha is not display opacity.
+    for (size_t i = 3; i < pixels.size(); i += 4)
+    {
+        pixels[i] = 0xFFu;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    Image image{};
+    image.data = pixels.data();
+    image.width = static_cast<int>(width);
+    image.height = static_cast<int>(height);
+    image.mipmaps = 1;
+    image.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+    return ExportImage(image, file.string().c_str());
+}
+
+void PS2Runtime::printRunStatus(std::ostream &out)
+{
+    const EeKernelSnapshot ee = m_eeScheduler->snapshot();
+    const ps2x::iop::DebugSnapshot iop = iopDebugSnapshot();
+    std::ostringstream line;
+    line << "[status] vsync=" << m_eeScheduler->currentVSyncTick()
+         << " eeCycle=" << ee.eeCycle
+         << std::hex
+         << " pc=0x" << m_debugPc.load(std::memory_order_relaxed)
+         << " ra=0x" << m_debugRa.load(std::memory_order_relaxed)
+         << std::dec
+         << " running=" << ee.runningThreadId
+         << " dma=" << m_memory.dmaStartCount()
+         << " gif=" << m_memory.gifCopyCount()
+         << " gsw=" << m_memory.gsWriteCount()
+         << " vif=" << m_memory.vifWriteCount()
+         << " iop[instr=" << iop.emulatorInstructions
+         << " mods=" << iop.emulatorLoadedModules
+         << " thr=" << iop.emulatorThreads
+         << " rpc=" << iop.emulatorRpcServers << "]"
+         << " threads:";
+    for (const EeThreadSnapshot &thread : ee.threads)
+    {
+        line << ' ' << thread.id << ':' << threadStatusName(thread.status)
+             << waitReasonName(thread.waitReason)
+             << "@0x" << std::hex << thread.pc << std::dec;
+    }
+    out << line.str() << std::endl;
+}
+
+PS2Runtime::RunResult PS2Runtime::runHeadless(const RunOptions &options)
+{
+    RunResult result;
+    prepareGuestExecution();
+    std::atomic<bool> gameThreadFinished{false};
+    std::atomic<bool> gameThreadFailed{false};
+    std::thread gameThread = launchGuestThread(*this, gameThreadFinished, gameThreadFailed);
+    RunObserver observer(options);
+    while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        observer.poll(*this, result);
+    }
+    requestStop();
+    if (gameThread.joinable())
+    {
+        gameThread.join();
+    }
+    if (options.statusInterval.count() > 0)
+    {
+        printRunStatus(std::cout);
+    }
+    result.gameThreadFinished = gameThreadFinished.load(std::memory_order_acquire);
+    result.gameThreadFailed = gameThreadFailed.load(std::memory_order_acquire);
+    return result;
+}
+
+PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
+{
+    RunResult result;
+    prepareGuestExecution();
 
     // A blank image to use as a framebuffer
     Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
@@ -2363,27 +2563,9 @@ void PS2Runtime::run()
     UnloadImage(blank);
 
     std::atomic<bool> gameThreadFinished{false};
-
-    std::thread gameThread([&]()
-                           {
-        ThreadNaming::SetCurrentThreadName("GameThread");
-        try
-        {
-            m_eeScheduler->reset(m_memory.getRDRAM(), m_cpuContext);
-            m_eeScheduler->run();
-            uint32_t pc = m_debugPc.load(std::memory_order_relaxed);
-            RUNTIME_LOG("Game thread returned. PC=0x" << std::hex << pc
-                      << " RA=0x" << static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[31], 0)) << std::dec << std::endl);
-        }
-        catch (const std::exception &e)
-        {
-            std::cerr << "Error during program execution: " << e.what() << std::endl;
-        }
-        catch (...)
-        {
-            std::cerr << "Error during program execution: unknown exception" << std::endl;
-        }
-        gameThreadFinished.store(true, std::memory_order_release); });
+    std::atomic<bool> gameThreadFailed{false};
+    std::thread gameThread = launchGuestThread(*this, gameThreadFinished, gameThreadFailed);
+    RunObserver observer(options);
 
     uint64_t tick = 0;
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
@@ -2446,6 +2628,8 @@ void PS2Runtime::run()
         }
         EndDrawing();
 
+        observer.poll(*this, result);
+
         if (WindowShouldClose())
         {
             RUNTIME_LOG("[run] window close requested, breaking out of loop");
@@ -2469,4 +2653,7 @@ void PS2Runtime::run()
     CloseWindow();
 
     RUNTIME_LOG("[run] exiting loop");
+    result.gameThreadFinished = gameThreadFinished.load(std::memory_order_acquire);
+    result.gameThreadFailed = gameThreadFailed.load(std::memory_order_acquire);
+    return result;
 }

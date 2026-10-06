@@ -17,7 +17,13 @@ if(BDR_BUILD_GAME)
     list(FILTER BDR_RUNNER_SOURCES EXCLUDE REGEX "(^|/)src/main\\.cpp$")
     list(FILTER BDR_RUNNER_SOURCES EXCLUDE REGEX "(^|/)src/runner/register_functions\\.cpp$")
     set_property(TARGET ps2EntryRunner PROPERTY SOURCES "${BDR_RUNNER_SOURCES}")
-    target_sources(ps2EntryRunner PRIVATE ${BDR_GENERATED_CPP} "${PROJECT_SOURCE_DIR}/src/burnout_main.cpp")
+    set(BDR_PROJECT_SOURCES
+        "${PROJECT_SOURCE_DIR}/src/burnout_main.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp")
+    # Keep hand-written sources out of the generated unity batches so editing
+    # them recompiles one file instead of a batch of guest functions.
+    set_source_files_properties(${BDR_PROJECT_SOURCES} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    target_sources(ps2EntryRunner PRIVATE ${BDR_GENERATED_CPP} ${BDR_PROJECT_SOURCES})
     target_include_directories(ps2EntryRunner PRIVATE "${BDR_GENERATED_DIR}")
     if(PS2X_ENABLE_RUNNER_PCH)
         target_precompile_headers(ps2EntryRunner PRIVATE
