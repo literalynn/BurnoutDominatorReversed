@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
@@ -212,6 +213,11 @@ def configure(args) -> None:
                "-DPS2X_ENABLE_LTO=" + ("ON" if args.lto else "OFF"),
                "-DPS2X_SHOW_WINDOWS_CONSOLE=ON"]
     command.append("-DBDR_GENERATED_DIR=" + GENERATED.as_posix())
+    if os.name != "nt" and platform.machine().lower() in ("x86_64", "amd64"):
+        # The runtime uses SSE4.1 intrinsics (_mm_extract_epi64...). MSVC accepts
+        # them without flags; GCC and Clang need the target feature, as in
+        # upstream's Linux CI.
+        command += ["-DCMAKE_C_FLAGS=-msse4.1", "-DCMAKE_CXX_FLAGS=-msse4.1"]
     # Optional offline dependency cache: <work>/deps-src/<name>-src.
     deps = WORK / "deps-src"
     for name in ["elfio", "toml11", "fmt", "libdwarf", "rabbitizer", "nlohmann_json", "raylib"]:

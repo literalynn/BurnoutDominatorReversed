@@ -306,7 +306,11 @@ public:
         bool gameThreadFailed = false;
         uint32_t framesDumped = 0;
     };
-    RunResult run(const RunOptions &options = {});
+    // Two overloads rather than a `= {}` default: GCC rejects a default
+    // argument that uses a nested class's member initializers inside the
+    // enclosing class.
+    RunResult run();
+    RunResult run(const RunOptions &options);
     // Same guest execution as run() without a host window, audio device or
     // presentation loop. Requires memory()/syncCoreSubsystems() initialized.
     RunResult runHeadless(const RunOptions &options);
