@@ -30,13 +30,17 @@ jobs:
             export CC=clang
             export CXX=clang++
           fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-msse4.1 -DCMAKE_CXX_FLAGS=-msse4.1
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-msse4.1 -DCMAKE_CXX_FLAGS=-msse4.1 -DPS2X_IOP_BUILD_TESTS=ON
 
       - name: Build
         run: cmake --build build --config Release
 
       - name: Tests
-        run: ./build/ps2xTest/ps2x_tests
+        run: |
+          ./build/ps2xTest/ps2x_tests
+          for t in emulator import compatibility import_version; do ./build/ps2xIOP/ps2_iop_${t}_tests; done
+          ./build/ps2xIOP/ps2_iso9660_tests
+          ./build/burnout_overrides_tests
 
   windows-msvc:
     strategy:
@@ -63,13 +67,16 @@ jobs:
       - name: Build
         shell: cmd
         run: |
-          cmake -B build
+          cmake -B build -DPS2X_IOP_BUILD_TESTS=ON
           cmake --build build --config Release
 
       - name: Tests
         shell: cmd
         run: |
-          .\build\ps2xTest\Release\ps2x_tests.exe
+          .\build\ps2xTest\Release\ps2x_tests.exe || exit /b 1
+          for %%t in (emulator import compatibility import_version) do .\build\ps2xIOP\Release\ps2_iop_%%t_tests.exe || exit /b 1
+          .\build\ps2xIOP\Release\ps2_iso9660_tests.exe || exit /b 1
+          .\build\Release\burnout_overrides_tests.exe || exit /b 1
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -71,8 +72,9 @@ int32_t returnValue(const R5900Context& ctx) {
 }
 
 void testBindings() {
-    PS2Runtime runtime;
-    ps2_game_overrides::applyMatching(runtime, std::string("disc/") + kElfName, kEntry, kElfCrc32, true);
+    // PS2Runtime is ~0.5 MB: keep it off the stack (1 MB by default on Windows).
+    const auto runtime = std::make_unique<PS2Runtime>();
+    ps2_game_overrides::applyMatching(*runtime, std::string("disc/") + kElfName, kEntry, kElfCrc32, true);
     std::size_t bound = 0;
     for (std::size_t slot = 0x00100000 >> 2; slot < (0x003BEB28 >> 2); ++slot)
         bound += g_ps2RecompiledFunctionTable[slot] != nullptr;
@@ -91,10 +93,10 @@ void testRomVersion() {
     paths.elfDirectory = paths.hostRoot = paths.cdRoot = paths.mcRoot = root;
     PS2Runtime::setIoPaths(paths);
 
-    PS2Runtime runtime;
+    const auto runtime = std::make_unique<PS2Runtime>();
     std::string error;
-    check(runtime.romDevice().configure({kElfName, kEntry, kElfCrc32}, &error), "ROM0 configure: " + error);
-    check(runtime.romDevice().activeProfile() == "burnout-dominator-pal", "Burnout ROM0 profile not selected");
+    check(runtime->romDevice().configure({kElfName, kEntry, kElfCrc32}, &error), "ROM0 configure: " + error);
+    check(runtime->romDevice().activeProfile() == "burnout-dominator-pal", "Burnout ROM0 profile not selected");
 
     std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0xA5);
     constexpr uint32_t kPath = 0x1000, kBuffer = 0x2000;
@@ -102,7 +104,7 @@ void testRomVersion() {
     R5900Context ctx{};
     setReg(ctx, 4, kPath);
     setReg(ctx, 5, PS2_FIO_O_RDONLY);
-    ps2_stubs::sceOpen(rdram.data(), &ctx, &runtime);
+    ps2_stubs::sceOpen(rdram.data(), &ctx, runtime.get());
     const int32_t fd = returnValue(ctx);
     check(fd >= 0, "sceOpen(rom0:ROMVER) failed");
 
@@ -112,7 +114,7 @@ void testRomVersion() {
         setReg(ctx, 4, static_cast<uint32_t>(fd));
         setReg(ctx, 5, kBuffer + length);
         setReg(ctx, 6, 1);
-        ps2_stubs::sceRead(rdram.data(), &ctx, &runtime);
+        ps2_stubs::sceRead(rdram.data(), &ctx, runtime.get());
         if (returnValue(ctx) != 1) break;
         if (rdram[kBuffer + length] == 0) break;
     }
@@ -123,11 +125,11 @@ void testRomVersion() {
     check(date == 20040614, "ROMVER date parsed as " + std::to_string(date));
 
     setReg(ctx, 4, static_cast<uint32_t>(fd));
-    ps2_stubs::sceClose(rdram.data(), &ctx, &runtime);
+    ps2_stubs::sceClose(rdram.data(), &ctx, runtime.get());
     check(returnValue(ctx) == 0, "sceClose(rom0:ROMVER) failed");
 
-    PS2Runtime other;
-    check(other.romDevice().configure({"SLUS_000.00", kEntry, 0}, &error) && other.romDevice().activeProfile().empty(),
+    const auto other = std::make_unique<PS2Runtime>();
+    check(other->romDevice().configure({"SLUS_000.00", kEntry, 0}, &error) && other->romDevice().activeProfile().empty(),
           "the Burnout ROM0 profile must not apply to other ELFs");
     std::filesystem::remove_all(root);
 }
