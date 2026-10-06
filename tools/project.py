@@ -102,6 +102,18 @@ def generate(args) -> None:
     map_path = args.function_map.resolve() if args.function_map else None
     if map_path and not map_path.is_file():
         raise RuntimeError(f"Missing function map: {map_path}")
+    augmentation = None
+    if map_path and args.augment:
+        # Ghidra misses code reached only through pointers (vtables, callbacks).
+        augmented = map_path.with_name(map_path.stem + ".augmented.csv")
+        report = augmented.with_suffix(".json")
+        run([sys.executable, str(ROOT / "tools" / "augment_function_map.py"), str(elf), str(map_path),
+             str(LOCAL / "analysis" / (LOCK["boot_path"] + ".json")), str(augmented), str(report)],
+            "augment-function-map.log")
+        augmentation = {key: value for key, value in json.loads(report.read_text(encoding="utf-8")).items()
+                        if key not in ("entries", "rejected")}
+        augmentation["report"] = str(report)
+        map_path = augmented
     cfg = LOCAL / "burnout.toml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(
@@ -120,7 +132,9 @@ def generate(args) -> None:
         "elf_sha256": LOCK["elf_sha256"], "ps2recomp_commit": LOCK["ps2recomp_commit"],
         "function_map": str(map_path) if map_path else None,
         "function_map_sha256": sha256(map_path) if map_path else None,
-        "boundary_method": "Ghidra export" if map_path else "unverified native heuristics",
+        "boundary_method": ("Ghidra export + pointer/gap entry points" if augmentation else "Ghidra export")
+                           if map_path else "unverified native heuristics",
+        "augmentation": augmentation,
         "tool_sha256": sha256(args.tool), "skip": [], "stubs": [],
         "patch_syscalls": False, "patch_cop0": False, "patch_cache": False,
         "playability": "unverified",
@@ -308,6 +322,8 @@ def main() -> int:
     p = sub.add_parser("generate")
     p.add_argument("--tool", required=True, type=Path)
     p.add_argument("--function-map", type=Path)
+    p.add_argument("--augment", action="store_true",
+                   help="Add pointer/gap entry points missing from the map (tools/augment_function_map.py)")
     p.add_argument("--regenerate", action="store_true")
     p.set_defaults(func=generate)
     p = sub.add_parser("audit")

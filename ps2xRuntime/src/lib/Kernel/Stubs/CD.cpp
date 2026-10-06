@@ -517,12 +517,14 @@ namespace ps2_stubs
             return;
         }
 
-        std::time_t now = std::time(nullptr);
+        // The console RTC keeps Japan Standard Time (UTC+9); libscf converts it
+        // to local time with the timezone offset from the OSD configuration.
+        std::time_t now = std::time(nullptr) + 9 * 60 * 60;
         std::tm localTm{};
 #ifdef _WIN32
-        localtime_s(&localTm, &now);
+        gmtime_s(&localTm, &now);
 #else
-        localtime_r(&now, &localTm);
+        gmtime_r(&now, &localTm);
 #endif
 
         // sceCdCLOCK format (BCD fields).
