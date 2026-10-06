@@ -46,6 +46,16 @@ python tools/project.py run --headless --seconds 30 --status-ms 1000 --dump-fram
 
 Le changement de `ps2_runtime.h` impose une recompilation complète. Conserver `run4.log` : le PC final, les lignes `[IOP]` et la liste des modules chargés indiquent le blocage suivant.
 
+## Demandes à traiter une fois le jeu jouable
+
+Ces objectifs supposent que le jeu atteigne les courses ; ils seront traités après le démarrage. Pistes déjà établies :
+
+- **Mods de fichiers.** Le jeu lit ses données par GTFSCDVD.IRX, c’est-à-dire par secteurs (`sceCdRead` dans l’IOP émulé), pas par noms de fichiers EE. Une surcouche `mods/<chemin sur le disque>` doit donc agir au niveau des secteurs : table LBA → fichier tirée du répertoire ISO9660, remplacement direct si la taille ne dépasse pas l’original, image virtuelle reconstruite sinon (`iop_cdvd.cpp` contient déjà une construction d’ISO virtuelle). À vérifier : si GTFS relit lui-même les répertoires ISO9660, les nouvelles tailles et LBA lui parviennent sans autre changement.
+- **Mods de code.** Toute fonction invitée peut être remplacée par une fonction native (mécanisme de `src/burnout_overrides.cpp`) ; une API chargeant des bibliothèques natives depuis `mods/` en découle directement.
+- **Images par seconde.** Au démarrage, `0x207820` fixe la cadence et le pas de simulation selon l’octet 0x432E98 : `0x1E68A0(60)` et `0x1E6668(16,667 ms)`, ou `0x1E68A0(50)` et `0x1E6668(20 ms)`. La physique suppose ce pas fixe : accélérer la boucle la fausserait. 60 Hz est donc disponible nativement ; au-delà (jusqu’à 480 Hz), il faut garder la simulation à 60 Hz et interpoler le rendu (objets, caméra) entre deux pas, ce qui demande d’identifier la boucle de jeu et la scène RenderWare.
+- **Résolution 2K.** Le runtime ne rend le GS que sur le CPU (`gs_cpu_backend`), à la résolution PS2. Une résolution interne plus élevée demande un rendu GS sur GPU, derrière l’interface `GSRasterBackend` existante : chantier du runtime, indépendant du jeu.
+- **Chargements.** Lectures disque (latence CDVD simulée : 128 cycles IOP) et carte mémoire (fichiers hôte) sont déjà quasi instantanées. Restent les attentes codées dans le jeu (durée minimale d’un écran de chargement, temporisations de sauvegarde), à repérer une fois ces écrans atteints.
+
 ## Travaux en cours et critères restants
 
 L’analyse Ghidra/R5900 affine les limites des fonctions. Les journaux et l’audit de traduction doivent être examinés avant toute affirmation de couverture totale. La compilation du runtime et les essais du binaire exact sont des étapes distinctes.
