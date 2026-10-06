@@ -99,3 +99,5 @@ endif()
 if(PS2X_BUILD_STUDIO)
     add_subdirectory("ps2xStudio")
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Burnout.cmake")

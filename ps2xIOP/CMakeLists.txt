@@ -6,6 +6,7 @@ option(PS2X_IOP_BUILD_TESTS "Build ps2xIOP emulator smoke tests" OFF)
 
 add_library(ps2_iop STATIC
     src/ps2_path.cpp
+    src/iso9660.cpp
     src/iop_module_manager.cpp
     src/iop_subsystem.cpp
     src/emulator/iop_emulator.cpp
@@ -31,6 +32,7 @@ add_library(ps2_iop STATIC
 )
 
 target_compile_features(ps2_iop PUBLIC cxx_std_20)
+target_compile_options(ps2_iop PUBLIC $<$<CXX_COMPILER_ID:MSVC>:/EHsc>)
 
 target_include_directories(ps2_iop
     PUBLIC
@@ -44,6 +46,10 @@ add_library(ps2x::iop ALIAS ps2_iop)
 
 if(PS2X_IOP_BUILD_TESTS)
     enable_testing()
+    add_executable(ps2_iso9660_tests tests/iso9660_tests.cpp)
+    target_link_libraries(ps2_iso9660_tests PRIVATE ps2_iop)
+    target_include_directories(ps2_iso9660_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME ps2_iso9660_tests COMMAND ps2_iso9660_tests)
     add_executable(ps2_iop_emulator_tests tests/iop_emulator_tests.cpp)
     target_link_libraries(ps2_iop_emulator_tests PRIVATE ps2_iop)
     add_test(NAME ps2_iop_emulator_tests COMMAND ps2_iop_emulator_tests)

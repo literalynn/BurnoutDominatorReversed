@@ -1,0 +1,13 @@
+{
+  "PS2Recomp": {
+    "url": "https://github.com/ran-j/PS2Recomp",
+    "commit": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
+    "license": "GPL-3.0",
+    "integration": "Source snapshot included at repository root; local changes documented in docs/CHANGES.md"
+  },
+  "REA": {
+    "url": "https://github.com/morluto/rea",
+    "commit": "50787b2faf1a4bea799d041960ca2b91199ef403",
+    "role": "Investigation methodology and read-only environment diagnostic; not the PS2 translator"
+  }
+}

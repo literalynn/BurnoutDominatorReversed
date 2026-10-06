@@ -1,0 +1,36 @@
+{
+  "ghidra": {
+    "version": "12.1.4",
+    "release": "Ghidra_12.1.4_build",
+    "archive": "ghidra_12.1.4_PUBLIC_20260921.zip",
+    "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip",
+    "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db",
+    "verified_download_bytes": 569649598,
+    "verified_download_checksum": true,
+    "minimum_java_version": 21,
+    "application_revision": "8b6bbb857accdfa20dc5b2f5dea471178c2e9fbc"
+  },
+  "ps2_extension": {
+    "name": "ghidra-emotionengine-reloaded",
+    "release": "v2.1.38",
+    "ghidra_version": "12.1.4",
+    "archive": "ghidra_12.1.4_PUBLIC_20261004_ghidra-emotionengine-reloaded.zip",
+    "url": "https://github.com/chaoticgd/ghidra-emotionengine-reloaded/releases/download/v2.1.38/ghidra_12.1.4_PUBLIC_20261004_ghidra-emotionengine-reloaded.zip",
+    "sha256": "e389ff3e921d9f7d4db2ece9906f808545ce4ff519d9e25a019b72ea509f240b",
+    "verified_download_bytes": 917780,
+    "verified_download_checksum": true,
+    "installation_relative_path": "Ghidra/Extensions/ghidra-emotionengine-reloaded"
+  },
+  "tested_java": { "runtime_version": "22.0.1", "javac_version": "22.0.1", "new_global_installation": false },
+  "source_elf": {
+    "filename": "SLES_546.27",
+    "bytes": 3472132,
+    "sha256": "fe8b4b28e165620a35e55bcf6fb452de16cf7982ea6584ab28dc5f6b4b187301",
+    "entry": "0x00100008",
+    "language_id": "r5900:LE:32:default",
+    "compiler_spec_id": "default"
+  },
+  "saved_project": "local/analysis/ghidra/project/BurnoutDominatorPAL.gpr",
+  "tested_scripts": ["ExportBurnoutPALAnalysis.java", "ExportBurnoutPseudocode.java", "RetryBurnoutPseudocode.java"],
+  "untested_scripts": ["BurnoutPALAnalysisSetup.java"]
+}
