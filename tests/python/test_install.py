@@ -258,6 +258,22 @@ class InstallTests(unittest.TestCase):
                 self.assertEqual(install.main([]), 1)
             self.assertIn("ERREUR :", stderr.getvalue())
 
+    def test_build_tree_from_another_checkout_is_detected(self):
+        build = self.root / "build"
+        build.mkdir()
+        self.assertIsNone(install.foreign_source(build))
+        self.assertIsNone(project.foreign_build_tree(build))
+        cache = build / "CMakeCache.txt"
+        here = install.ROOT.as_posix()
+        cache.write_text(f"CMAKE_HOME_DIRECTORY:INTERNAL={here}\n", encoding="utf-8")
+        self.assertIsNone(install.foreign_source(build))
+        self.assertIsNone(project.foreign_build_tree(build))
+        # A tree configured from an older clone (iCloud copy) must be reconfigured.
+        other = (self.root / "old clone").as_posix()
+        cache.write_text(f"CMAKE_HOME_DIRECTORY:INTERNAL={other}\n", encoding="utf-8")
+        self.assertEqual(install.foreign_source(build), Path(other))
+        self.assertEqual(project.foreign_build_tree(build), Path(other))
+
     def test_shipped_map_matches_its_documented_hash(self):
         shipped = install.SHIPPED_MAP
         self.assertTrue(shipped.is_file())

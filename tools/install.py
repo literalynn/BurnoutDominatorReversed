@@ -153,6 +153,14 @@ def cache_entry(build_dir: Path, key: str) -> str | None:
     return None
 
 
+def foreign_source(build_dir: Path) -> Path | None:
+    """The checkout a build tree was configured from, when it is not this one."""
+    source = cache_entry(build_dir, "CMAKE_HOME_DIRECTORY")
+    if not source or os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(ROOT)):
+        return None
+    return Path(source)
+
+
 def cached_cmake(build_dir: Path) -> str | None:
     """The CMake that configured the build tree, while it is still installed."""
     command = cache_entry(build_dir, "CMAKE_COMMAND")
@@ -434,7 +442,11 @@ def setup(args: argparse.Namespace) -> int:
 
     map_path = choose_function_map(local, args.function_map, SHIPPED_MAP)
     recompiler = find_recompiler(build_dir)
-    if not recompiler or not (build_dir / "CMakeCache.txt").is_file():
+    foreign = foreign_source(build_dir)
+    if foreign:
+        say(f"La compilation existante vient d’une autre copie du projet ({foreign}) : "
+            "nouvelle configuration, puis recompilation complète")
+    if not recompiler or not (build_dir / "CMakeCache.txt").is_file() or foreign:
         say("Configuration des outils (téléchargement des dépendances)")
         project(env, "configure", *cmake, *toolchain["generator"])
         toolchain["generator"] = []
