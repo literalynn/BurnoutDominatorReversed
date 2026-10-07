@@ -7,15 +7,16 @@ Static recompilation of Burnout Dominator PS2 (PAL, SLES_546.27, SHA256 locked i
 - Upstream PS2Recomp snapshot at the root (`ps2xRecomp`, `ps2xRuntime`, `ps2xIOP`, `ps2xTest`, ...), commit in `UPSTREAM.json`. Change it minimally and list every change in `docs/CHANGES.md`.
 - Project code: `src/burnout_main.cpp` (runner), `src/burnout_overrides.cpp` (SDK bindings by address + ROM0 profile), `cmake/Burnout.cmake`, `tools/` (Python driver and analysis), `tests/python`, `tests/native`.
 - State and evidence: `docs/STATUS.md`, `docs/BOOT.md` (boot sequence, IOP modules, run history), `docs/SDK_FUNCTIONS.md` (identified SDK functions), `docs/FINDINGS.md`.
-- Game files, Ghidra output, generated C++ (~51k files) and builds are never committed. They live in a work directory chosen by `BDR_WORK_DIR` or the ignored `work.json` (on the owner's PC: `C:\Users\lynnb\bdr-work`, outside the iCloud-synced checkout). Cloud sessions have no game files.
+- Game files, Ghidra output, generated C++ (~51k files) and builds are never committed. One exception: `data/functions.ee.csv`, the Ghidra function map (generated names, addresses and sizes, no game bytes; provenance and SHA256 in `data/README.md`), shipped so that `tools/install.py` works without Ghidra. They live in a work directory chosen by `BDR_WORK_DIR` or the ignored `work.json` (on the owner's PC: `C:\Users\lynnb\bdr-work`, outside the iCloud-synced checkout). Cloud sessions have no game files.
 
 ## Commands
 
 ```
+python tools/install.py --iso <ISO>   # one-command install (Installer.bat on Windows): extract, build tools, generate, build the game
 python tools/project.py configure [--game] [--generator Ninja|"Visual Studio 18 2026" --arch x64] [--lto]
 python tools/project.py build [--game] --jobs N
 python tools/project.py generate --tool <ps2_recomp> --function-map <functions.ee.csv> --augment --regenerate
-python tools/project.py run --headless --seconds 30 --status-ms 1000 --log runN.log --tail 120
+python tools/project.py run --headless --seconds 30 --status-ms 1000 --log runN.log --tail 120 [--no-iso] [--trace-calls 0xA,0xB] [--trace-watch 0xC]
 python -m unittest discover -s tests/python
 ```
 

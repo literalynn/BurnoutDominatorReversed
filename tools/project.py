@@ -19,6 +19,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = json.loads((ROOT / "project.json").read_text(encoding="utf-8"))
+AUGMENTER = ROOT / "tools" / "augment_function_map.py"
+ISO_HINT = ("Drop the ISO on Installer.bat (Windows) or run: python tools/install.py --iso <ISO>. "
+            "run --no-iso starts from the extracted files only (sector numbers differ from the disc).")
 
 
 def work_root() -> Path:
@@ -106,9 +109,11 @@ def generate(args) -> None:
     augmentation = None
     if map_path and args.augment:
         # Ghidra misses code reached only through pointers (vtables, callbacks).
-        augmented = map_path.with_name(map_path.stem + ".augmented.csv")
+        # Written to the work directory, never next to a map kept in the checkout.
+        augmented = LOCAL / "analysis" / "ghidra" / (map_path.stem + ".augmented.csv")
+        augmented.parent.mkdir(parents=True, exist_ok=True)
         report = augmented.with_suffix(".json")
-        run([sys.executable, str(ROOT / "tools" / "augment_function_map.py"), str(elf), str(map_path),
+        run([sys.executable, str(AUGMENTER), str(elf), str(map_path),
              str(LOCAL / "analysis" / (LOCK["boot_path"] + ".json")), str(augmented), str(report)],
             "augment-function-map.log")
         augmentation = {key: value for key, value in json.loads(report.read_text(encoding="utf-8")).items()
@@ -136,6 +141,7 @@ def generate(args) -> None:
         "boundary_method": ("Ghidra export + pointer/gap entry points" if augmentation else "Ghidra export")
                            if map_path else "unverified native heuristics",
         "augmentation": augmentation,
+        "augmenter_sha256": sha256(AUGMENTER) if augmentation else None,
         "tool_sha256": sha256(args.tool), "skip": [], "stubs": [],
         "patch_syscalls": False, "patch_cop0": False, "patch_cache": False,
         "playability": "unverified",
@@ -257,18 +263,22 @@ def build(args) -> None:
 
 
 def verified_iso() -> Path:
-    paths = json.loads((LOCAL / "paths.json").read_text(encoding="utf-8"))
-    iso = Path(paths["iso"])
-    if not iso.is_file():
-        raise RuntimeError("Original ISO is missing; run extract --iso <new location> to update its path")
+    paths = LOCAL / "paths.json"
+    recorded = json.loads(paths.read_text(encoding="utf-8")).get("iso") if paths.is_file() else None
+    iso = Path(recorded) if recorded else None
+    if not iso or not iso.is_file():
+        raise RuntimeError(f"Original ISO not found{f' at {iso}' if iso else ''}. " + ISO_HINT)
     stat = iso.stat()
     stamp = {"path": str(iso), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    # Same record as tools/install.py. Hashing 4.6 GB on every launch is slow:
+    # reuse a verification of the same file.
     cache = LOCAL / "iso_verified.json"
-    # Hashing 4.6 GB on every launch is slow: reuse a verification of the same file.
     if cache.is_file() and json.loads(cache.read_text(encoding="utf-8")) == {**stamp, "sha256": LOCK["iso_sha256"]}:
         return iso
+    if stat.st_size == LOCK["iso_size"]:
+        print("Checking the ISO SHA256 (once per file, a few minutes)...", flush=True)
     if stat.st_size != LOCK["iso_size"] or sha256(iso) != LOCK["iso_sha256"]:
-        raise RuntimeError("Original disc does not match the ISO SHA256 in project.json")
+        raise RuntimeError(f"{iso} does not match the ISO size and SHA256 in project.json. " + ISO_HINT)
     write_json(cache, {**stamp, "sha256": LOCK["iso_sha256"]})
     return iso
 
@@ -285,9 +295,11 @@ def launch(args) -> None:
     elf = checked_elf()
     if not (GENERATED / "generation.json").is_file():
         raise RuntimeError("Generate code before launching")
-    iso = verified_iso()
     exe = args.exe.resolve() if args.exe else default_exe()
-    command = [str(exe), str(elf), "--iso", str(iso), "--disc", str(LOCAL / "disc"), "--save", str(LOCAL / "saves")]
+    command = [str(exe), str(elf)]
+    if not args.no_iso:
+        command += ["--iso", str(verified_iso())]
+    command += ["--disc", str(LOCAL / "disc"), "--save", str(LOCAL / "saves")]
     seconds = args.seconds or args.smoke_seconds
     if args.headless or args.smoke_seconds:
         command.append("--headless")
@@ -297,6 +309,10 @@ def launch(args) -> None:
         command += ["--status-ms", str(args.status_ms)]
     if args.dump_frames:
         command += ["--dump-frames", str(args.dump_frames.resolve()), "--dump-every-ms", str(args.dump_every_ms)]
+    if args.trace_calls:
+        command += ["--trace-calls", args.trace_calls]
+    if args.trace_watch:
+        command += ["--trace-watch", args.trace_watch]
     log = LOCAL / "logs" / (args.log or ("smoke.log" if "--headless" in command else "run.log"))
     log.parent.mkdir(parents=True, exist_ok=True)
     print("Running:", subprocess.list2cmdline(command), flush=True)
@@ -312,6 +328,16 @@ def launch(args) -> None:
     print(f"Log: {log}\nExit code: {code}")
     if code not in (0, 124):
         raise RuntimeError(f"Game exited with {code} (124 = time limit, 3 = missing function)")
+
+
+def hex_list(text: str) -> str:
+    """Comma-separated hexadecimal guest addresses, passed to the runner as given."""
+    try:
+        for item in text.split(","):
+            int(item, 16)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected comma-separated hex addresses (0x1E5020,0x1E3910), got {text!r}") from None
+    return text
 
 
 def main() -> int:
@@ -350,6 +376,8 @@ def main() -> int:
     p = sub.add_parser("run")
     p.add_argument("--exe", type=Path, help="Defaults to the game executable in <work>/build")
     p.add_argument("--headless", action="store_true", help="No window, audio device or presentation loop")
+    p.add_argument("--no-iso", action="store_true",
+                   help="Serve disc sectors from a virtual image of the extracted files instead of the original ISO")
     p.add_argument("--seconds", default=0, type=int, help="Stop after N seconds (exit code 124)")
     p.add_argument("--smoke-seconds", default=0, type=int, help="Same as --headless --seconds N")
     p.add_argument("--status-ms", default=0, type=int, help="Print a scheduler/IOP status line every N ms")
@@ -357,6 +385,8 @@ def main() -> int:
     p.add_argument("--dump-every-ms", default=1000, type=int)
     p.add_argument("--log", help="Log file name under <work>/local/logs")
     p.add_argument("--tail", default=40, type=int, help="Log lines printed after the run")
+    p.add_argument("--trace-calls", type=hex_list, help="Log calls and returns of these guest functions (0xADDR,...)")
+    p.add_argument("--trace-watch", type=hex_list, help="32-bit guest words printed with each trace line (0xADDR,...)")
     p.set_defaults(func=launch)
     args = parser.parse_args()
     try:
