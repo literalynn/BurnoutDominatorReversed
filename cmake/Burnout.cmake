@@ -19,7 +19,8 @@ if(BDR_BUILD_GAME)
     set_property(TARGET ps2EntryRunner PROPERTY SOURCES "${BDR_RUNNER_SOURCES}")
     set(BDR_PROJECT_SOURCES
         "${PROJECT_SOURCE_DIR}/src/burnout_main.cpp"
-        "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp")
+        "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_profile.cpp")
     # Keep hand-written sources out of the generated unity batches so editing
     # them recompiles one file instead of a batch of guest functions.
     set_source_files_properties(${BDR_PROJECT_SOURCES} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
@@ -35,6 +36,8 @@ if(BDR_BUILD_GAME)
     set_target_properties(ps2EntryRunner PROPERTIES UNITY_BUILD_BATCH_SIZE "${BDR_UNITY_BATCH_SIZE}")
     if(MSVC)
         target_compile_options(ps2EntryRunner PRIVATE /bigobj /utf-8 "/MP${BDR_COMPILER_WORKERS}")
+        # A PDB lets BDR_PROFILE name the guest functions and runtime code it samples.
+        target_link_options(ps2EntryRunner PRIVATE $<$<CONFIG:Release>:/DEBUG>)
     endif()
 endif()
 
