@@ -397,17 +397,20 @@ namespace ps2_syscalls
             return false;
         }
 
+        // Sony's libkernel patches the kernel's alarm (0xFC-0xFF) and event flag (0x55-0x59) syscalls:
+        // it copies replacement code into kernel memory (0x80075000, 0x80076000) and points the
+        // syscalls at it, or at the -1 its entry lookup returns here. That code is not recompiled and
+        // cannot run; the runtime's own implementation of the syscall serves the call instead.
+        if (!runtime->hasFunction(handler))
+        {
+            return false;
+        }
+
         EeScheduler &scheduler = runtime->eeScheduler();
         scheduler.bindMainContextForSyscall(*ctx, rdram);
         if (scheduler.hasInvocation(GuestInvocationKind::SyscallOverride, syscallNumber))
         {
             return false;
-        }
-
-        if (!runtime->hasFunction(handler))
-        {
-            setReturnS32(ctx, KE_ERROR);
-            return true;
         }
 
         GuestInvocation invocation{};
@@ -464,6 +467,17 @@ namespace ps2_syscalls
     {
         const uint32_t syscallIndex = getRegU32(ctx, 4);
         const uint32_t handler = getRegU32(ctx, 5);
+        static const bool traceKernel = []
+        {
+            const char *value = std::getenv("BDR_TRACE_KERNEL");
+            return value && value[0] != '\0' && value[0] != '0';
+        }();
+        if (traceKernel)
+        {
+            std::cout << "[kernel] SetSyscall 0x" << std::hex << syscallIndex << " -> 0x" << handler
+                      << (handler == 0u || runtime->hasFunction(handler) ? "" : " (not recompiled: builtin serves it)")
+                      << " ra=0x" << getRegU32(ctx, 31) << std::dec << std::endl;
+        }
         runtime->setEeSyscallOverride(rdram, syscallIndex, handler);
 
         setReturnS32(ctx, 0);

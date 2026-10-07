@@ -1482,6 +1482,23 @@ void register_ps2_runtime_kernel_tests()
                      "Override invocation should preserve the upper 64 bits of 128-bit GPRs when setting 32-bit args");
         });
 
+        tc.Run("a syscall override that is not recompiled code falls back to the builtin", [](TestCase &t)
+        {
+            TestEnv env;
+            initializeGuestKernelState(env.rdram.data(), &env.runtime);
+
+            // Sony's kernel patch points syscall 0x5B at code it copied into kernel memory.
+            setRegU32(env.ctx, 4, 0x5Bu);
+            setRegU32(env.ctx, 5, 0x80075000u);
+            t.IsTrue(callSyscall(0x74u, env.rdram.data(), &env.ctx, &env.runtime), "SetSyscall should dispatch");
+
+            setRegU32(env.ctx, 4, 0x5Bu);
+            t.IsTrue(callSyscall(0x5Bu, env.rdram.data(), &env.ctx, &env.runtime), "syscall 0x5B should dispatch");
+            t.Equals(static_cast<uint32_t>(getRegS32(env.ctx, 2)),
+                     0x80075000u,
+                     "the builtin GetEntryAddress should serve the call and read the patched table entry");
+        });
+
         tc.Run("an override that branches to an invalid PC completes without builtin fallback", [](TestCase &t)
         {
             TestEnv env;
