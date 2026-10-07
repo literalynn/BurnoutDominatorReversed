@@ -72,6 +72,8 @@ Classement statique des tables d’import des IRX du disque par rapport aux bibl
 | RWA | thbase:43 GetSystemTimeLow | retour silencieux, v0 inchangé | **Implémenté** |
 | SIO2D, MCMAN | secrman:6 SecrAuthCard | avertissement, v0 = 0 (échec d’authentification) | Laissé tel quel : sans modèle SIO2, aucune carte ne peut répondre |
 | RWA | ioman:4–8 open/close/read/write/lseek | avertissement, v0 = 0 | Ouvert. Un appel à 0x7F90 ouvre avec le mode 0x602 (écriture, création, troncature) : sortie de débogage probable |
+| RWA, GTFSCDVD | sifcmd:8, 10, 11 (tables de gestionnaires de commandes) | v0 = 0, aucun gestionnaire enregistré : les commandes de l’EE n’arrivaient jamais | **Implémenté** |
+| GTFSCDVD, DBCMAN, PADMAN | sifman:32 sceSifSetDmaIntr | v0 = 0, ni transfert ni rappel : le thread de lecture GTFS dort indéfiniment | **Implémenté** |
 
 Les ordinaux inconnus des bibliothèques intégrées sans repli (thbase, thsemap, thevent, sifcmd, sifman, sysclib) retournaient silencieusement. Ils produisent maintenant un avertissement `[IOP] unhandled built-in import`, une fois par import.
 
@@ -85,7 +87,11 @@ Commande : `python tools/project.py run --headless --seconds 20 --status-ms 1000
 | 2 | libsif (6) | 124 ; PC fixe 0x377E28, RA 0x377D74 | sceCdInit invité réessaie le bind du SID 0x80000592 : aucun serveur CDVDFSV. |
 | 3 | + loadfile, iopheap, libcdvd (15) | 3 ; JALR de 0x1E3910 vers 0x1E5020 | 0x1E5020 n’est atteint que par pointeur (a0 = 0x535BC4, dont le premier mot vaut 0x4027E0) : absent de la carte Ghidra, entre FUN_001E4EE8 (fin 0x1E501C) et FUN_001E5030. |
 | — | correction | `tools/augment_function_map.py` : +2 191 points d’entrée (1 684 dans des trous, 507 dans des fonctions), 10 rejetés. Régénération : 51 161 fichiers C++, 0 instruction non traitée, 4 420 avertissements, 0 erreur ; `ptr_001e5020_0x1e5020.cpp` existe. Recompilation complète réussie (10 min 22 s). | |
-| 4 | + fileio, libcdvd internes (21), ROMVER PAL | **Pas encore lancé** | |
+| 4 | + fileio, libcdvd internes (21), ROMVER PAL | Linux (cloud, sans ISO), 124 ; JALR vers 0 à 0x32C054 | `RwEngineInit` (0x32CBF0) échoue : `EndOfHeap` vaut 0x1F00000, sous la base du tas 0x1F9BB00. Tout `sbrk` (0x3AD6B0) échoue, RenderWare écrit par un pointeur nul et sa table de fonctions (0x1F578E4) reste vide. |
+| 5 | + `SetupHeap(-1)` terminé à la pile du thread ; mémoire du runtime sous l’image | 124 ; boucle à 0x372BC8 | `RwEngineInit` réussit et les 11 IRX se chargent. L’EE attend la réponse 0x12 de RWA.IRX : les commandes SIF de l’EE n’atteignaient pas les gestionnaires des IRX. |
+| 6 | + libsif commandes (28), sifcmd:8–11 et sifman:32 côté IOP | 124 ; boucle de démarrage 0x21B5B0 à l’état 4 | RWA répond, GTFS lit `Language/Fonts/dirtyEra.bin` (RPC 1, 3, 5, DMA puis commande 4). L’état 3 demande `Data/GlobalE.txd` (808 Ko), absent du paquet cloud de 30 Mo : seul un lancement avec l’ISO peut aller plus loin. Une image GIF par boucle. |
+
+Les lancements 4 à 6 ont été faits sous Linux à partir du paquet `tools/cloud_bundle.py`, sans l’ISO (`--disc` seul, image virtuelle). La machine à états de démarrage est `0x207D08`, état à 0x51B920 : 1 = modules IOP, 2 = police, 3 et 4 = `Data/Global%c.txd`, puis la suite.
 
 Pendant les lancements 1 et 2, le compteur VBlank avance de 60 par seconde : le jeu n’a pas encore appelé SetGsCrt, qui fait passer le runtime à 50 Hz en PAL.
 
@@ -93,5 +99,5 @@ Pendant les lancements 1 et 2, le compteur VBlank avance de 60 par seconde : le 
 
 1. Lecture de `rom0:ROMVER` (§2, point 4) : sans liaison fileio, boucle sur le bind du SID 0x80000001. Corrigé par les liaisons fileio et un profil ROM0 de 16 octets.
 2. Chargement physique des 11 IRX : imports ci-dessus ; DS2O chargé deux fois.
-3. Client GTFS (SID « GTS ») : dépend de GTFSCDVD.IRX exécuté dans l’IOP émulé et de ses lectures `sceCdRead` (cdvdman:6, implémenté).
+3. Client GTFS (SID « GTS ») : fonctionne avec GTFSCDVD.IRX dans l’IOP émulé (lancement 6). Reste à vérifier sur l’ISO réelle, avec les vrais numéros de secteurs.
 4. Manettes et carte mémoire : absence de modèle SIO2 (§4).

@@ -25,7 +25,7 @@ Preuves conservées : `local/disc_inventory.json`, `local/analysis/`, `local/ana
 - 437/437 tests upstream du moteur et 45/45 tests CTest du cache GS réussis sur Windows. Ces tests portent sur le moteur ; ils ne valident pas les courses de Burnout.
 - Accès au disque corrigé : les recherches EE/IOP rendent maintenant les LBA originales. Cinq exécutables de tests IOP réussissent, dont sept groupes de tests ISO ; offsets de plus de 4 Gio vérifiés. Sur le disque réel : SYSTEM.CNF au secteur 2 265 203 et SLES_546.27 au secteur 2 263 507.
 
-- Linux (Ubuntu 24.04, GCC 13, Ninja) : `ps2_recomp`, `ps2_analyzer`, le runtime et tous les tests compilent ; 437/437 tests du moteur, les 5 suites ps2xIOP et `burnout_overrides_tests` réussissent. Le jeu lui-même n’a pas encore été compilé sous Linux (le code généré reste local).
+- Linux (Ubuntu 24.04, GCC 13, Ninja) : `ps2_recomp`, `ps2_analyzer`, le runtime et tous les tests compilent ; 438/438 tests du moteur, les 5 suites ps2xIOP et `burnout_overrides_tests` réussissent. Le jeu compile et se lance aussi sous Linux (session cloud, `-O1`, à partir du paquet `tools/cloud_bundle.py`, sans l’ISO).
 
 ## Démarrage du jeu
 
@@ -34,17 +34,21 @@ Détails et preuves : [BOOT.md](BOOT.md) et [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md)
 - Premier exécutable Windows : 134 Mo, compilé sans LTO en 9 min 20 s.
 - Lancements bornés 1 à 3 : le jeu passe crt0, `main`, l’initialisation SIF et libcdvd, puis s’arrête au troisième lancement sur un appel indirect vers 0x1E5020, code absent de la carte Ghidra.
 - `tools/augment_function_map.py` ajoute 2 191 points d’entrée atteints par pointeur ; la régénération (51 161 fichiers, 0 erreur) et la recompilation complète ont réussi. Le quatrième lancement n’a pas encore été fait.
-- Depuis : 21 fonctions SDK liées au runtime (libsif, loadfile, iopheap, fileio, libcdvd), ROMVER européen de 16 octets, `sceCdReadClock` et `GetSystemTimeLow` côté IOP, avertissement sur tout import IOP intégré inconnu.
+- Depuis : 28 fonctions SDK liées au runtime (libsif avec les commandes SIF, loadfile, iopheap, fileio, libcdvd), ROMVER européen de 16 octets, `sceCdReadClock` et `GetSystemTimeLow` côté IOP, avertissement sur tout import IOP intégré inconnu.
+- Lancements 4 à 6 (Linux, sans l’ISO) :
+  - `RwEngineInit` réussit une fois corrigée la fin du tas ;
+  - la mémoire propre du runtime est déplacée sous l’image du jeu ;
+  - les commandes SIF entre l’EE et les IRX (audio RWA, système de fichiers GTFS) et `sceSifSetDmaIntr` fonctionnent ;
+  - le démarrage lit la police `Language/Fonts/dirtyEra.bin`, puis attend `Data/GlobalE.txd`, absent du paquet cloud ;
+  - le jeu envoie une image GIF par boucle d’attente.
 
-Prochaine étape sur la machine qui possède l’ISO :
+Prochaine étape sur la machine qui possède l’ISO : `git pull`, `Installer.bat` (ou `python tools/install.py`), puis :
 
 ```powershell
-git pull
-python tools/project.py build --game --jobs 14
-python tools/project.py run --headless --seconds 30 --status-ms 1000 --dump-frames <work>/local/frames/run4 --log run4.log --tail 120
+python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run7.log --tail 120
 ```
 
-Le changement de `ps2_runtime.h` impose une recompilation complète. Conserver `run4.log` : le PC final, les lignes `[IOP]` et la liste des modules chargés indiquent le blocage suivant.
+La modification de `ps2_runtime.h` (surcharges de `run`) impose une recompilation complète. Le journal `run7.log` (PC final, lignes `[IOP]`, lignes `[status]`) indique le blocage suivant.
 
 ## Demandes à traiter une fois le jeu jouable
 
@@ -54,6 +58,7 @@ Ces objectifs supposent que le jeu atteigne les courses ; ils seront traités ap
 - **Mods de code.** Toute fonction invitée peut être remplacée par une fonction native (mécanisme de `src/burnout_overrides.cpp`) ; une API chargeant des bibliothèques natives depuis `mods/` en découle directement.
 - **Images par seconde.** Au démarrage, `0x207820` fixe la cadence et le pas de simulation selon l’octet 0x432E98 : `0x1E68A0(60)` et `0x1E6668(16,667 ms)`, ou `0x1E68A0(50)` et `0x1E6668(20 ms)`. La physique suppose ce pas fixe : accélérer la boucle la fausserait. 60 Hz est donc disponible nativement ; au-delà (jusqu’à 480 Hz), il faut garder la simulation à 60 Hz et interpoler le rendu (objets, caméra) entre deux pas, ce qui demande d’identifier la boucle de jeu et la scène RenderWare.
 - **Résolution 2K.** Le runtime ne rend le GS que sur le CPU (`gs_cpu_backend`), à la résolution PS2. Une résolution interne plus élevée demande un rendu GS sur GPU, derrière l’interface `GSRasterBackend` existante : chantier du runtime, indépendant du jeu.
+- **Manettes.** Le runtime lit une manette du PC (Xbox, DualSense…) mais seulement pour `libpad`. Burnout utilise `libdbc`/`libpad2` avec DBCMAN.IRX et DS2O.IRX, qui parlent au port SIO2 : l’IOP émulé n’a pas de modèle SIO2 et le service DBCMAN simplifié ne lit aucune entrée. Il faut soit un SIO2 émulé alimenté par la manette du PC, soit un DBCMAN/libpad2 de haut niveau ; priorité dès que le jeu affiche quelque chose.
 - **Chargements.** Lectures disque (latence CDVD simulée : 128 cycles IOP) et carte mémoire (fichiers hôte) sont déjà quasi instantanées. Restent les attentes codées dans le jeu (durée minimale d’un écran de chargement, temporisations de sauvegarde), à repérer une fois ces écrans atteints.
 
 ## Travaux en cours et critères restants
