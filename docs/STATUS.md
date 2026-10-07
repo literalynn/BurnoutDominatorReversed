@@ -26,7 +26,7 @@ Preuves conservées : `local/disc_inventory.json`, `local/analysis/`, `local/ana
 - Accès au disque corrigé : les recherches EE/IOP rendent maintenant les LBA originales. Cinq exécutables de tests IOP réussissent, dont sept groupes de tests ISO ; offsets de plus de 4 Gio vérifiés. Sur le disque réel : SYSTEM.CNF au secteur 2 265 203 et SLES_546.27 au secteur 2 263 507.
 
 - SPU2 (`ps2_spu2_tests`) : décodage ADPCM, registres, transferts PIO et DMA, minuterie d’IRQ des voix, IRQ de transfert, horloge du mélangeur, fin de boucle, sortie audio : réussis.
-- **Non relancés depuis les dernières modifications** (IOP et timers EE avancés par lots, cache de décodage des imports, recherche de module par nom) : `ps2x_tests`, les cinq suites ps2xIOP, `ps2_spu2_tests` et `burnout_overrides_tests`. Seul le jeu a été recompilé et lancé.
+- Après les lancements 7 à 9 (Windows, MSVC) : `ps2x_tests` 442/442, les cinq suites ps2xIOP, `ps2_spu2_tests` et `burnout_overrides_tests` (29 liaisons) réussissent.
 - Linux (Ubuntu 24.04, GCC 13, Ninja) : `ps2_recomp`, `ps2_analyzer`, le runtime et tous les tests compilent ; 438/438 tests du moteur, les 5 suites ps2xIOP et `burnout_overrides_tests` réussissent. Le jeu compile et se lance aussi sous Linux (session cloud, `-O1`, à partir du paquet `tools/cloud_bundle.py`, sans l’ISO).
 
 ## Démarrage du jeu

@@ -193,7 +193,8 @@ void register_ps2_sif_rpc_tests()
         {
             TestEnv env;
 
-            env.runtime.eeScheduler().accountCycles(80u);
+            // The IOP is advanced in batches of EE cycles: account one full batch.
+            env.runtime.eeScheduler().accountCycles(static_cast<uint32_t>(EeScheduler::kDeviceBatchCycles));
             const uint64_t cyclesBeforeInit = env.runtime.iopDebugSnapshot().emulatorCycles;
             t.IsTrue(cyclesBeforeInit != 0u, "IOP cycle counter should advance before RPC initialization");
 
