@@ -592,6 +592,11 @@ bool PS2Runtime::stopIopModule(int32_t moduleId, int32_t *result)
     return m_iopSubsystem->stopModule(moduleId, result);
 }
 
+int32_t PS2Runtime::searchIopModuleByName(std::string_view name) const
+{
+    return m_iopSubsystem->searchModuleByName(name);
+}
+
 ps2x::iop::RpcAbi PS2Runtime::selectIopRpcAbi(const ps2x::iop::RpcAbiRequest &request) const
 {
     return m_iopSubsystem->selectRpcAbi(request);
@@ -2554,6 +2559,84 @@ void PS2Runtime::printRunStatus(std::ostream &out)
              << "@0x" << std::hex << thread.pc << std::dec;
     }
     out << line.str() << std::endl;
+
+    // BDR_STATUS_DETAIL=1: kernel objects, to see what each blocked thread waits for.
+    static const bool detail = []
+    {
+        const char *value = std::getenv("BDR_STATUS_DETAIL");
+        return value && value[0] != '\0' && value[0] != '0';
+    }();
+    if (detail)
+    {
+        std::ostringstream objects;
+        for (const EeThreadSnapshot &thread : ee.threads)
+        {
+            objects << "  thread " << thread.id << std::hex
+                    << " entry=0x" << thread.entry << " pc=0x" << thread.pc << " ra=0x" << thread.ra
+                    << " sp=0x" << thread.sp << std::dec
+                    << " prio=" << thread.currentPriority << '/' << thread.initialPriority
+                    << " " << threadStatusName(thread.status) << waitReasonName(thread.waitReason)
+                    << " waitId=" << thread.waitId << " wakeups=" << thread.wakeupCount
+                    << " depth=" << thread.invocationDepth << '\n';
+        }
+        for (const EeSemaphoreSnapshot &sema : ee.semaphores)
+        {
+            objects << "  sema " << sema.id << " count=" << sema.count << '/' << sema.maxCount
+                    << " waiters=" << sema.waiters << '\n';
+        }
+        for (const EeEventFlagSnapshot &flag : ee.eventFlags)
+        {
+            objects << "  evf " << flag.id << std::hex << " bits=0x" << flag.bits << " attr=0x" << flag.attr << std::dec
+                    << " waiters=" << flag.waiters << '\n';
+        }
+        for (const std::string &diagnostic : iop.diagnostics)
+        {
+            if (diagnostic.rfind("iop-", 0) == 0)
+                objects << "  " << diagnostic << '\n';
+        }
+        // BDR_STATUS_WATCH: guest words printed with each detailed status. A comma separated
+        // list of 0xADDR (one word), 0xADDR+N (N words) and @0xADDR+OFFSET (the word at
+        // OFFSET from the pointer stored at ADDR).
+        if (const char *watch = std::getenv("BDR_STATUS_WATCH"); watch && watch[0] != '\0')
+        {
+            const uint8_t *rdram = m_memory.getRDRAM();
+            const auto readWord = [rdram](uint32_t address)
+            {
+                uint32_t value = 0u;
+                std::memcpy(&value, rdram + (address & (PS2_RAM_SIZE - 1u) & ~3u), sizeof(value));
+                return value;
+            };
+            objects << "  watch" << std::hex;
+            for (const char *cursor = watch; *cursor != '\0';)
+            {
+                const bool indirect = *cursor == '@';
+                cursor += indirect ? 1 : 0;
+                char *end = nullptr;
+                uint32_t address = static_cast<uint32_t>(std::strtoul(cursor, &end, 0));
+                if (end == cursor)
+                    break;
+                uint32_t count = 1u;
+                if (*end == '+')
+                {
+                    cursor = end + 1;
+                    const uint32_t amount = static_cast<uint32_t>(std::strtoul(cursor, &end, 0));
+                    if (indirect)
+                        address = readWord(address) + amount;
+                    else
+                        count = amount;
+                }
+                else if (indirect)
+                {
+                    address = readWord(address);
+                }
+                for (uint32_t index = 0u; index < count && index < 256u; ++index)
+                    objects << " [0x" << address + index * 4u << "]=0x" << readWord(address + index * 4u);
+                cursor = *end == ',' ? end + 1 : end;
+            }
+            objects << std::dec << '\n';
+        }
+        out << objects.str() << std::flush;
+    }
 }
 
 PS2Runtime::RunResult PS2Runtime::runHeadless(const RunOptions &options)

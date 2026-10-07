@@ -114,6 +114,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_insideInterrupt = false;
     m_pendingEeTimerInterrupts = 0u;
     m_eeCycle = 0u;
+    m_deviceCycleDebt = 0u;
     m_sliceEndCycle = kDefaultTimeSliceCycles;
     m_stopRequested.store(false, std::memory_order_release);
     m_checkpointPending.store(false, std::memory_order_release);
@@ -394,8 +395,14 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
-    m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
-    m_runtime.advanceIopEeCycles(elapsed);
+    m_deviceCycleDebt += elapsed;
+    if (m_deviceCycleDebt >= kDeviceBatchCycles)
+    {
+        const uint64_t debt = m_deviceCycleDebt;
+        m_deviceCycleDebt = 0u;
+        m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(debt);
+        m_runtime.advanceIopEeCycles(debt);
+    }
     if (m_pendingEeTimerInterrupts != 0u)
     {
         m_checkpointPending.store(true, std::memory_order_release);
@@ -1782,6 +1789,18 @@ void EeScheduler::applyPendingPreemption()
 void EeScheduler::processPendingEvents()
 {
     assertExecutor();
+    // Called after every guest dispatch. When no event was posted, no deadline is
+    // due and no timer interrupt is pending, the work below is a no-op that takes
+    // two locks, reads the host clock and allocates.
+    if (!m_checkpointPending.load(std::memory_order_acquire) && m_pendingEeTimerInterrupts == 0u)
+    {
+        const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
+        if (nextEventCycle == 0u || m_eeCycle < nextEventCycle)
+        {
+            applyPendingPreemption();
+            return;
+        }
+    }
     processDueDeadlines();
     const uint32_t timerInterrupts = m_pendingEeTimerInterrupts;
     m_pendingEeTimerInterrupts = 0u;
