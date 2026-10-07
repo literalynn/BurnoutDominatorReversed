@@ -10,9 +10,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 
 using namespace GSInternal;
@@ -320,9 +322,10 @@ namespace
         const uint32_t dw = static_cast<uint32_t>((display64 >> 32) & 0x0FFFu);
         const uint32_t dh = static_cast<uint32_t>((display64 >> 44) & 0x07FFu);
         const uint32_t magh = static_cast<uint32_t>((display64 >> 23) & 0x0Fu);
+        const uint32_t magv = static_cast<uint32_t>((display64 >> 27) & 0x03u);
 
         outWidth = (dw + 1u) / (magh + 1u);
-        outHeight = dh + 1u;
+        outHeight = (dh + 1u) / (magv + 1u);
         if (outWidth < 64u || outHeight < 64u)
         {
             outWidth = kDefaultDisplayWidth;
@@ -712,6 +715,51 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
 {
     const GSDrawState &state = batch.state;
     const auto &ctx = state.context;
+    if ([]
+        {
+            static const bool enabled = []
+            {
+                const char *value = std::getenv("BDR_TRACE_GS");
+                return value && std::strcmp(value, "1") == 0;
+            }();
+            return enabled;
+        }())
+    {
+        static std::atomic<uint32_t> traceCount{0u};
+        const uint32_t index = traceCount.fetch_add(1u, std::memory_order_relaxed);
+        if (index < 128u)
+        {
+            std::ostringstream line;
+            line << "[bdr:gs:primitive] idx=" << index
+                 << " type=" << static_cast<uint32_t>(state.prim.type)
+                 << " vertices=" << static_cast<uint32_t>(batch.vertexCount)
+                 << " tme=" << state.prim.tme << " fst=" << state.prim.fst
+                 << " iip=" << state.prim.iip << " abe=" << state.prim.abe
+                 << " ctxt=" << state.prim.ctxt
+                 << " frame=" << ctx.frame.fbp << ',' << ctx.frame.fbw << ',' << static_cast<uint32_t>(ctx.frame.psm)
+                 << " fbmask=0x" << std::hex << ctx.frame.fbmsk
+                 << " test=0x" << ctx.test << " alpha=0x" << ctx.alpha
+                 << " scanmsk=0x" << state.scanmsk << std::dec
+                 << " offset=" << ctx.xyoffset.ofx << ',' << ctx.xyoffset.ofy
+                 << " scissor=" << ctx.scissor.x0 << ',' << ctx.scissor.y0 << ',' << ctx.scissor.x1 << ',' << ctx.scissor.y1
+                 << " tex0=" << ctx.tex0.tbp0 << ',' << static_cast<uint32_t>(ctx.tex0.tbw) << ',' << static_cast<uint32_t>(ctx.tex0.psm)
+                 << ',' << static_cast<uint32_t>(ctx.tex0.tw) << ',' << static_cast<uint32_t>(ctx.tex0.th)
+                 << ',' << static_cast<uint32_t>(ctx.tex0.tcc) << ',' << static_cast<uint32_t>(ctx.tex0.tfx)
+                 << ',' << ctx.tex0.cbp << ',' << static_cast<uint32_t>(ctx.tex0.cpsm)
+                 << ',' << static_cast<uint32_t>(ctx.tex0.csm) << ',' << static_cast<uint32_t>(ctx.tex0.csa)
+                 << " texclut=" << static_cast<uint32_t>(state.texclut.cbw) << ',' << static_cast<uint32_t>(state.texclut.cou) << ',' << state.texclut.cov
+                 << " linear=" << state.linearFilter;
+            for (uint32_t vertex = 0u; vertex < batch.vertexCount && vertex < batch.vertices.size(); ++vertex)
+            {
+                const GSVertex &v = batch.vertices[vertex];
+                line << " v" << vertex << "=(xyz:" << v.x << ',' << v.y << ',' << static_cast<uint64_t>(v.z)
+                     << " uv:" << v.u << ',' << v.v << " stq:" << v.s << ',' << v.t << ',' << v.q
+                     << " rgba:" << static_cast<uint32_t>(v.r) << ',' << static_cast<uint32_t>(v.g)
+                     << ',' << static_cast<uint32_t>(v.b) << ',' << static_cast<uint32_t>(v.a) << ')';
+            }
+            std::cout << line.str() << std::endl;
+        }
+    }
     PS2_IF_AGRESSIVE_LOGS({
         const uint32_t primitiveIndex = s_debugPrimitiveCount.fetch_add(1u, std::memory_order_relaxed);
         if (primitiveIndex < 64u)
@@ -1325,7 +1373,10 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
             if (w0 < -kEdgeEpsilon || w1 < -kEdgeEpsilon || w2 < -kEdgeEpsilon)
                 continue;
 
-            double z = v0.z * w0 + v1.z * w1 + v2.z * w2;
+            // A constant depth must stay exact: float weights can sum slightly below one.
+            // This otherwise punches holes in equal-depth geometry using GEQUAL.
+            const double z = v2.z + (v0.z - v2.z) * static_cast<double>(w0) +
+                             (v1.z - v2.z) * static_cast<double>(w1);
 
             uint8_t r, g, b, a;
             if (state.prim.iip)

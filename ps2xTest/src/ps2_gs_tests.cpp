@@ -734,6 +734,55 @@ void register_ps2_gs_tests()
                      "context-targeted clear should leave the other context framebuffer untouched");
         });
 
+        tc.Run("constant triangle depth passes GEQUAL against the same stored depth", [](TestCase &t)
+        {
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+            constexpr uint32_t kDepth = 0x00FFFFFFu;
+            constexpr uint32_t kWidth = 44u;
+            constexpr uint32_t kHeight = 10u;
+            constexpr uint32_t kDepthPage = 100u;
+            gs.writeRegister(GS_REG_FRAME_1, 1ull << 16);
+            gs.writeRegister(GS_REG_ZBUF_1, kDepthPage | (1ull << 32));
+            gs.writeRegister(GS_REG_SCISSOR_1, (63ull << 16) | (15ull << 48));
+            gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
+            gs.writeRegister(GS_REG_TEST_1, (1ull << 16) | (2ull << 17)); // ZTE, GEQUAL.
+            gs.writeRegister(GS_REG_PRIM, GS_PRIM_TRIANGLE | (1ull << 3)); // Gouraud shading, as in the loading bar.
+            gs.writeRegister(GS_REG_RGBAQ, 0x800000FFull);
+            for (uint32_t y = 0u; y < kHeight; ++y)
+                for (uint32_t x = 0u; x < kWidth; ++x)
+                    gs.WriteVram(GS_PSM_Z32, kDepthPage << 5, 1u, x, y, kDepth);
+
+            auto xyz = [](uint32_t x, uint32_t y) -> uint64_t
+            {
+                return static_cast<uint64_t>(x * 16u) |
+                       (static_cast<uint64_t>(y * 16u) << 16) |
+                       (static_cast<uint64_t>(kDepth) << 32);
+            };
+            gs.writeRegister(GS_REG_XYZ2, xyz(0u, 0u));
+            gs.writeRegister(GS_REG_XYZ2, xyz(0u, kHeight));
+            gs.writeRegister(GS_REG_XYZ2, xyz(kWidth, 0u));
+
+            uint32_t covered = 0u;
+            uint32_t holes = 0u;
+            for (uint32_t y = 0u; y < kHeight; ++y)
+            {
+                for (uint32_t x = 0u; x < kWidth; ++x)
+                {
+                    // Pixel centers strictly inside the right triangle; exclude its shared edges.
+                    if ((2u * x + 1u) * kHeight + (2u * y + 1u) * kWidth >= 2u * kWidth * kHeight)
+                        continue;
+                    ++covered;
+                    if ((gs.ReadVram(GS_PSM_CT32, 0u, 1u, x, y) & 0xFFu) < 200u)
+                        ++holes;
+                }
+            }
+            t.Equals(covered, 220u, "the thin loading-bar triangle should cover the intended pixel centers");
+            t.Equals(holes, 0u, "constant depth must not create GEQUAL holes from barycentric rounding");
+            t.Equals(gs.ReadVram(GS_PSM_Z32, kDepthPage << 5, 1u, 20u, 0u), kDepth,
+                     "masked depth writes should preserve the preexisting depth surface");
+        });
         tc.Run("XYZ3 culls a triangle strip primitive without desynchronizing the vertex queue", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
@@ -1356,6 +1405,31 @@ void register_ps2_gs_tests()
                      "latched host presentation should preserve subsequent rows without the internal 640-pixel stride");
         });
 
+        tc.Run("latched host presentation divides display height by MAGV", [](TestCase &t)
+        {
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GSRegisters regs{};
+            regs.pmode = 1ull;
+            regs.dispfb1 = 150ull | (1ull << 9) | (static_cast<uint64_t>(GS_PSM_CT32) << 15);
+            regs.display1 = (63ull << 32) | (255ull << 44) | (1ull << 27);
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
+            constexpr uint32_t kLastVisiblePixel = 0xFF332211u;
+            writeReferenceFramePSMCT32Pixel(vram, 150u, 1u, 0u, 127u, kLastVisiblePixel);
+            writeReferenceFramePSMCT32Pixel(vram, 150u, 1u, 0u, 128u, 0xFFCCBBAAu);
+            gs.latchHostPresentationFrame();
+
+            std::vector<uint8_t> frame;
+            uint32_t width = 0u;
+            uint32_t height = 0u;
+            t.IsTrue(gs.copyLatchedHostPresentationFrame(frame, width, height), "MAGV presentation should be available");
+            t.Equals(width, 64u, "MAGV should preserve the horizontal dimensions");
+            t.Equals(height, 128u, "MAGV=1 should divide DH+1 by two");
+            t.Equals(static_cast<uint32_t>(frame.size()), 64u * 128u * 4u, "MAGV should exclude rows beyond the visible framebuffer height");
+            uint32_t pixel = 0u;
+            std::memcpy(&pixel, frame.data() + 127u * 64u * 4u, sizeof(pixel));
+            t.Equals(pixel, kLastVisiblePixel, "MAGV should preserve the last visible source scanline");
+        });
         tc.Run("latched host presentation reads preferred CT32 source with GS swizzle", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
@@ -1740,6 +1814,36 @@ void register_ps2_gs_tests()
                      "field presentation should still preserve different source content across field rows");
         });
 
+        tc.Run("GIF PACKED XYZ2 and XYZ3 preserve every 32-bit depth bit", [](TestCase &t)
+        {
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GSRegisters regs{};
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
+            gs.setDebugHistoryPaused(false);
+            gs.writeRegister(GS_REG_PRIM, GS_PRIM_SPRITE);
+
+            std::vector<uint8_t> packet;
+            appendU64(packet, makeGifTag(1u, GIF_FMT_PACKED, 2u, true));
+            appendU64(packet, 0x5Dull); // XYZ3 (no kick), XYZ2 (kick).
+            appendU64(packet, 0ull);
+            appendU64(packet, 0xFFFFFFFFull);
+            appendU64(packet, 16ull | (16ull << 32));
+            appendU64(packet, 0xF1234567ull);
+            gs.processGIFPacket(packet.data(), static_cast<uint32_t>(packet.size()));
+
+            bool found = false;
+            for (const auto &entry : gs.getDebugHistory())
+            {
+                if (entry.kind != GSDebugEventKind::Draw)
+                    continue;
+                found = true;
+                t.Equals(entry.vertexCount, 2u, "both packed vertices should reach the sprite draw");
+                t.Equals(entry.zMin, static_cast<double>(0xF1234567u), "packed XYZ2 should retain low depth bits above float precision");
+                t.Equals(entry.zMax, static_cast<double>(0xFFFFFFFFu), "packed XYZ3 should retain UINT32_MAX without rounding up");
+            }
+            t.IsTrue(found, "packed XYZ2 should emit a draw history entry");
+        });
         tc.Run("GIF PACKED A+D writes DISPFB1 and DISPLAY1 privileged registers", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
