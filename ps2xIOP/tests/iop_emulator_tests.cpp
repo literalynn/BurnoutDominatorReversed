@@ -184,7 +184,7 @@ namespace
 
     void writeRpcServerIrx(TestHost &host,
                            uint32_t address,
-                           uint32_t sid = 0xF00DCAFEu)
+                           uint32_t sid = 0xF00DCAFEu, bool blockingHandler = false)
     {
         constexpr uint32_t codeOffset = 0x100u;
         constexpr uint32_t loadAddress = 0x00010000u;
@@ -218,7 +218,7 @@ namespace
             0x3C060001u, // lui   a2, 1
             0x34C60300u, // ori   a2, a2, 0x300 (server function)
             0x3C070001u, // lui   a3, 1
-            0x34E70400u, // ori   a3, a3, 0x400 (server buffer)
+            blockingHandler ? 0x34E70480u : 0x34E70400u, // server buffer
             0xAFA00010u, // sw    zero, 0x10(sp)
             0xAFA00014u, // sw    zero, 0x14(sp)
             0xAFA00018u, // sw    zero, 0x18(sp)
@@ -247,7 +247,7 @@ namespace
         program.offset = codeOffset;
         program.vaddr = loadAddress;
         program.paddr = loadAddress;
-        program.filesz = 0xA0u;
+        program.filesz = blockingHandler ? 0x450u : 0xA0u;
         program.memsz = 0x500u;
         program.flags = 7u;
         program.align = 4u;
@@ -258,6 +258,43 @@ namespace
         std::memcpy(host.guest.data() + address + codeOffset, code, sizeof(code));
         std::memcpy(host.guest.data() + address + codeOffset + importTableOffset,
                     importTable, sizeof(importTable));
+        if (blockingHandler)
+        {
+            constexpr uint32_t getThreadId = loadAddress + 0x400u + 20u;
+            constexpr uint32_t delayThread = getThreadId + 8u;
+            constexpr uint32_t setAlarm = getThreadId + 16u;
+            constexpr uint32_t sleepThread = getThreadId + 24u;
+            constexpr uint32_t wakeupThread = getThreadId + 32u;
+            const uint32_t handler[] = {
+                0x27BDFFF0u, 0xAFBF000Cu, // save RA
+                0x0C000000u | (getThreadId >> 2u), 0u,
+                0x3C080001u, 0x35080480u, 0xAD020000u, // save thread ID to buffer
+                0x24040064u, // DelayThread(100 us)
+                0x0C000000u | (delayThread >> 2u), 0u,
+                0x0C000000u | (getThreadId >> 2u), 0u,
+                0x3C080001u, 0x35080480u, 0xAD020004u, // save thread ID after wait
+                0x34090E66u, 0xAFA90000u, 0xAFA00004u, // alarm clock: 3686 cycles
+                0x03A02021u, 0x3C050001u, 0x34A503A0u, 0x00403021u,
+                0x0C000000u | (setAlarm >> 2u), 0u,
+                0x0C000000u | (sleepThread >> 2u), 0u,
+                0x3C020001u, 0x34420480u, // return buffer pointer
+                0x8FBF000Cu, 0x27BD0010u, 0x03E00008u, 0u};
+            const uint32_t threadImports[] = {
+                0x41E00000u, 0u, 0x101u, 0x61626874u, 0x00006573u, // thbase
+                0x03E00008u, 0x24000014u, // GetThreadId
+                0x03E00008u, 0x24000021u, // DelayThread
+                0x03E00008u, 0x24000023u, // SetAlarm
+                0x03E00008u, 0x24000018u, // SleepThread
+                0x03E00008u, 0x2400001Au, // iWakeupThread
+                0u, 0u};
+            const uint32_t alarmHandler[] = {
+                0x27BDFFF0u, 0xAFBF000Cu,
+                0x0C000000u | (wakeupThread >> 2u), 0u,
+                0x8FBF000Cu, 0x00001021u, 0x03E00008u, 0x27BD0010u};
+            std::memcpy(host.guest.data() + address + codeOffset + 0x300u, handler, sizeof(handler));
+            std::memcpy(host.guest.data() + address + codeOffset + 0x3A0u, alarmHandler, sizeof(alarmHandler));
+            std::memcpy(host.guest.data() + address + codeOffset + 0x400u, threadImports, sizeof(threadImports));
+        }
     }
 
     void writeRelocatableRpcServerIrx(TestHost &host, uint32_t address)
@@ -1133,6 +1170,32 @@ int main()
                 "Physical sound RPC did not return its own payload")) return 1;
     if (!expect(iop.debugSnapshot().emulatorInstructions > soundInstructionsBefore,
                 "Sound RPC did not execute the physical IOP handler")) return 1;
+
+    iop.reset();
+    writeRpcServerIrx(host, 0x100u, rpcSid, true);
+    const auto blockingModule = iop.loadModuleBuffer(0x100u);
+    if (!expect(blockingModule.handled && blockingModule.startResult == 0, "Blocking RPC fixture did not start")) return 1;
+    RpcRequest blockingRequest{};
+    blockingRequest.sid = rpcSid;
+    blockingRequest.receive = {0x900u, 8u};
+    const auto beforeBlocking = iop.debugSnapshot();
+    const auto blockingResult = iop.handleRpc(blockingRequest);
+    uint32_t threadIds[2]{};
+    std::memcpy(threadIds, host.guest.data() + 0x900u, sizeof(threadIds));
+    const auto afterBlocking = iop.debugSnapshot();
+    if (!expect(blockingResult.handled && threadIds[0] != 0u && threadIds[0] == threadIds[1],
+                "RPC must resume in the same actual IOP thread after DelayThread") ||
+        !expect(afterBlocking.emulatorCycles - beforeBlocking.emulatorCycles >= 7372u,
+                "RPC DelayThread and SetAlarm must both advance the IOP clock") ||
+        !expect(afterBlocking.emulatorThreads == beforeBlocking.emulatorThreads,
+                "RPC invocation must release its thread and stack")) return 1;
+    for (int call = 0; call < 128; ++call)
+    {
+        const auto repeatResult = iop.handleRpc(blockingRequest);
+        std::memcpy(threadIds, host.guest.data() + 0x900u, sizeof(threadIds));
+        if (!expect(repeatResult.handled && threadIds[0] != 0u && threadIds[0] == threadIds[1],
+                    "Repeated blocking RPC calls must reuse stacks without exhausting IOP RAM")) return 1;
+    }
 
     constexpr uint32_t relocatableRpcSid = 0xA11CE001u;
     writeRelocatableRpcServerIrx(host, 0x100u);

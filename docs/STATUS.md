@@ -27,6 +27,7 @@ Preuves conservées : `local/disc_inventory.json`, `local/analysis/`, `local/ana
 
 - SPU2 (`ps2_spu2_tests`) : décodage ADPCM, registres, transferts PIO et DMA, minuterie d’IRQ des voix, IRQ de transfert, horloge du mélangeur, fin de boucle, sortie audio : réussis.
 - Après le lancement 11 (Windows, MSVC) : `ps2x_tests` 443/443, les cinq suites ps2xIOP, `ps2_spu2_tests` et `burnout_overrides_tests` (29 liaisons) réussissent.
+- Après le lancement 18 (Windows, MSVC) : `ps2x_tests` 452/452 et toutes les suites IOP, SPU2, ISO9660 et liaisons Burnout réussissent ; le test RPC attend réellement DelayThread et une alarme, puis répète 128 appels sans épuiser les piles. Les 43 tests Python réussissent. Les commits IPU et branches 64 bits ont aussi passé la CI Windows/GCC/Clang.
 - Linux (Ubuntu 24.04, GCC 13, Ninja) : `ps2_recomp`, `ps2_analyzer`, le runtime et tous les tests compilent ; 438/438 tests du moteur, les 5 suites ps2xIOP et `burnout_overrides_tests` réussissent. Le jeu compile et se lance aussi sous Linux (session cloud, `-O1`, à partir du paquet `tools/cloud_bundle.py`, sans l’ISO).
 
 ## Démarrage du jeu
@@ -54,7 +55,7 @@ Détails et preuves : [BOOT.md](BOOT.md) et [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md)
   - les lectures CD qui débordent d’un bloc IOP alloué sont faites comme sur console : le chargement de l’écran LOADING se termine ;
   - les appels système remplacés par le correctif noyau de libkernel (alarmes, drapeaux d’événement), dont le code copié en mémoire noyau ne peut pas s’exécuter, sont servis par le runtime : `SetAlarm` réveille de nouveau le thread principal.
 
-Blocage actuel (lancement 11) : écran noir ; la vidéo d’introduction démarre et son analyseur MPEG-2 attend des données de l’IPU. Détails : [BOOT.md](BOOT.md) §12.
+Lancements 12 à 18 : le modèle IPU fournit les données MPEG et les branches signées du code généré sont corrigées pour tester le registre sur 64 bits. La régénération (51 161 fichiers, aucune instruction non traitée, aucune erreur) et la recompilation Windows ont réussi. Le jeu franchit l'ancien blocage vidéo et affiche maintenant **PROFILE**. Le transport PIO SIO2 pour ports déconnectés, l'exécution RPC dans des threads IOP ordonnancés et les alarmes IOP sont implémentés et testés. La vérification de carte mémoire reste en attente : prochaine analyse, réponse GetInfo de MCSERV et rappel EE libmc. Le menu et les courses ne sont pas encore atteints. Détails : [BOOT.md](BOOT.md) §13–14.
 
 Reprise sur la machine qui possède l’ISO (les variables d’observation sont décrites au §10 de BOOT.md) :
 

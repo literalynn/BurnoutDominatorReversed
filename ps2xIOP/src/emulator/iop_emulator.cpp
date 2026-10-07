@@ -95,6 +95,7 @@ namespace ps2x::iop::detail
             uint32_t function = 0u;
             uint32_t gp = 0u;
             uint32_t argument = 0u;
+            bool alarm = false;
         };
 
         explicit Impl(IopHost &hostRef)
@@ -116,6 +117,7 @@ namespace ps2x::iop::detail
         {
             reset();
             // The SPU2 asserts IOP interrupt 9 when a voice or a transfer reaches its IRQ address.
+            memory.setSio2IrqCallback([this] { pendingDmaInterrupts[17] = totalCycles + 64u; });
             memory.spu().raiseIrq = [this]
             {
                 pendingDmaInterrupts[kSpu2Irq] = totalCycles;
@@ -395,6 +397,40 @@ namespace ps2x::iop::detail
 
             if (iequals(call.library, "thbase") || iequals(call.library, "threadman"))
             {
+                if (call.ordinal >= 35u && call.ordinal <= 38u)
+                {
+                    if (call.ordinal == 35u || call.ordinal == 36u) // SetAlarm / iSetAlarm
+                    {
+                        const uint32_t clock = cpu.gpr[4];
+                        if (!memory.ownsRamRange(clock, 8u) || cpu.gpr[5] == 0u)
+                            setV0(-1);
+                        else
+                        {
+                            const uint64_t delay = uint64_t{memory.read32(clock)} |
+                                                   (uint64_t{memory.read32(clock + 4u)} << 32u);
+                            pendingGuestCallbacks.emplace(totalCycles + std::max<uint64_t>(delay, 1u),
+                                ScheduledGuestCallback{cpu.gpr[5], cpu.gpr[28], cpu.gpr[6], true});
+                            setV0(0);
+                        }
+                    }
+                    else // CancelAlarm / iCancelAlarm identify callback and argument
+                    {
+                        bool removed = false;
+                        for (auto alarm = pendingGuestCallbacks.begin(); alarm != pendingGuestCallbacks.end();)
+                        {
+                            if (alarm->second.alarm && alarm->second.function == cpu.gpr[4] &&
+                                alarm->second.argument == cpu.gpr[5])
+                            {
+                                alarm = pendingGuestCallbacks.erase(alarm);
+                                removed = true;
+                            }
+                            else
+                                ++alarm;
+                        }
+                        setV0(removed ? 0 : -1);
+                    }
+                    return ImportDisposition::Handled;
+                }
                 return kernel.dispatchThreadImport(call.ordinal, cpu, totalCycles)
                            ? ImportDisposition::Handled
                            : missingBuiltinImport(call, cpu);
@@ -634,6 +670,44 @@ namespace ps2x::iop::detail
             return callFunction(address, a0, a1, a2, a3, gp);
         }
 
+        uint32_t executeRpcFunction(uint32_t address, uint32_t a0, uint32_t a1,
+                                    uint32_t a2, uint32_t a3, uint32_t gp) override
+        {
+            if (activeCpu != nullptr)
+                throw std::runtime_error("IOP RPC reentry while executing guest code");
+            IopThread *thread = kernel.createInternalCall(address, gp, kThreadReturnSentinel);
+            if (!thread)
+                throw std::runtime_error("IOP RPC call stack allocation failed");
+            const int id = thread->id;
+            struct CallGuard
+            {
+                IopKernel &kernel;
+                int id;
+                ~CallGuard() { kernel.removeInternalCall(id); }
+            } guard{kernel, id};
+            thread->cpu.gpr[4] = a0;
+            thread->cpu.gpr[5] = a1;
+            thread->cpu.gpr[6] = a2;
+            thread->cpu.gpr[7] = a3;
+            const uint64_t firstInstruction = totalInstructions;
+            const uint64_t firstCycle = totalCycles;
+            for (;;)
+            {
+                thread = kernel.findInternalCall(id);
+                if (!thread)
+                    throw std::runtime_error("IOP RPC server deleted its execution thread");
+                if (thread->state == IopThreadState::Dormant)
+                    break;
+                if (totalInstructions - firstInstruction >= kMaxCallInstructions ||
+                    totalCycles - firstCycle >= kIopClockHz * 2u)
+                    throw std::runtime_error("IOP RPC server exhausted its execution budget");
+                runCycles(kDefaultSlice);
+            }
+            if (thread->cpu.pc != kThreadReturnSentinel)
+                throw std::runtime_error("IOP RPC server did not return within its execution budget");
+            return thread->cpu.gpr[2];
+        }
+
         uint32_t executeGuestFunctionWithBudget(uint32_t address,
                                                 uint32_t a0,
                                                 uint32_t a1,
@@ -717,13 +791,15 @@ namespace ps2x::iop::detail
                 {
                     if (callback.function != 0u)
                     {
-                        (void)callFunction(callback.function,
+                        const uint32_t interval = callFunction(callback.function,
                                            callback.argument,
                                            0u,
                                            0u,
                                            0u,
                                            callback.gp,
                                            100000u);
+                        if (callback.alarm && interval != 0u)
+                            pendingGuestCallbacks.emplace(totalCycles + interval, callback);
                     }
                 }
             }

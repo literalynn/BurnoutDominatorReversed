@@ -99,6 +99,36 @@ namespace
         return false;
     }
 
+    bool testSio2DisconnectedPorts()
+    {
+        IopMemory memory;
+        uint32_t interrupts = 0u;
+        memory.setSio2IrqCallback([&] { ++interrupts; });
+        memory.write32(0xBF808200u, (3u << 18) | (3u << 8) | 2u);
+        memory.write32(0xBF808204u, (3u << 18) | (3u << 8) | 3u);
+        for (uint8_t byte : {0x81u, 0x52u, 0u, 0x81u, 0x52u, 0u})
+            memory.write8(0xBF808260u, byte);
+        if (!expect(memory.read32(0xBF80826Cu) == 0x3D200u, "SIO2 must report both empty ports") ||
+            !expect(memory.read32(0xBF808270u) == 0xFu, "SIO2 idle port status"))
+            return false;
+        for (int i = 0; i < 7; ++i)
+            if (!expect(memory.read8(0xBF808264u) == 0xFFu, "disconnected serial input is high, including underflow"))
+                return false;
+        memory.write32(0xBF808268u, 0x3BDu);
+        memory.write32(0xBF808268u, 0x3BDu);
+        if (!expect(interrupts == 1u && memory.read32(0xBF808280u) == 1u, "SIO2 IRQ latches until acknowledged"))
+            return false;
+        memory.write32(0xBF808280u, 1u);
+        memory.write32(0xBF808268u, 0x3BDu);
+        if (!expect(interrupts == 2u, "SIO2 interrupt rearms after W1C"))
+            return false;
+        memory.write32(0xBF808200u, (3u << 8) | 2u);
+        for (int i = 0; i < 3; ++i)
+            memory.write8(0xBF808260u, 0u);
+        return expect(memory.read32(0xBF80826Cu) == 0x1D100u, "a new queue forgets the previous port mask");
+    }
+
+
     bool testLoadcoreRebootLibraryMode()
     {
         IopMemory memory;
@@ -398,7 +428,7 @@ namespace
 
 int main()
 {
-    if (!testLoadcoreRebootLibraryMode() || !testCdvdSpecialControl() || !testCdvdSearchFile() ||
+    if (!testSio2DisconnectedPorts() || !testLoadcoreRebootLibraryMode() || !testCdvdSpecialControl() || !testCdvdSearchFile() ||
         !testCdvdReadClock() || !testThreadSystemTimeLow() || !testTimrmanPeriodicCallback())
         return 1;
     std::cout << "ps2xIOP import tests passed\n";

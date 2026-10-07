@@ -38,6 +38,10 @@ namespace ps2x::iop::detail
         m_interruptControl = 1;
         m_dmaStart.reset();
         m_spu.reset();
+        m_sio2Output.clear();
+        m_sio2CommandIndex = m_sio2InputCount = m_sio2Ports = 0u;
+        m_hardware[0x1F80826Cu] = 0x1D100u; // RECV1: disconnected
+        m_hardware[0x1F808270u] = 0xFu;     // RECV2: idle ports
     }
 
     uint32_t IopMemory::physicalAddress(uint32_t address) noexcept
@@ -256,6 +260,14 @@ namespace ps2x::iop::detail
 
     uint32_t IopMemory::readHardware32(uint32_t address) const
     {
+        if (address == 0x1F808264u) // SIO2 DATA_OUT: serial RX FIFO
+        {
+            if (m_sio2Output.empty())
+                return 0xFFu;
+            const uint8_t byte = m_sio2Output.front();
+            m_sio2Output.pop_front();
+            return byte;
+        }
         const auto value = m_hardware.find(address);
         if (value != m_hardware.end())
             return value->second;
@@ -291,7 +303,48 @@ namespace ps2x::iop::detail
             break;
         }
 
+        if (address == 0x1F808200u) // SEND3[0] begins a new serial command queue
+        {
+            m_sio2CommandIndex = m_sio2InputCount = m_sio2Ports = 0u;
+            m_sio2Output.clear();
+            m_hardware[0x1F80826Cu] = 0u;
+        }
+        if (address == 0x1F808260u) // DATA_IN
+        {
+            if (m_sio2CommandIndex < 16u)
+            {
+                const uint32_t packet = m_hardware[0x1F808200u + m_sio2CommandIndex * 4u];
+                const uint32_t length = (packet >> 8u) & 0x3FFu;
+                if (length != 0u)
+                {
+                    // An undriven serial line is high: no ACK, no device bytes.
+                    m_sio2Output.push_back(0xFFu);
+                    if (++m_sio2InputCount == length)
+                    {
+                        m_sio2Ports |= 1u << (packet & 1u);
+                        const uint32_t openPorts = m_sio2Ports == 3u ? 0x200u : 0x100u;
+                        m_hardware[0x1F80826Cu] = (m_sio2Ports << 16u) | 0xD000u | openPorts;
+                        m_sio2InputCount = 0u;
+                        ++m_sio2CommandIndex;
+                    }
+                }
+            }
+            return;
+        }
+        if (address == 0x1F808280u) // INTR: write-one-to-clear
+        {
+            m_hardware[address] &= ~value;
+            return;
+        }
         m_hardware[address] = value;
+        if (address == 0x1F808268u && (value & 1u) != 0u) // CTRL START
+        {
+            const bool alreadyPending = (m_hardware[0x1F808280u] & 1u) != 0u;
+            m_hardware[0x1F808280u] |= 1u;
+            if (!alreadyPending && m_sio2Irq)
+                m_sio2Irq();
+            return;
+        }
         if ((address != kDmaSpu0Chcr && address != kDmaSpu1Chcr) || (value & kDmaStart) == 0u)
             return;
 

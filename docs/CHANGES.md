@@ -10,10 +10,18 @@ Base complète conservée depuis `ran-j/PS2Recomp`, commit indiqué dans `UPSTRE
 - `ps2xRuntime/CMakeLists.txt`, `ps2xTest/CMakeLists.txt` et `src/main.cpp` : compilation du modèle et enregistrement des tests. `ps2_ipu_tests.cpp` vérifie les bits et BUSY, un VLC invalide, la pression du FIFO sur le DMA, une reprise CSC après deux transferts, un macrobloc intra RAW16 et une chaîne SPR_TO avec bouclage. Les deux tests existants d'initialisation IPU attendent maintenant l'effacement matériel de RST.
 - Validation Windows : 449/449 tests runtime, les cinq suites IOP, SPU2, les liaisons Burnout et 43 tests Python réussissent. Ces tests ne prouvent pas encore la lecture complète de l'introduction du jeu.
 
-## Modifications précédentes
-
 - `ps2_ipu.cpp` : BDEC conserve son état après sortie RAW16 pour attendre le prochain code MPEG, détecte SCD/ECD après le bourrage et sature les pixels intra. Trace optionnelle `BDR_TRACE_IPU`. Deux tests supplémentaires couvrent les chaînes IPU REF/REFE et l'arrivée tardive du DMA de sortie puis du code de début.
 - `ps2xRecomp/src/lib/control_flow_emitter.cpp` : BLEZ/BGTZ/BLTZ/BGEZ, y compris les formes likely/link, comparent le registre scalaire signé sur 64 bits. L'ancienne comparaison 32 bits confondait le bit 31 des données IPU avec BUSY (bit 63). Test des douze variantes dans `code_generator_tests.cpp` ; 452/452 tests réussis sur Windows. Une régénération du code invité est nécessaire.
+
+## SIO2 et attentes RPC (7 octobre 2026)
+
+- `ps2xIOP/src/emulator/core/iop_memory.h/.cpp` et `iop_emulator.cpp` : transport PIO SIO2 pour des ports sans périphérique. SEND3 délimite les paquets ; DATA_OUT répond `0xFF`, RECV1 signale les ports déconnectés, INTR s'acquitte par écriture de 1. CTRL START programme l'IRQ IOP 17. Les cartes et manettes ne sont pas déclarées présentes. Tests dans `iop_import_tests.cpp`.
+- `iop_kernel.h/.cpp`, `services/iop_rpc.h/.cpp`, `iop_emulator.cpp` : les fonctions des serveurs RPC physiques s'exécutent désormais dans un thread temporaire ordonnancé, avec pile réutilisable. `WaitSema`, `WaitEventFlag`, `SleepThread` et `DelayThread` peuvent donc suspendre le serveur pendant l'exécution des autres threads et rappels IOP. Les points d'entrée de modules et les ISR gardent leur chemin d'exécution existant. Un serveur qui ne revient pas dans son budget produit une erreur explicite ; aucun résultat incomplet n'est envoyé comme une réponse réussie.
+- `iop_emulator.cpp` : `thbase:35–38` (SetAlarm/iSetAlarm/CancelAlarm/iCancelAlarm) programment et annulent les rappels sur l'horloge IOP, en conservant argument et GP. Le retour non nul du rappel réarme l'alarme. Un rappel nul ou une horloge hors RAM est refusé.
+- `iop_emulator_tests.cpp` : un IRX synthétique appelle GetThreadId, DelayThread, SetAlarm et SleepThread ; son rappel iWakeupThread le réveille. Vérification de l'identité du thread après attente, du temps écoulé et de 128 appels successifs sans épuisement des piles. Ces tests n'utilisent aucun octet du jeu.
+- Limites : transport SIO2 DMA/dmacman et périphériques attachés encore absents ; priorité 100 pour les invocations RPC temporaires. Les codes d'erreur précis de toutes les opérations d'alarme restent à comparer avec le noyau Sony.
+
+## Modifications précédentes
 
 - `tools/` : extraction ISO9660, analyse ELF32, contrôle SHA256 du PAL SLES_546.27, génération et audit de traduction.
 - `cmake/Burnout.cmake` : liaison des fonctions traduites dans `burnout_dominator`, sans modifier les sources upstream avec du code de jeu.
