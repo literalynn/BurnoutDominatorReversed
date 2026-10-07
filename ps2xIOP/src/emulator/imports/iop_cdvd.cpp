@@ -736,10 +736,27 @@ namespace ps2x::iop::detail
                 return true;
             }
             const uint64_t byteCount64 = static_cast<uint64_t>(sectors) * kSectorSize;
-            if (byteCount64 > IopMemory::RamSize || !memory.ownsRamRange(destination, static_cast<size_t>(byteCount64)))
+            if (byteCount64 > IopMemory::RamSize ||
+                IopMemory::physicalAddress(destination) > IopMemory::RamSize - static_cast<uint32_t>(byteCount64))
             {
                 lastError = kCdvdErrorRead;
                 return false;
+            }
+            // The CD DMA writes whole sectors wherever it is told, like the hardware. Burnout reads 4 sectors
+            // (0x2000 bytes) at the start of a 0x1840-byte block: rejecting the read made GTFSCDVD retry forever.
+            if (!memory.ownsRamRange(destination, static_cast<size_t>(byteCount64)))
+            {
+                static uint32_t reported = 0u;
+                if (reported++ < 4u)
+                {
+                    std::ostringstream out;
+                    out << "[IOP cdvd] sceCdRead lsn=" << lsn << " sectors=" << sectors << " writes past allocated memory: 0x"
+                        << std::hex << destination << "..0x" << destination + static_cast<uint32_t>(byteCount64)
+                        << ", first free byte 0x" << memory.firstUnownedRam(destination, static_cast<size_t>(byteCount64));
+                    if (const auto block = memory.allocationContaining(destination))
+                        out << " (block 0x" << block->address << ", size 0x" << block->size << ')';
+                    host.log(LogLevel::Info, out.str());
+                }
             }
             const size_t byteCount = static_cast<size_t>(byteCount64);
             std::vector<uint8_t> bytes(byteCount, 0u);

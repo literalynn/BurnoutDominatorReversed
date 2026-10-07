@@ -229,6 +229,16 @@ namespace ps2x::iop::detail
         return size == 0u || std::memchr(m_owned.data() + phys, 0, size) == nullptr;
     }
 
+    uint32_t IopMemory::firstUnownedRam(uint32_t address, size_t size) const
+    {
+        const uint32_t phys = physicalAddress(address);
+        if (phys > RamSize || size > RamSize - phys)
+            return phys;
+        const void *hole = size != 0u ? std::memchr(m_owned.data() + phys, 0, size) : nullptr;
+        return hole ? static_cast<uint32_t>(static_cast<const uint8_t *>(hole) - m_owned.data())
+                    : static_cast<uint32_t>(phys + size);
+    }
+
     void IopMemory::markOwned(uint32_t address, size_t size)
     {
         if (address > RamSize || size > RamSize - address)
