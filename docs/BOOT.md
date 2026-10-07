@@ -118,7 +118,7 @@ Pendant les lancements 1 et 2, le compteur VBlank avance de 60 par seconde : le 
 
 **Protocole RWA** (commandes SIF, cf. aussi SDK_FUNCTIONS.md).
 
-- EE → IOP : commande 0, type dans le mot 4 du paquet (0x49, 1, 2, 0x11, 0x13, 0x15, 0x4E, 0x30, 0x32, 5, 0x14 au démarrage). IOP → EE : commande 1, type + 1.
+- EE → IOP : commande 0, type dans le mot 4 du paquet (0x49, 1, 2, 0x11, 0x13, 0x15, 0x4E, 0x30, 0x32, 5, 0x14 au démarrage). IOP → EE : commande 1, avec son propre type de réponse (observé : 1 → 9, 2 → 0xA, 0x11 → 0x1A avec l’adresse IOP 0x12C030, 0x13 → 0x1B avec 0xC25B0 et 0x100000, 0x15 → 0x1C avec 0x5A850, 0x30 → 0x31, 0x32 → 0x33, 0x4E → 0x4F, 5 → 0xD, 0x14 → 0x14).
 - 0x32 : requête de tranche de flux ; le descripteur de 0x70 octets part vers l’IOP 0x12C030. La réponse 0x33 porte la fonction de fin 0x3721C0, qui efface l’indicateur « en attente » (0x10) du descripteur et appelle le rappel de l’emplacement de flux. 0x372110 attend ce bit.
 - EE : gestionnaire de la commande 1 à 0x3719D8 (file de 8 entrées à 0x1F64740, `iSignalSema` du sémaphore stocké en 0x432D78), thread 2 (entrée 0x362F50). IOP : gestionnaire de la commande 0 à RWA+0x3D70 (file de 8 entrées et SignalSema), thread T11 (RWA+0x4044, 0x38B0), transferts SPU par 0x4568 puis 0xA44C (liste à 0xC300 + 8 × indice), pompes de canal T12 et T13, threads d’ISR de priorité 9.
 - Régime établi : à chaque image, commande 0x14 (0x680 octets vers l’IOP 0x5A850, avec un compteur croissant) et réponse 0x14.
