@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 
@@ -1084,6 +1086,20 @@ void EeScheduler::waitEventFlag(int id, uint32_t bits, uint32_t mode, uint32_t r
                              EeEventFlagWait{id, bits, mode, resultAddress}});
 }
 
+namespace
+{
+    // BDR_TRACE_KERNEL=1: SetAlarm, CancelAlarm and alarm expiry.
+    bool traceAlarms()
+    {
+        static const bool enabled = []
+        {
+            const char *value = std::getenv("BDR_TRACE_KERNEL");
+            return value && value[0] != '\0' && value[0] != '0';
+        }();
+        return enabled;
+    }
+}
+
 int EeScheduler::setAlarm(uint16_t ticks,
                           uint32_t handler,
                           uint32_t argument,
@@ -1093,9 +1109,14 @@ int EeScheduler::setAlarm(uint16_t ticks,
     assertExecutor();
     if (handler == 0u || !m_runtime.hasFunction(handler))
     {
+        if (traceAlarms())
+            std::cout << "[alarm] SetAlarm handler=0x" << std::hex << handler << std::dec << " rejected: no such function" << std::endl;
         return KE_ERROR;
     }
     const int id = allocatePositiveId(m_nextAlarmId, m_alarms);
+    if (traceAlarms())
+        std::cout << "[alarm] SetAlarm id=" << id << " ticks=" << ticks << " handler=0x" << std::hex << handler
+                  << " arg=0x" << argument << std::dec << " cycle=" << m_eeCycle << " live=" << m_alarms.size() << std::endl;
     if (id == 0)
     {
         return KE_ERROR;
@@ -1111,6 +1132,8 @@ int EeScheduler::setAlarm(uint16_t ticks,
 int EeScheduler::cancelAlarm(int id)
 {
     assertExecutor();
+    if (traceAlarms())
+        std::cout << "[alarm] CancelAlarm id=" << id << " live=" << m_alarms.count(id) << std::endl;
     if (m_alarms.erase(id) == 0u)
     {
         return KE_ERROR;
@@ -1978,6 +2001,9 @@ void EeScheduler::processEvent(const EeEvent &event)
         }
         const EeAlarm alarm = it->second;
         m_alarms.erase(it);
+        if (traceAlarms())
+            std::cout << "[alarm] expired id=" << alarm.id << " handler=0x" << std::hex << alarm.handler << std::dec
+                      << " cycle=" << m_eeCycle << std::endl;
         GuestInvocation invocation{};
         invocation.kind = GuestInvocationKind::Alarm;
         invocation.context.pc = alarm.handler;
