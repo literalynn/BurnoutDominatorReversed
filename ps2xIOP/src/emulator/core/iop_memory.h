@@ -59,6 +59,8 @@ namespace ps2x::iop::detail
         [[nodiscard]] bool writeRam(uint32_t address, const void *source, size_t size);
         [[nodiscard]] bool zeroRam(uint32_t address, size_t size);
         [[nodiscard]] bool ownsRamRange(uint32_t address, size_t size) const;
+        // First byte of the range that no allocation or write has claimed, or `address + size` when all are owned.
+        [[nodiscard]] uint32_t firstUnownedRam(uint32_t address, size_t size) const;
         [[nodiscard]] bool isHardwareAddress(uint32_t address) const;
         [[nodiscard]] std::string readString(uint32_t address, size_t limit = 1024u) const;
 
