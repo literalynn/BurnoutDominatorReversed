@@ -97,7 +97,7 @@ namespace
     // callback stacks up to the image.
     constexpr uint32_t kLowReservedEnd = 0x00100000u;
     constexpr uint32_t kLowReservedHeapBase = 0x000B4000u;
-    constexpr uint32_t kLowReservedStackFloor = 0x000D0000u;
+    constexpr uint32_t kLowReservedStackFloor = 0x000C0000u; // 16 callback stacks of 0x4000
     static_assert(kRuntimeReservedLowBase + kRuntimeReservedPoolsBytes <= kLowReservedHeapBase);
 
     constexpr uint32_t COP0_CAUSE_EXCCODE_MASK = 0x0000007Cu;
