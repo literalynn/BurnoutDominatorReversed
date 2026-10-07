@@ -25,6 +25,8 @@ Preuves conservées : `local/disc_inventory.json`, `local/analysis/`, `local/ana
 - 437/437 tests upstream du moteur et 45/45 tests CTest du cache GS réussis sur Windows. Ces tests portent sur le moteur ; ils ne valident pas les courses de Burnout.
 - Accès au disque corrigé : les recherches EE/IOP rendent maintenant les LBA originales. Cinq exécutables de tests IOP réussissent, dont sept groupes de tests ISO ; offsets de plus de 4 Gio vérifiés. Sur le disque réel : SYSTEM.CNF au secteur 2 265 203 et SLES_546.27 au secteur 2 263 507.
 
+- SPU2 (`ps2_spu2_tests`) : décodage ADPCM, registres, transferts PIO et DMA, minuterie d’IRQ des voix, IRQ de transfert, horloge du mélangeur, fin de boucle, sortie audio : réussis.
+- **Non relancés depuis les dernières modifications** (IOP et timers EE avancés par lots, cache de décodage des imports, recherche de module par nom) : `ps2x_tests`, les cinq suites ps2xIOP, `ps2_spu2_tests` et `burnout_overrides_tests`. Seul le jeu a été recompilé et lancé.
 - Linux (Ubuntu 24.04, GCC 13, Ninja) : `ps2_recomp`, `ps2_analyzer`, le runtime et tous les tests compilent ; 438/438 tests du moteur, les 5 suites ps2xIOP et `burnout_overrides_tests` réussissent. Le jeu compile et se lance aussi sous Linux (session cloud, `-O1`, à partir du paquet `tools/cloud_bundle.py`, sans l’ISO).
 
 ## Démarrage du jeu
@@ -33,8 +35,8 @@ Détails et preuves : [BOOT.md](BOOT.md) et [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md)
 
 - Premier exécutable Windows : 134 Mo, compilé sans LTO en 9 min 20 s.
 - Lancements bornés 1 à 3 : le jeu passe crt0, `main`, l’initialisation SIF et libcdvd, puis s’arrête au troisième lancement sur un appel indirect vers 0x1E5020, code absent de la carte Ghidra.
-- `tools/augment_function_map.py` ajoute 2 191 points d’entrée atteints par pointeur ; la régénération (51 161 fichiers, 0 erreur) et la recompilation complète ont réussi. Le quatrième lancement n’a pas encore été fait.
-- Depuis : 28 fonctions SDK liées au runtime (libsif avec les commandes SIF, loadfile, iopheap, fileio, libcdvd), ROMVER européen de 16 octets, `sceCdReadClock` et `GetSystemTimeLow` côté IOP, avertissement sur tout import IOP intégré inconnu.
+- `tools/augment_function_map.py` ajoute 2 191 points d’entrée atteints par pointeur ; la régénération (51 161 fichiers, 0 erreur) et la recompilation complète ont réussi.
+- Depuis : 29 fonctions SDK liées au runtime (libsif avec les commandes SIF, loadfile, iopheap, fileio, libcdvd), ROMVER européen de 16 octets, `sceCdReadClock` et `GetSystemTimeLow` côté IOP, avertissement sur tout import IOP intégré inconnu.
 - Lancements 4 à 6 (Linux, sans l’ISO) :
   - `RwEngineInit` réussit une fois corrigée la fin du tas ;
   - la mémoire propre du runtime est déplacée sous l’image du jeu ;
@@ -42,13 +44,19 @@ Détails et preuves : [BOOT.md](BOOT.md) et [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md)
   - le démarrage lit la police `Language/Fonts/dirtyEra.bin`, puis attend `Data/GlobalE.txd`, absent du paquet cloud ;
   - le jeu envoie une image GIF par boucle d’attente.
 
-Prochaine étape sur la machine qui possède l’ISO : `git pull`, `Installer.bat` (ou `python tools/install.py`), puis :
+- Lancements 7 à 9 (Windows, avec l’ISO) :
+  - un SPU2 réel côté IOP donne à RWA l’horloge qu’il attend : tout `sound_generic.awd` est alors transféré ;
+  - `sceSifSearchModuleByName` (0x3B1EA8) est liée : le jeu vérifie la présence de modules IOP (`sio2man`, `mcman`, `mcserv`, `multitap_manager`) avant d’initialiser la bibliothèque de carte mémoire ;
+  - la machine d’état de démarrage se termine (état 0x1C), le jeu entre dans sa boucle principale et dessine l’écran LOADING (barre orange) ;
+  - l’IOP et les timers EE avancent par lots : de 3,6 à 25–50 images par seconde.
+
+Blocage actuel (lancement 9) : l’écran LOADING reste à environ 93 % et attend `TRACKS/EATRAX1.RWS`. GTFSCDVD relit en boucle les mêmes 4 secteurs parce que `sceCdRead` renvoie 0, et la requête RWA qui suit n’obtient jamais de réponse. Observations et hypothèse : [BOOT.md](BOOT.md) §9. Prochaine étape : journaliser pourquoi `readSectors` refuse cette lecture.
+
+Reprise sur la machine qui possède l’ISO (les variables d’observation sont décrites au §10 de BOOT.md) :
 
 ```powershell
-python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run7.log --tail 120
+python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run10.log --tail 120
 ```
-
-La modification de `ps2_runtime.h` (surcharges de `run`) impose une recompilation complète. Le journal `run7.log` (PC final, lignes `[IOP]`, lignes `[status]`) indique le blocage suivant.
 
 ## Demandes à traiter une fois le jeu jouable
 

@@ -42,6 +42,7 @@ Pourquoi lier : le runtime n’émule pas le matériel SIF. Une bibliothèque in
 | 0x3AFB58 | sceSifExitCmd | `sceSifExitCmd` | `DisableDmac(5)`, `RemoveDmacHandler(5, …)`, remise à zéro de la garde 0x3E1F88. Seul appelant 0x3B01C8, atteint par sceSifRebootIop invité. |
 | 0x3AF8B0 | sceSifGetSreg | `sceSifGetSreg` | Lit le mot `index` de la table 0x1F6F300. Seul appelant : sceSifInitRpc invité (0x3B0178). |
 | 0x3B2180 | sceSifLoadModule | `sceSifLoadModule` (liste des appels système) | Enveloppe de `_SifLoadModule(path, argc, argv, &res, 0)` ; client loadfile, SID 0x80000006 ; données 0x1F725C0–0x1F727E8. |
+| 0x3B1EA8 | sceSifSearchModuleByName | `sceSifSearchModuleByName` | Client loadfile (SID 0x80000006), RPC 9 : envoi `{nom}` (copié sur 0xFC octets, dernier octet forcé à 0), réponse `{identifiant du module}`. Elle passe d’abord par 0x3B1CE0 (lie le SID puis appelle la RPC 0xFF d’initialisation) et par 0x3B1DE0 (contrôle de la version renvoyée). Seul appelant : 0x396A78, qui formate un message « Error: IOP module missing: %s. You must load this module before initilizing the memcard library. » (VA 0x42FDD8) quand le résultat est négatif. Le runtime renvoie l’identifiant du module IOP chargé dont le nom interne (en-tête IOPMOD de l’IRX : `mcman`, `mcserv`, `sio2man`…) est identique, sinon −1. Sans cette liaison, 0x3B1CE0 réessayait indéfiniment le bind du SID 0x80000006, que l’IOP émulé ne sert pas : loadfile fait partie de l’IOPRP300.IMG, qu’il n’exécute pas (lancement 8 de [BOOT.md](BOOT.md)). |
 | 0x3B1B48 | sceSifInitIopHeap | `sceSifInitIopHeap` | Client iopheap, SID 0x80000003. Appelée par 0x215798 avant le chargement des modules. |
 | 0x3B1BD0 | sceSifAllocSysMemory | `sceSifAllocSysMemory` | Client iopheap, RPC 4, envoi `{size, mode, addr}` construit depuis `(mode, size, addr)` : appel type `(0, 0x40700, 0)`. Le gestionnaire lit la taille dans a1. Appelants : 0x1FB828, 0x29D608, 0x3629A8, 0x3692C0, 0x372160. |
 | 0x3B1C50 | sceSifFreeIopHeap | `sceSifFreeIopHeap` | RPC 2, envoi `{addr}`. Appelants : 0x29DDC8, 0x369110. |
@@ -77,7 +78,7 @@ Les variables internes de libcdvd (0x3D4CD0–0x3D4D20, 0x3D5EC0, 0x3D6300, 0x3D
 | 0x377870, 0x377958, 0x377A50, 0x3779F8, 0x377B48 | Sémaphores, sortie, gestionnaire d’extinction et verrou S-cmd de libcdvd | Inaccessibles une fois les points d’entrée publics liés. |
 | 0x38AFE0 | Lecture de 14 octets de `rom0:ROMVER` vers 0x3E0A88 (libscf) | Passe par fileio, désormais lié. |
 | 0x379908 | Lecture de `rom0:ROMVER` jusqu’au NUL ; date des 9 octets précédents comparée à 20010608 | Exige un ROMVER de 16 octets terminé par `\n\0` : profil ROM0 de `src/burnout_overrides.cpp`. |
-| 0x396A78 | Recherche de module IOP par nom (appelée par 0x395A30 pour sio2man, mcman, mcserv, multitap_manager) | libmc/libmtap ; à examiner. |
+| 0x396A78 | Vérification des modules IOP par nom (appelée par 0x395A30 pour sio2man, mcman, mcserv, multitap_manager) | Appelle 0x3B1EA8 (lié) ; si le résultat est négatif, formate un message d’erreur dans un tampon local de 512 octets, sans autre effet visible dans le pseudocode. MTAPMAN n’étant pas sur le disque, un résultat négatif pour multitap_manager est attendu. Non liée. |
 
 ## À identifier
 
