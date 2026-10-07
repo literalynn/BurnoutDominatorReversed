@@ -6,6 +6,7 @@ namespace ps2_syscalls
 {
     void SifStopModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void SifLoadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void SifSearchModuleByName(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void SifInitRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void SifBindRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void SifCallRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);

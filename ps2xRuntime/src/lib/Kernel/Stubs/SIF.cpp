@@ -6,8 +6,12 @@
 #include "runtime/ee_scheduler.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <limits>
+#include <sstream>
 #include <vector>
 
 namespace ps2_stubs
@@ -20,6 +24,11 @@ namespace ps2_stubs
     void sceSifLoadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ps2_syscalls::SifLoadModule(rdram, ctx, runtime);
+    }
+
+    void sceSifSearchModuleByName(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        ps2_syscalls::SifSearchModuleByName(rdram, ctx, runtime);
     }
 
     namespace
@@ -97,6 +106,39 @@ namespace ps2_stubs
                 seedDefaultSifRegsLocked();
             }
         } g_sifStateInitializer;
+
+        // BDR_TRACE_SIF=1: bounded log of SIF command traffic in both directions.
+        bool traceSifCommands()
+        {
+            static const bool enabled = []
+            {
+                const char *value = std::getenv("BDR_TRACE_SIF");
+                return value && value[0] != '\0' && value[0] != '0';
+            }();
+            return enabled;
+        }
+
+        void traceSifCommand(const char *direction, uint32_t commandId, const uint8_t *packet,
+                             uint32_t packetSize, const char *note)
+        {
+            // GTFS read completions (4, 5) arrive hundreds of times; keep them from using up the budget.
+            static std::atomic<uint32_t> count{0u};
+            static std::atomic<uint32_t> fileCount{0u};
+            std::atomic<uint32_t> &budget = (commandId == 4u || commandId == 5u) ? fileCount : count;
+            const uint32_t limit = (commandId == 4u || commandId == 5u) ? 80u : 1200u;
+            if (!traceSifCommands() || budget.fetch_add(1u, std::memory_order_relaxed) >= limit)
+                return;
+            std::ostringstream line;
+            line << "[bdr:sif] " << direction << " cid=0x" << std::hex << commandId << std::dec
+                 << " size=" << packetSize << " " << note << " words:" << std::hex;
+            for (uint32_t offset = 0u; offset + 4u <= packetSize && offset < 64u; offset += 4u)
+            {
+                uint32_t word = 0u;
+                std::memcpy(&word, packet + offset, sizeof(word));
+                line << ' ' << word;
+            }
+            std::cout << line.str() << std::endl;
+        }
 
         uint32_t allocateSifDmaTransferId()
         {
@@ -211,12 +253,22 @@ namespace ps2_stubs
             std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);
             const auto handler = g_sifCmdHandlers.find(commandId);
             if (handler == g_sifCmdHandlers.end() || handler->second.function == 0u)
+            {
+                traceSifCommand("iop->ee", commandId, static_cast<const uint8_t *>(packet),
+                                static_cast<uint32_t>(packetSize), "NO EE HANDLER, dropped");
                 return false;
+            }
             registered = handler->second;
         }
 
         if (!runtime->hasFunction(registered.function))
+        {
+            traceSifCommand("iop->ee", commandId, static_cast<const uint8_t *>(packet),
+                            static_cast<uint32_t>(packetSize), "handler function missing, dropped");
             return false;
+        }
+        traceSifCommand("iop->ee", commandId, static_cast<const uint8_t *>(packet),
+                        static_cast<uint32_t>(packetSize), "queued");
 
         const uint32_t packetAddress = runtime->guestMalloc(static_cast<uint32_t>(packetSize), 16u);
         if (packetAddress == 0u)
@@ -307,7 +359,10 @@ namespace ps2_stubs
         (void)readEeRange(rdram, packetAddr, packet.data(), packetSize);
         // A command without an IOP handler is dropped by the IOP; the DMA
         // itself still completes.
-        (void)PS2IopTransport::deliverSifCommand(runtime, rdram, ctx, packet.data(), packetSize);
+        const bool delivered = PS2IopTransport::deliverSifCommand(runtime, rdram, ctx, packet.data(), packetSize);
+        traceSifCommand("ee->iop", cid, packet.data(), packetSize,
+                        delivered ? (extraSize > 0 ? "delivered +data" : "delivered")
+                                  : "NOT delivered (no IOP handler)");
         setReturnS32(ctx, static_cast<int32_t>(allocateSifDmaTransferId()));
     }
 

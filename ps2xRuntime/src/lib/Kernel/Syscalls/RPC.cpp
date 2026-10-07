@@ -225,6 +225,16 @@ namespace ps2_syscalls
         setReturnS32(ctx, loaded.moduleId);
     }
 
+    void SifSearchModuleByName(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        // loadfile RPC 9. The SDK cuts the name to 252 characters; the server answers
+        // with the id of the loaded module that carries that name, or a negative value.
+        constexpr size_t kLoadfileNameMaxBytes = 252u;
+        const std::string name = readGuestCStringBounded(rdram, getRegU32(ctx, 4), kLoadfileNameMaxBytes);
+        const int32_t moduleId = runtime ? runtime->searchIopModuleByName(name) : -1;
+        setReturnS32(ctx, moduleId > 0 ? moduleId : -1);
+    }
+
     void SifInitRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         std::lock_guard<std::mutex> lock(g_rpc_mutex);

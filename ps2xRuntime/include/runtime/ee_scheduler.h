@@ -267,6 +267,10 @@ public:
     static constexpr uint32_t kGeneratedCheckpointCycles = 32u;
     static constexpr uint32_t kGuestDispatchCycles = 8u;
     static constexpr uint64_t kDefaultTimeSliceCycles = 65536ull;
+    // The IOP and the EE timers are advanced in batches of this many EE cycles
+    // (about 7 us). Guest dispatch charges 8 cycles at a time; running the IOP
+    // scheduler for each of them would cost far more than the IOP code it executes.
+    static constexpr uint64_t kDeviceBatchCycles = 2048ull;
 
     explicit EeScheduler(PS2Runtime &runtime);
     ~EeScheduler();
@@ -431,6 +435,7 @@ private:
     bool m_insideInterrupt = false;
     uint32_t m_pendingEeTimerInterrupts = 0;
     uint64_t m_eeCycle = 0;
+    uint64_t m_deviceCycleDebt = 0; // EE cycles accounted but not yet given to the timers and the IOP
     uint64_t m_sliceEndCycle = kDefaultTimeSliceCycles;
     std::thread::id m_executorThread{};
     std::atomic<bool> m_running{false};
