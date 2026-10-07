@@ -10,6 +10,7 @@
 #include <atomic>
 #include <iostream>
 #include <mutex>
+#include <memory>
 
 #include "gs/ps2_gif_arbiter.h"
 #if defined(_MSC_VER)
@@ -22,6 +23,7 @@
 #endif
 
 class GS;
+class Ps2Ipu;
 
 constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
 constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
@@ -423,6 +425,7 @@ public:
     std::vector<PendingTransfer> m_pendingVif1Transfers;
     std::mutex m_completedDmacMutex;
     std::vector<uint32_t> m_completedDmacCauses;
+    std::unique_ptr<Ps2Ipu> m_ipu;
 
     struct CodeRegion
     {

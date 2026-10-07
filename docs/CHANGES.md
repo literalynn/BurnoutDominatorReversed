@@ -2,6 +2,16 @@
 
 Base complète conservée depuis `ran-j/PS2Recomp`, commit indiqué dans `UPSTREAM.json`, sous sa licence GPLv3. Les fichiers de jeu et leur traduction restent dans des répertoires ignorés par Git.
 
+## IPU et vidéo (7 octobre 2026)
+
+- `ps2xRuntime/include/runtime/ps2_ipu.h`, `src/lib/ps2_ipu.cpp` : modèle matériel IPU commencé par Claude, intégré au runtime. Lecture de bits MPEG, tables VLC, BDEC (déquantification et IDCT vers RAW16), SETIQ/SETVQ/SETTH, CSC et PACK. Une commande attend les données manquantes puis reprend, sans simuler sa réussite. IDEC reste non implémentée et produit un diagnostic d'erreur.
+- `ps2_memory.h/.cpp` : accès aux registres IPU en 32/64 bits, aux FIFO en 128 bits, DMA des canaux 3/4 avec remplissage progressif, chaînes de tags et destinations RDRAM/scratchpad. Les lectures de CHCR de ces canaux conservent STR tant que le transfert n'est pas terminé. Suppression des anciens registres IPU passifs.
+- `ps2_memory.cpp` : chaînes source SPR_TO du canal 9 (REF/REFE, CNT, NEXT, CALL/RET, END), rassemblement des blocs de référence utilisés par libmpeg, bouclage du scratchpad et une interruption par chaîne terminée.
+- `ps2xRuntime/CMakeLists.txt`, `ps2xTest/CMakeLists.txt` et `src/main.cpp` : compilation du modèle et enregistrement des tests. `ps2_ipu_tests.cpp` vérifie les bits et BUSY, un VLC invalide, la pression du FIFO sur le DMA, une reprise CSC après deux transferts, un macrobloc intra RAW16 et une chaîne SPR_TO avec bouclage. Les deux tests existants d'initialisation IPU attendent maintenant l'effacement matériel de RST.
+- Validation Windows : 449/449 tests runtime, les cinq suites IOP, SPU2, les liaisons Burnout et 43 tests Python réussissent. Ces tests ne prouvent pas encore la lecture complète de l'introduction du jeu.
+
+## Modifications précédentes
+
 - `tools/` : extraction ISO9660, analyse ELF32, contrôle SHA256 du PAL SLES_546.27, génération et audit de traduction.
 - `cmake/Burnout.cmake` : liaison des fonctions traduites dans `burnout_dominator`, sans modifier les sources upstream avec du code de jeu.
 - `src/burnout_main.cpp` : montage explicite de l’ISO d’origine et du disque extrait, sauvegardes locales, arrêt strict sur fonction absente, diagnostic sans fenêtre avec délai borné.

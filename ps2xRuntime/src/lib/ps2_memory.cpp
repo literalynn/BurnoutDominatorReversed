@@ -1,4 +1,5 @@
 #include "runtime/ps2_memory.h"
+#include "runtime/ps2_ipu.h"
 #include "runtime/ps2_address.h"
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
@@ -242,6 +243,29 @@ PS2Memory::PS2Memory()
     : m_rdram(nullptr), m_scratchpad(nullptr), iop_ram(nullptr), m_seenGifCopy(false), m_gsVRAM(nullptr)
 {
     ps2SetScratchpadHostPtr(nullptr);
+    auto transfer = [this](uint32_t address, void *data, uint32_t size, bool write) {
+        const bool scratch = (address & 0x80000000u) != 0u;
+        const uint32_t offset = scratch ? (address & 0x3FFFu) : (address & 0x1FFFFFFFu);
+        uint8_t *base = scratch ? m_scratchpad : m_rdram;
+        const uint32_t limit = scratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
+        if (!base || offset > limit || size > limit - offset)
+            return false;
+        if (write)
+        {
+            std::memcpy(base + offset, data, size);
+            if (!scratch)
+                markModified(offset, size);
+        }
+        else
+            std::memcpy(data, base + offset, size);
+        return true;
+    };
+    Ps2Ipu::Bus bus;
+    bus.readMemory = [transfer](uint32_t address, void *data, uint32_t size) { return transfer(address, data, size, false); };
+    bus.writeMemory = [transfer](uint32_t address, const void *data, uint32_t size) { return transfer(address, const_cast<void *>(data), size, true); };
+    bus.registerRef = [this](uint32_t address) -> uint32_t & { return m_ioRegisters[address]; };
+    bus.completeChannel = [this](uint32_t channel, uint32_t cause) { completeDmacChannel(channel, cause); };
+    m_ipu = std::make_unique<Ps2Ipu>(std::move(bus));
 }
 
 PS2Memory::~PS2Memory()
@@ -355,6 +379,7 @@ bool PS2Memory::initialize(size_t ramSize)
 
         // Initialize I/O registers
         m_ioRegisters.clear();
+        m_ipu->reset();
 
         // Initialize GS registers
         memset(&gs_regs, 0, sizeof(gs_regs));
@@ -785,6 +810,9 @@ uint32_t PS2Memory::read32(uint32_t address)
 
 uint64_t PS2Memory::read64(uint32_t address)
 {
+    const uint32_t ipuAddress = address & 0x1FFFFFFFu;
+    if (ipuAddress >= Ps2Ipu::kRegisterBase && ipuAddress < Ps2Ipu::kRegisterEnd)
+        return m_ipu->read64(ipuAddress);
     if (address & 7)
     {
         throw std::runtime_error("Unaligned 64-bit read at address: 0x" + std::to_string(address));
@@ -856,6 +884,13 @@ __m128i PS2Memory::read128(uint32_t address)
     {
         inRange(vuOffset, sizeof(__m128i), vuLimit, "read128 vu", address);
         return _mm_loadu_si128(reinterpret_cast<const __m128i *>(vuMem + vuOffset));
+    }
+
+    if (physAddr == Ps2Ipu::kOutFifo)
+    {
+        alignas(16) uint8_t qword[16];
+        m_ipu->readOutFifo(qword);
+        return _mm_loadu_si128(reinterpret_cast<const __m128i *>(qword));
     }
 
     // 128-bit reads are primarily for quad-word loads in the EE, which are only valid for RAM areas
@@ -1070,6 +1105,13 @@ void PS2Memory::write128(uint32_t address, __m128i value)
     const bool scratch = isScratchpad(address);
     uint32_t physAddr = translateAddress(address);
 
+    if (!scratch && physAddr == Ps2Ipu::kInFifo)
+    {
+        alignas(16) uint8_t qword[16];
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(qword), value);
+        m_ipu->writeInFifo(qword);
+        return;
+    }
     if (!scratch && physAddr == 0x10004000u) // VIF0_FIFO
     {
         alignas(16) uint8_t fifoData[16];
@@ -1124,6 +1166,11 @@ void PS2Memory::write128(uint32_t address, __m128i value)
 
 bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 {
+    if (address >= Ps2Ipu::kRegisterBase && address < Ps2Ipu::kRegisterEnd)
+    {
+        m_ipu->write32(address, value);
+        return true;
+    }
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
@@ -1176,25 +1223,6 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             *reg = (*reg & ~mask) | (static_cast<uint64_t>(value) << (off * 8u));
         }
         m_gsWriteCount.fetch_add(1, std::memory_order_relaxed);
-        return true;
-    }
-
-    if (address >= 0x10002000 && address <= 0x10002030)
-    {
-        if (address == 0x10002010)
-        {
-            m_ioRegisters[address] = value & ~(1u << 31);
-            if (value & (1u << 30))
-            {
-                m_ioRegisters[0x10002000] = 0;
-                m_ioRegisters[0x10002020] = 0;
-                m_ioRegisters[0x10002030] = 0;
-            }
-        }
-        else
-        {
-            m_ioRegisters[address] = value;
-        }
         return true;
     }
 
@@ -1305,6 +1333,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+
+            if (channelBase == Ps2Ipu::kFromIpuChannel || channelBase == Ps2Ipu::kToIpuChannel)
+            {
+                m_ipu->onDmaStart(channelBase);
+                return true;
+            }
 
             if (tryProcessScratchpadDma(channelBase, value))
             {
@@ -1590,55 +1624,102 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     static constexpr uint32_t kSprToChannel = 0x1000D400u;
     if (channelBase != kSprFromChannel && channelBase != kSprToChannel)
         return false;
-
-    const uint32_t mode = (chcr >> 2u) & 0x3u;
-    if (mode != 0u)
-        return false;
-
-    const uint32_t qwc = m_ioRegisters[channelBase + 0x20u] & 0xFFFFu;
-    const uint32_t byteCount = qwc * 16u;
-    const uint32_t originalMadr = m_ioRegisters[channelBase + 0x10u] & 0x7FFFFFF0u;
-    const uint32_t originalSadr = m_ioRegisters[channelBase + 0x80u] & 0x3FF0u;
-
-    uint32_t mainOffset = 0u;
-    try
-    {
-        mainOffset = translateAddress(originalMadr);
-    }
-    catch (const std::exception &)
-    {
-        return false;
-    }
-
-    if (mainOffset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - mainOffset)
-        return false;
-
     const bool fromScratchpad = channelBase == kSprFromChannel;
-    uint32_t scratchOffset = originalSadr;
-    uint32_t bytesLeft = byteCount;
-    uint32_t copied = 0u;
-    while (bytesLeft != 0u)
+    const uint32_t mode = (chcr >> 2u) & 3u;
+    if (mode != 0u && (mode != 1u || fromScratchpad))
+        return false;
+
+    uint32_t &madr = m_ioRegisters[channelBase + 0x10u];
+    uint32_t &qwc = m_ioRegisters[channelBase + 0x20u];
+    uint32_t &sadr = m_ioRegisters[channelBase + 0x80u];
+    auto copyPayload = [&]() {
+        const uint32_t byteCount = (qwc & 0xFFFFu) * 16u;
+        const uint32_t offset = madr & 0x1FFFFFF0u;
+        if (offset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - offset)
+            return false;
+        uint32_t scratch = sadr & 0x3FF0u;
+        for (uint32_t copied = 0; copied < byteCount;)
+        {
+            const uint32_t chunk = std::min(byteCount - copied, PS2_SCRATCHPAD_SIZE - scratch);
+            if (fromScratchpad)
+            {
+                std::memcpy(m_rdram + offset + copied, m_scratchpad + scratch, chunk);
+                markModified(offset + copied, chunk);
+            }
+            else
+                std::memcpy(m_scratchpad + scratch, m_rdram + offset + copied, chunk);
+            copied += chunk;
+            scratch = (scratch + chunk) & (PS2_SCRATCHPAD_SIZE - 1u);
+        }
+        madr = (madr + byteCount) & 0x7FFFFFF0u;
+        sadr = scratch;
+        qwc = 0u;
+        return true;
+    };
+    if (mode == 0u)
     {
-        const uint32_t scratchChunk = PS2_SCRATCHPAD_SIZE - scratchOffset;
-        const uint32_t chunk = std::min(bytesLeft, scratchChunk);
-        if (fromScratchpad)
-        {
-            std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + scratchOffset, chunk);
-            markModified(mainOffset + copied, chunk);
-        }
-        else
-        {
-            std::memcpy(m_scratchpad + scratchOffset, m_rdram + mainOffset + copied, chunk);
-        }
-
-        copied += chunk;
-        bytesLeft -= chunk;
-        scratchOffset = (scratchOffset + chunk) & (PS2_SCRATCHPAD_SIZE - 1u);
+        if (!copyPayload())
+            return false;
     }
-
-    m_ioRegisters[channelBase + 0x10u] = (originalMadr + byteCount) & 0x7FFFFFF0u;
-    m_ioRegisters[channelBase + 0x20u] = 0u;
-    m_ioRegisters[channelBase + 0x80u] = (originalSadr + byteCount) & 0x3FF0u;
+    else
+    {
+        // SPR_TO source chains, used by libmpeg to gather reference macroblocks.
+        uint32_t &tadr = m_ioRegisters[channelBase + 0x30u];
+        uint32_t asp = (chcr >> 4) & 3u;
+        bool finished = false;
+        if ((qwc & 0xFFFFu) != 0u)
+        {
+            const uint32_t id = (chcr >> 28) & 7u;
+            finished = id == 0u || id == 7u || ((chcr & 0x80000080u) == 0x80000080u);
+            if (!copyPayload())
+                return false;
+        }
+        for (int guard = 0; !finished && guard < 4096; ++guard)
+        {
+            const uint32_t tagOffset = tadr & 0x1FFFFFF0u;
+            if (tagOffset > PS2_RAM_SIZE - 16u)
+                return false;
+            uint32_t tag[2];
+            std::memcpy(tag, m_rdram + tagOffset, sizeof(tag));
+            chcr = (chcr & 0xFFFFu) | (tag[0] & 0xFFFF0000u);
+            qwc = tag[0] & 0xFFFFu;
+            const uint32_t afterPayload = tadr + 16u + qwc * 16u;
+            const uint32_t id = (tag[0] >> 28) & 7u;
+            switch (id)
+            {
+            case 0: // REFE
+                madr = tag[1]; tadr += 16u; finished = true; break;
+            case 1: // CNT
+                madr = tadr + 16u; tadr = afterPayload; break;
+            case 2: // NEXT
+                madr = tadr + 16u; tadr = tag[1]; break;
+            case 3: // REF
+            case 4: // REFS
+                madr = tag[1]; tadr += 16u; break;
+            case 5: // CALL
+                if (asp >= 2u)
+                    return false;
+                m_ioRegisters[channelBase + (asp++ == 0u ? 0x40u : 0x50u)] = afterPayload;
+                madr = tadr + 16u; tadr = tag[1]; break;
+            case 6: // RET
+                madr = tadr + 16u;
+                if (asp == 0u)
+                    finished = true;
+                else
+                    tadr = m_ioRegisters[channelBase + (--asp == 0u ? 0x40u : 0x50u)];
+                break;
+            case 7: // END
+                madr = tadr + 16u; tadr = afterPayload; finished = true; break;
+            }
+            if ((tag[0] & 0x80000000u) != 0u && (chcr & 0x80u) != 0u)
+                finished = true;
+            if (!copyPayload())
+                return false;
+        }
+        if (!finished)
+            return false;
+        m_ioRegisters[channelBase] = (chcr & ~0x30u) | (asp << 4);
+    }
     completeDmacChannel(channelBase, fromScratchpad ? 8u : 9u);
     return true;
 }
@@ -2280,6 +2361,8 @@ int PS2Memory::pollDmaRegisters()
 
 uint32_t PS2Memory::readIORegister(uint32_t address)
 {
+    if (address >= Ps2Ipu::kRegisterBase && address < Ps2Ipu::kRegisterEnd)
+        return m_ipu->read32(address);
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
@@ -2317,28 +2400,6 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
         return 0u;
     }
 
-    if (address >= 0x10002000 && address <= 0x10002030)
-    {
-        uint32_t val = 0;
-        switch (address)
-        {
-        case 0x10002000:
-            val = m_ioRegisters[address];
-            break;
-        case 0x10002010:
-            val = m_ioRegisters[address] & ~(1u << 31);
-            break;
-        case 0x10002020:
-        case 0x10002030:
-            val = m_ioRegisters[address];
-            break;
-        default:
-            val = 0;
-            break;
-        }
-        return val;
-    }
-
     if (address == 0x10003020u) // GIF_STAT
     {
         uint32_t stat = m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
@@ -2361,6 +2422,10 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
         {
             if ((address & 0xFF) == 0x00)
             {
+                // IPU transfers can stall on FIFO/input availability; reading CHCR
+                // must not terminate them. The device owns completion of STR.
+                if (address == Ps2Ipu::kFromIpuChannel || address == Ps2Ipu::kToIpuChannel)
+                    return m_ioRegisters[address];
                 uint32_t channelStatus = m_ioRegisters[address] & ~0x100u;
                 m_ioRegisters[address] = channelStatus;
                 return channelStatus;
