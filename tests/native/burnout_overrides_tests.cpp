@@ -54,6 +54,7 @@ const Expected kExpected[] = {
     {0x003AFDE8, &ps2_syscalls::sceSifSendCmd, "isceSifSendCmd"},
     {0x003AF8B0, &ps2_stubs::sceSifGetSreg, "sceSifGetSreg"},
     {0x003B2180, &ps2_syscalls::sceSifLoadModule, "sceSifLoadModule"},
+    {0x003B1EA8, &ps2_stubs::sceSifSearchModuleByName, "sceSifSearchModuleByName"},
     {0x003B1B48, &ps2_stubs::sceSifInitIopHeap, "sceSifInitIopHeap"},
     {0x003B1BD0, &ps2_stubs::sceSifAllocSysMemory, "sceSifAllocSysMemory"},
     {0x003B1C50, &ps2_stubs::sceSifFreeIopHeap, "sceSifFreeIopHeap"},

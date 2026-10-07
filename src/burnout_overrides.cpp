@@ -51,6 +51,7 @@ constexpr Binding kBindings[] = {
 
     // loadfile (SID 0x80000006): wrapper of _SifLoadModule(path, argc, argv, &res, 0)
     {0x003B2180, "sceSifLoadModule"},
+    {0x003B1EA8, "sceSifSearchModuleByName"}, // rpc 9, send {name[252]}, reply {module id}
 
     // iopheap (SID 0x80000003)
     {0x003B1B48, "sceSifInitIopHeap"},

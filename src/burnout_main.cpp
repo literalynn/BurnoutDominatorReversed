@@ -1,4 +1,5 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
+#include "burnout_profile.h"
 #include "ps2_runtime.h"
 
 #include <chrono>
@@ -162,6 +163,7 @@ int main(int argc, char** argv) {
         else
             std::cout << "[BDR] Original ISO: " << options.iso << '\n';
 
+        bdr_profile::Sampler profile; // BDR_PROFILE=1
         PS2Runtime::RunOptions run;
         run.timeLimit = std::chrono::seconds(options.seconds);
         run.statusInterval = std::chrono::milliseconds(options.statusMs);
