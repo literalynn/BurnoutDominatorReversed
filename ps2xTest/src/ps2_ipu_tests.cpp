@@ -91,6 +91,42 @@ void register_ps2_ipu_tests()
                 t.Equals(m.read32(0x4000u + i * 4u), 0x80000000u, "black RGB with IPU alpha");
         });
 
+        test.Run("IPU input follows REF and REFE source tags", [](TestCase &t) {
+            PS2Memory m;
+            t.IsTrue(m.initialize(), "memory initialization");
+            std::memset(m.getRDRAM() + 0x2000, 0x11, 16);
+            std::memset(m.getRDRAM() + 0x2100, 0x22, 16);
+            m.write64(0x3000, (uint64_t{0x2000} << 32) | 0x30000001u);
+            m.write64(0x3010, (uint64_t{0x2100} << 32) | 0x00000001u);
+            m.write32(to + 0x30, 0x3000u);
+            m.write32(to + 0x20, 0u);
+            m.write32(to, 0x105u);
+            m.write32(cmd, 0x40000000u);
+            t.Equals(m.read32(cmd), 0x11111111u, "first REF payload");
+            for (int i = 0; i < 4; ++i)
+                m.write32(cmd, 0x40000020u);
+            t.Equals(m.read32(cmd), 0x22222222u, "REFE payload after crossing the qword");
+            t.Equals(m.read32(to) & 0x100u, 0u, "chain completed after REFE");
+            t.Equals(m.read32(to + 0x30), 0x3020u, "TADR advanced beyond the terminal tag");
+        });
+
+        test.Run("BDEC waits for output DMA and then a split start code", [](TestCase &t) {
+            PS2Memory m;
+            t.IsTrue(m.initialize(), "memory initialization");
+            input(m, {0x94, 0xA5, 0x22, 0x20});
+            m.write32(cmd, 0x2C010000u);
+            t.IsTrue((m.read32(ctrl) >> 31) != 0u, "output waiting without channel 3");
+            dma(m, from, 0x80001000u, 48u, 0x100u);
+            t.Equals(m.read32(from + 0x20), 0u, "output completes before the next input arrives");
+            t.IsTrue((m.read32(ctrl) >> 31) != 0u, "BDEC waits for a header after zero stuffing");
+            input(m, {0x00, 0x00, 0x01, 0xB3});
+            t.Equals(m.read64(top), uint64_t{0x1B3}, "header found after refill");
+            t.Equals(m.read32(ctrl) >> 31, 0u, "command completed");
+            t.IsTrue((m.read32(ctrl) & 0x8000u) != 0u, "SCD set on the sequence header");
+            t.Equals(m.read32(ctrl) & 0xF0u, 0u, "macroblock output not duplicated during retry");
+            t.Equals(m.read32(from + 0x10), 0x80001300u, "output cursor advanced exactly once");
+        });
+
         test.Run("SPR_TO source chain gathers blocks and wraps scratchpad", [](TestCase &t) {
             PS2Memory m;
             t.IsTrue(m.initialize(), "memory initialization");
@@ -117,11 +153,13 @@ void register_ps2_ipu_tests()
             t.IsTrue(m.initialize(), "memory initialization");
             // Four luma blocks: DC size 0 ('100'), EOB ('10'); two chroma:
             // DC size 0 ('00'), EOB ('10'). Constant 128 in all components.
-            input(m, {0x94, 0xA5, 0x22, 0x20});
+            input(m, {0x94, 0xA5, 0x22, 0x20, 0x00, 0x00, 0x01, 0xB3});
             dma(m, from, 0x80001000u, 48u, 0x100u);
             m.write32(cmd, 0x2C010000u);
             t.Equals(m.read32(ctrl) & 0x4000u, 0u, "valid macroblock without ECD");
             t.Equals(m.read32(from + 0x20u), 0u, "768 RAW16 bytes transferred");
+            t.IsTrue((m.read32(ctrl) & 0x8000u) != 0u, "start code detection after byte alignment");
+            t.Equals(m.read64(top), uint64_t{0x1B3}, "next MPEG header in TOP");
             for (int i = 0; i < 384; ++i)
                 t.Equals(m.read16(0x70001000u + i * 2u), uint16_t{128}, "constant intra samples");
         });
