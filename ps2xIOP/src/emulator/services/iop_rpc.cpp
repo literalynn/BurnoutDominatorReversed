@@ -9,6 +9,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <sstream>
 #include <vector>
 
 namespace ps2x::iop::detail
@@ -18,11 +19,198 @@ namespace ps2x::iop::detail
     {
     }
 
+    namespace
+    {
+        constexpr uint32_t kSystemCmdBit = 0x80000000u;
+        constexpr uint32_t kBuiltinSystemCmdCount = 32u;
+        constexpr uint32_t kCmdHandlerEntrySize = 8u; // SifCmdHandlerData_t {handler, harg}
+        constexpr uint32_t kCmdHeaderSize = 16u;
+        constexpr uint32_t kCmdPacketMaxSize = 112u;
+    }
+
     void IopRpcBridge::reset()
     {
         m_servers.clear();
+        m_userCmdTable = 0u;
+        m_userCmdCount = 0u;
+        m_systemCmdTable = 0u;
+        m_systemCmdCount = 0u;
+        m_systemCmdHandlers.clear();
+        m_cmdHandlerGp.clear();
+        m_reportedCmdIds.clear();
+        m_cmdReceiveBuffer = 0u;
+        m_pendingDmaCallback.reset();
         m_nextDmaId = 1u;
         m_sifInitialized = false;
+    }
+
+    bool IopRpcBridge::findCmdHandler(uint32_t cid, CmdHandler &handler) const
+    {
+        uint32_t table = m_userCmdTable;
+        uint32_t count = m_userCmdCount;
+        uint32_t index = cid;
+        if ((cid & kSystemCmdBit) != 0u)
+        {
+            index = cid & ~kSystemCmdBit;
+            if (m_systemCmdTable == 0u)
+            {
+                const auto entry = m_systemCmdHandlers.find(index);
+                if (entry == m_systemCmdHandlers.end())
+                    return false;
+                handler = entry->second;
+                return true;
+            }
+            table = m_systemCmdTable;
+            count = m_systemCmdCount;
+        }
+        if (table == 0u || index >= count)
+            return false;
+        const uint32_t entry = table + index * kCmdHandlerEntrySize;
+        handler.function = m_memory.read32(entry);
+        handler.argument = m_memory.read32(entry + 4u);
+        return true;
+    }
+
+    bool IopRpcBridge::storeCmdHandler(uint32_t cid, const CmdHandler &handler)
+    {
+        uint32_t table = m_userCmdTable;
+        uint32_t count = m_userCmdCount;
+        uint32_t index = cid;
+        if ((cid & kSystemCmdBit) != 0u)
+        {
+            index = cid & ~kSystemCmdBit;
+            if (m_systemCmdTable == 0u)
+            {
+                if (index >= kBuiltinSystemCmdCount)
+                    return false;
+                m_systemCmdHandlers[index] = handler;
+                return true;
+            }
+            table = m_systemCmdTable;
+            count = m_systemCmdCount;
+        }
+        // sifcmd indexes the table without a bound check; a table that is
+        // missing or too small would be overwritten past its end.
+        if (table == 0u || index >= count)
+            return false;
+        const uint32_t entry = table + index * kCmdHandlerEntrySize;
+        m_memory.write32(entry, handler.function);
+        m_memory.write32(entry + 4u, handler.argument);
+        return true;
+    }
+
+    void IopRpcBridge::reportCmdOnce(uint32_t cid, const char *what)
+    {
+        if (!m_reportedCmdIds.insert(cid).second)
+            return;
+        std::ostringstream out;
+        out << "[IOP] SIF command 0x" << std::hex << cid << ": " << what;
+        m_host.log(LogLevel::Warning, out.str());
+    }
+
+    bool IopRpcBridge::deliverSifCommand(const void *packet, size_t packetSize, IopGuestExecutor &executor)
+    {
+        if (!packet || packetSize < kCmdHeaderSize || packetSize > kCmdPacketMaxSize)
+            return false;
+
+        uint32_t cid = 0u;
+        std::memcpy(&cid, static_cast<const uint8_t *>(packet) + 8u, sizeof(cid));
+        CmdHandler handler{};
+        if (!findCmdHandler(cid, handler) || handler.function == 0u)
+        {
+            // sifcmd drops a command without a handler.
+            reportCmdOnce(cid, "no IOP handler, command dropped");
+            return false;
+        }
+
+        // sifcmd's single receive buffer: the packet stays valid until the next command.
+        if (m_cmdReceiveBuffer == 0u)
+            m_cmdReceiveBuffer = m_memory.allocate(kCmdPacketMaxSize, 16u);
+        if (m_cmdReceiveBuffer == 0u || !m_memory.writeRam(m_cmdReceiveBuffer, packet, packetSize))
+            return false;
+
+        const auto gp = m_cmdHandlerGp.find(cid);
+        (void)executor.executeGuestFunction(handler.function,
+                                            m_cmdReceiveBuffer,
+                                            handler.argument,
+                                            0u,
+                                            0u,
+                                            gp != m_cmdHandlerGp.end() ? gp->second : 0u);
+        return true;
+    }
+
+    uint32_t IopRpcBridge::setDma(uint32_t descriptorAddress, uint32_t descriptorCount)
+    {
+        constexpr uint32_t kDescriptorSize = 16u;
+        constexpr uint32_t kMaxDescriptors = 32u;
+        if (descriptorAddress == 0u || descriptorCount == 0u || descriptorCount > kMaxDescriptors)
+        {
+            return 0u;
+        }
+
+        struct PendingTransfer
+        {
+            uint32_t source = 0u;
+            uint32_t destination = 0u;
+            uint32_t size = 0u;
+        };
+
+        std::array<uint32_t, kMaxDescriptors * 4u> descriptorWords{};
+        const size_t descriptorBytes = static_cast<size_t>(descriptorCount) * kDescriptorSize;
+        if (!m_memory.readRam(descriptorAddress, descriptorWords.data(), descriptorBytes))
+        {
+            return 0u;
+        }
+
+        std::array<PendingTransfer, kMaxDescriptors> pending{};
+        uint32_t pendingCount = 0u;
+        uint32_t largestTransfer = 0u;
+        for (uint32_t i = 0u; i < descriptorCount; ++i)
+        {
+            const uint32_t source = descriptorWords[i * 4u + 0u];
+            const uint32_t destination = descriptorWords[i * 4u + 1u];
+            const int32_t signedSize = static_cast<int32_t>(descriptorWords[i * 4u + 2u]);
+            if (signedSize <= 0)
+                continue;
+
+            const uint32_t size = static_cast<uint32_t>(signedSize);
+            if (!m_memory.ownsRamRange(source, size))
+            {
+                return 0u;
+            }
+            pending[pendingCount++] = {source, destination, size};
+            largestTransfer = std::max(largestTransfer, size);
+        }
+
+        // IOP-side sceSifSetDma sends IOP RAM to the EE. Validate all EE
+        // destinations before committing any write so a bad chain cannot
+        // partially update guest memory, but maybe we could skip this check if we trust the EE-side SIF driver to validate the chain ?!
+        // TODO check later
+        std::vector<uint8_t> scratch(largestTransfer);
+        for (uint32_t i = 0u; i < pendingCount; ++i)
+        {
+            const PendingTransfer &transfer = pending[i];
+            if (!m_host.readGuest(transfer.destination, scratch.data(), transfer.size))
+            {
+                return 0u;
+            }
+        }
+
+        for (uint32_t i = 0u; i < pendingCount; ++i)
+        {
+            const PendingTransfer &transfer = pending[i];
+            if (!m_memory.readRam(transfer.source, scratch.data(), transfer.size) || !m_host.writeGuest(transfer.destination, scratch.data(), transfer.size))
+            {
+                return 0u;
+            }
+        }
+
+        const uint32_t dmaId = m_nextDmaId++;
+        if (m_nextDmaId == 0u || m_nextDmaId > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))
+        {
+            m_nextDmaId = 1u;
+        }
+        return dmaId;
     }
 
     bool IopRpcBridge::dispatchSifManImport(uint16_t ordinal, IopCpuState &cpu)
@@ -38,84 +226,14 @@ namespace ps2x::iop::detail
             m_sifInitialized = true;
             setV0(0u);
             return true;
-        case 7: // sceSifSetDma
+        case 7: // sceSifSetDma(dmat, count)
+            setV0(setDma(cpu.gpr[4], cpu.gpr[5]));
+            return true;
+        case 32: // sceSifSetDmaIntr(dmat, count, func, data): func(data) runs once the transfer is done
         {
-            constexpr uint32_t kDescriptorSize = 16u;
-            constexpr uint32_t kMaxDescriptors = 32u;
-            const uint32_t descriptorAddress = cpu.gpr[4];
-            const uint32_t descriptorCount = cpu.gpr[5];
-            if (descriptorAddress == 0u || descriptorCount == 0u || descriptorCount > kMaxDescriptors)
-            {
-                setV0(0u);
-                return true;
-            }
-
-            struct PendingTransfer
-            {
-                uint32_t source = 0u;
-                uint32_t destination = 0u;
-                uint32_t size = 0u;
-            };
-
-            std::array<uint32_t, kMaxDescriptors * 4u> descriptorWords{};
-            const size_t descriptorBytes = static_cast<size_t>(descriptorCount) * kDescriptorSize;
-            if (!m_memory.readRam(descriptorAddress, descriptorWords.data(), descriptorBytes))
-            {
-                setV0(0u);
-                return true;
-            }
-
-            std::array<PendingTransfer, kMaxDescriptors> pending{};
-            uint32_t pendingCount = 0u;
-            uint32_t largestTransfer = 0u;
-            for (uint32_t i = 0u; i < descriptorCount; ++i)
-            {
-                const uint32_t source = descriptorWords[i * 4u + 0u];
-                const uint32_t destination = descriptorWords[i * 4u + 1u];
-                const int32_t signedSize = static_cast<int32_t>(descriptorWords[i * 4u + 2u]);
-                if (signedSize <= 0)
-                    continue;
-
-                const uint32_t size = static_cast<uint32_t>(signedSize);
-                if (!m_memory.ownsRamRange(source, size))
-                {
-                    setV0(0u);
-                    return true;
-                }
-                pending[pendingCount++] = {source, destination, size};
-                largestTransfer = std::max(largestTransfer, size);
-            }
-
-            // IOP-side sceSifSetDma sends IOP RAM to the EE. Validate all EE
-            // destinations before committing any write so a bad chain cannot
-            // partially update guest memory, but maybe we could skip this check if we trust the EE-side SIF driver to validate the chain ?!
-            // TODO check later
-            std::vector<uint8_t> scratch(largestTransfer);
-            for (uint32_t i = 0u; i < pendingCount; ++i)
-            {
-                const PendingTransfer &transfer = pending[i];
-                if (!m_host.readGuest(transfer.destination, scratch.data(), transfer.size))
-                {
-                    setV0(0u);
-                    return true;
-                }
-            }
-
-            for (uint32_t i = 0u; i < pendingCount; ++i)
-            {
-                const PendingTransfer &transfer = pending[i];
-                if (!m_memory.readRam(transfer.source, scratch.data(), transfer.size) || !m_host.writeGuest(transfer.destination, scratch.data(), transfer.size))
-                {
-                    setV0(0u);
-                    return true;
-                }
-            }
-
-            const uint32_t dmaId = m_nextDmaId++;
-            if (m_nextDmaId == 0u || m_nextDmaId > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))
-            {
-                m_nextDmaId = 1u;
-            }
+            const uint32_t dmaId = setDma(cpu.gpr[4], cpu.gpr[5]);
+            if (dmaId != 0u && cpu.gpr[6] != 0u)
+                m_pendingDmaCallback = DmaCallback{cpu.gpr[6], cpu.gpr[7], cpu.gpr[28]};
             setV0(dmaId);
             return true;
         }
@@ -131,6 +249,13 @@ namespace ps2x::iop::detail
         }
     }
 
+    std::optional<IopRpcBridge::DmaCallback> IopRpcBridge::takeDmaCallback() noexcept
+    {
+        std::optional<DmaCallback> callback = m_pendingDmaCallback;
+        m_pendingDmaCallback.reset();
+        return callback;
+    }
+
     bool IopRpcBridge::dispatchSifCmdImport(uint16_t ordinal, IopCpuState &cpu)
     {
         const auto setV0 = [&](uint32_t value)
@@ -143,15 +268,40 @@ namespace ps2x::iop::detail
         case 5:
         case 6:
         case 7:
-        case 8:
-        case 9:
-        case 10:
-        case 11:
         case 14: // InitRpc
         case 15:
         case 16:
             setV0(0);
             return true;
+        case 8: // sceSifSetCmdBuffer(SifCmdHandlerData_t *table, int count)
+        case 9: // sceSifSetSysCmdBuffer(SifCmdHandlerData_t *table, int count)
+        {
+            uint32_t &table = ordinal == 8 ? m_userCmdTable : m_systemCmdTable;
+            uint32_t &count = ordinal == 8 ? m_userCmdCount : m_systemCmdCount;
+            const uint32_t previous = table;
+            table = cpu.gpr[4];
+            count = cpu.gpr[5];
+            setV0(previous);
+            return true;
+        }
+        case 10: // sceSifAddCmdHandler(cid, handler, harg)
+        {
+            const uint32_t cid = cpu.gpr[4];
+            if (storeCmdHandler(cid, CmdHandler{cpu.gpr[5], cpu.gpr[6]}))
+                m_cmdHandlerGp[cid] = cpu.gpr[28];
+            else
+                reportCmdOnce(cid, "sceSifAddCmdHandler without a handler table entry, handler not stored");
+            setV0(0);
+            return true;
+        }
+        case 11: // sceSifRemoveCmdHandler(cid)
+        {
+            const uint32_t cid = cpu.gpr[4];
+            (void)storeCmdHandler(cid, CmdHandler{});
+            m_cmdHandlerGp.erase(cid);
+            setV0(0);
+            return true;
+        }
         case 12: // sceSifSendCmd
         case 13: // isceSifSendCmd
         {

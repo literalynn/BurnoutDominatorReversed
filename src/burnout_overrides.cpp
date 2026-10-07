@@ -35,6 +35,19 @@ constexpr Binding kBindings[] = {
     {0x003B0848, "sceSifCallRpc"},
     {0x003B2320, "sceSifSyncIop"},
     {0x003B2370, "sceSifRebootIop"},
+    // libsif commands. sceSifInitCmd is bound, so the guest command tables,
+    // its receive buffer and the IOP buffer address are never set up: every
+    // entry point that uses them goes to the runtime, which delivers commands
+    // to the IOP handlers and IOP replies to the handlers registered here.
+    {0x003AFB58, "sceSifExitCmd"},
+    {0x003AFB90, "sceSifSetCmdBuffer"},
+    {0x003AFBA8, "sceSifAddCmdHandler"},
+    {0x003AFC20, "sceSifRemoveCmdHandler"},
+    {0x003AFDA8, "sceSifSendCmd"},
+    // isceSifSendCmd: same arguments; the runtime's SIF transfers complete
+    // synchronously, so the interrupt-context variant is the same call.
+    {0x003AFDE8, "sceSifSendCmd"},
+    {0x003AF8B0, "sceSifGetSreg"},
 
     // loadfile (SID 0x80000006): wrapper of _SifLoadModule(path, argc, argv, &res, 0)
     {0x003B2180, "sceSifLoadModule"},

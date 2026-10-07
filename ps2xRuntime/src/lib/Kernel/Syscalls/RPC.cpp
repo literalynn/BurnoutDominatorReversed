@@ -970,34 +970,8 @@ namespace ps2_syscalls
 
     void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        uint32_t cid = getRegU32(ctx, 4);
-        uint32_t packetAddr = getRegU32(ctx, 5);
-        uint32_t packetSize = getRegU32(ctx, 6);
-        uint32_t srcExtra = getRegU32(ctx, 7);
-
-        uint32_t sp = getRegU32(ctx, 29);
-        uint32_t destExtra = 0;
-        uint32_t sizeExtra = 0;
-        readStackU32(rdram, sp, 0x10, destExtra);
-        readStackU32(rdram, sp, 0x14, sizeExtra);
-
-        if (sizeExtra > 0 && srcExtra && destExtra)
-        {
-            rpcCopyToRdram(rdram, destExtra, srcExtra, sizeExtra);
-        }
-
-        static int logCount = 0;
-        if (logCount < 5)
-        {
-            RUNTIME_LOG("[sceSifSendCmd] cid=0x" << std::hex << cid
-                                                 << " packet=0x" << packetAddr
-                                                 << " psize=0x" << packetSize
-                                                 << " extra=0x" << destExtra << std::dec << std::endl);
-            ++logCount;
-        }
-
-        // Return non-zero on success.
-        setReturnS32(ctx, 1);
+        // The extra data goes to IOP memory and the packet to the IOP handler.
+        ps2_stubs::sceSifSendCmd(rdram, ctx, runtime);
     }
 
     void sceRpcGetPacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

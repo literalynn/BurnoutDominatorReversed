@@ -34,6 +34,13 @@ Pourquoi lier : le runtime n’émule pas le matériel SIF. Une bibliothèque in
 | 0x3B0848 | sceSifCallRpc | `sceSifCallRpc` (liste des appels système) | Référence « SceSifrpcCall » (VA 0x431CF8) à 0x3B0990. |
 | 0x3B2320 | sceSifSyncIop | `sceSifSyncIop` | Appelée en boucle après le reboot IOP dans 0x2156B8. |
 | 0x3B2370 | sceSifRebootIop | `sceSifRebootIop` | Préfixe « rom0:UDNL » (VA 0x431FD0) puis appelle sceSifResetIop 0x3B21C8. Argument : `cdrom0:\IOP\IOPRP300.IMG;1` (VA 0x419348). |
+| 0x3AFBA8 | sceSifAddCmdHandler | `sceSifAddCmdHandler` | `(cid, handler, data)` : un cid négatif indexe la table système (+0xC des données 0x1F6F158), sinon la table utilisateur (+0x14) ; entrée de 12 octets `{handler, data, gp}`. Appelants : RWA 0x371900 (cid 1), GTFS 0x1E2390/0x1E23A4 (cid 4 et 5), 0x203228 (cid 6), libcdvd 0x377A88, fileio 0x3B11E8/0x3B1200, sceSifInitRpc invité. |
+| 0x3AFC20 | sceSifRemoveCmdHandler | `sceSifRemoveCmdHandler` | Même indexation, efface `handler`. Appelants : RWA 0x371950, libcdvd 0x3779D0. |
+| 0x3AFB90 | sceSifSetCmdBuffer | `sceSifSetCmdBuffer` | `(table, count)` : écrit la table utilisateur (+0x14) et son nombre (+0x18), renvoie l’ancienne. Seul appelant : RWA 0x3718EC. |
+| 0x3AFDA8 | sceSifSendCmd | `sceSifSendCmd` (liste des appels système, qui délègue à la version de `ps2_stubs`) | `(cid, packet, psize, src, dest, size)`, arguments 5 et 6 dans `$t0`/`$t1` ; appelle le cœur 0x3AFC70 avec le mode 0. RWA envoie la commande 0 à 0x371548, 0x371600, 0x371810 ; GTFS à 0x1E2DB4. |
+| 0x3AFDE8 | isceSifSendCmd | `sceSifSendCmd` | Même enveloppe avec le mode 1 (contexte d’interruption). Le runtime termine ses transferts SIF dans l’appel : la variante d’interruption est le même appel. Seuls appelants : les gestionnaires RPC côté EE (0x3B03F0–0x3B0604), installés par sceSifInitRpc invité. |
+| 0x3AFB58 | sceSifExitCmd | `sceSifExitCmd` | `DisableDmac(5)`, `RemoveDmacHandler(5, …)`, remise à zéro de la garde 0x3E1F88. Seul appelant 0x3B01C8, atteint par sceSifRebootIop invité. |
+| 0x3AF8B0 | sceSifGetSreg | `sceSifGetSreg` | Lit le mot `index` de la table 0x1F6F300. Seul appelant : sceSifInitRpc invité (0x3B0178). |
 | 0x3B2180 | sceSifLoadModule | `sceSifLoadModule` (liste des appels système) | Enveloppe de `_SifLoadModule(path, argc, argv, &res, 0)` ; client loadfile, SID 0x80000006 ; données 0x1F725C0–0x1F727E8. |
 | 0x3B1B48 | sceSifInitIopHeap | `sceSifInitIopHeap` | Client iopheap, SID 0x80000003. Appelée par 0x215798 avant le chargement des modules. |
 | 0x3B1BD0 | sceSifAllocSysMemory | `sceSifAllocSysMemory` | Client iopheap, RPC 4, envoi `{size, mode, addr}` construit depuis `(mode, size, addr)` : appel type `(0, 0x40700, 0)`. Le gestionnaire lit la taille dans a1. Appelants : 0x1FB828, 0x29D608, 0x3629A8, 0x3692C0, 0x372160. |
@@ -60,8 +67,8 @@ Les variables internes de libcdvd (0x3D4CD0–0x3D4D20, 0x3D5EC0, 0x3D6300, 0x3D
 |---|---|---|
 | 0x3B1E70 | Remise à zéro du client loadfile | EE seulement, sans RPC. Appelée par 0x2156B8. |
 | 0x3B1430 | Remise à zéro du client fileio | EE seulement, sans RPC. Appelée par 0x2156B8. |
-| 0x3AFBA8 / 0x3AFC20 | sceSifAddCmdHandler / sceSifRemoveCmdHandler | Vérifiées au désassemblage ; restent invitées. |
-| 0x3AFDA8 | sceSifSendCmd | Enveloppe de 0x3AFC70. |
+| 0x3AFC70 | Cœur de sceSifSendCmd (`mode` en a1) | Seuls appelants : 0x3AFDA8 et 0x3AFDE8, liés. Il lit l’adresse du tampon IOP posée par sceSifInitCmd invité, qui ne s’exécute plus. |
+| 0x3AFE28, 0x3AF880, 0x3AF8A0 | Gestionnaire d’interruption DMAC 5 et gestionnaires système « set sreg » / « change saddr » de libsif | Installés seulement par sceSifInitCmd invité (lié) : inaccessibles. |
 | 0x3B0A48 | sceSifCheckStatRpc | Vérifiée au désassemblage. |
 | 0x3AFF70 | sceSifWriteBackDCache | Déduite. |
 | 0x3B2960 / 0x3B29B0 | DI / EI | Déduites. |
@@ -76,5 +83,5 @@ Les variables internes de libcdvd (0x3D4CD0–0x3D4D20, 0x3D5EC0, 0x3D6300, 0x3D
 
 - libdbc/libpad2 (marqueurs ci-dessus) : client du service DBCMAN (SID 0x80001300), chargé physiquement par l’IOP.
 - libmc 3020 : client MCSERV (SID 0x80000400).
-- Client GTFS de Criterion : `FUN_001E2278(0x561D18, 1, …, 0x419368, 3, 0x20)` lie le SID 0x475453 (« GTS ») à 0x1E23C8. Il est servi par GTFSCDVD.IRX exécuté dans l’IOP émulé ; il ne faut pas le lier tant que l’IRX fonctionne.
-- Client audio RenderWare (RWA.IRX / B4ROUTE.IRX) : chaîne « EE  RwaRPCTransfer » à VA 0x42C9B0.
+- Client GTFS de Criterion : `FUN_001E2278(0x561D18, 1, …, 0x419368, 3, 0x20)` lie le SID 0x475453 (« GTS ») à 0x1E23C8 ; RPC 1 (init), 3 (ouverture), 5 (lecture par blocs de 0xA800 octets). GTFSCDVD.IRX copie les secteurs vers l’EE par `sceSifSetDmaIntr` (sifman:32), puis signale la fin par la commande SIF 4, dont le gestionnaire EE 0x1E2DF0 fait `iSignalSema`. Servi par l’IRX dans l’IOP émulé : ne pas le lier.
+- Client audio RenderWare (RWA.IRX / B4ROUTE.IRX), 0x371630 (chaîne « EE  RwaRPCTransfer : ERROR! DMA command queue FULL! » à VA 0x42C9B0) : commandes envoyées à l’IOP par `sceSifSendCmd(0, …)` vers le gestionnaire RWA+0x3D70, enregistré par `sceSifAddCmdHandler(0, …)` dans une table de 8 entrées (`sceSifSetCmdBuffer`). Réponses par la commande 1 vers 0x3719D8 ; l’EE attend la réponse 0x12 (drapeau gp−0x7A9C, boucle 0x372BC8). Servi par l’IRX : ne pas le lier.

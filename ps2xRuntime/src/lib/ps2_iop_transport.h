@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ps2_runtime.h"
+#include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 
 #include <utility>
@@ -31,6 +32,22 @@ public:
     [[nodiscard]] static bool canBindRpc(const PS2Runtime *runtime, uint32_t sid)
     {
         return !runtime || runtime->canBindIopRpc(sid);
+    }
+
+    // EE sceSifSendCmd: runs the IOP handler of the packet's command id.
+    [[nodiscard]] static bool deliverSifCommand(
+        PS2Runtime *runtime,
+        uint8_t *rdram,
+        R5900Context *context,
+        const void *packet,
+        size_t packetSize)
+    {
+        if (!runtime || !runtime->m_iopHost || !runtime->m_iopSubsystem)
+        {
+            return false;
+        }
+        auto scope = runtime->m_iopHost->enterCall(context, rdram);
+        return runtime->m_iopSubsystem->deliverSifCommand(packet, packetSize);
     }
 
     static void notifyTransfer(
