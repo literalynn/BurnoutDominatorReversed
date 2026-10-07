@@ -19,7 +19,7 @@ if (-not $MSBuildPath) {
     if (-not (Test-Path -LiteralPath $vswherePath)) {
         throw 'vswhere.exe was not found. Pass -MSBuildPath with the full path to MSBuild.exe.'
     }
-    $MSBuildPath = & $vswherePath -latest -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild/**/Bin/MSBuild.exe' | Select-Object -First 1
+    $MSBuildPath = & $vswherePath -latest -products '*' -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'MSBuild/**/Bin/MSBuild.exe' | Select-Object -First 1
     if (-not $MSBuildPath) {
         throw 'MSBuild.exe was not found in an installed Visual Studio instance.'
     }
