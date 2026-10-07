@@ -93,6 +93,8 @@ Commande : `python tools/project.py run --headless --seconds 20 --status-ms 1000
 | 7 | + ISO réelle (Windows) | 124 ; machine d’état 0x207D08 à l’état 9 (0x29DA28 attend l’ouverture du flux `sound_generic.awd`) ; l’écran LOADING ne bouge plus | RWA reçoit et répond aux commandes SIF, mais son moteur est cadencé par les IRQ du SPU2, que l’IOP émulé ne générait pas (§8). |
 | 8 | + SPU2 (§8) | 124 ; EE en boucle à 0x3B1DA0 (appelant 0x3B1D1C) | Tout `sound_generic.awd` est transféré (commandes 0x32/0x33). Puis 0x396A78 appelle 0x3B1EA8 (sceSifSearchModuleByName) : 0x3B1CE0 réessaie sans fin le bind du SID loadfile 0x80000006, qu’aucun serveur ne sert (loadfile est dans l’IOPRP300.IMG, non exécuté). |
 | 9 | + sceSifSearchModuleByName (29 liaisons), IOP et timers avancés par lots | 124 ; boucle principale (0x208390, sous-état 7), état de démarrage 0x1C, écran LOADING à environ 93 % ; 25 à 50 images par seconde | `0x207D08` a terminé. La scène de chargement attend `TRACKS/EATRAX1.RWS` : blocage actuel (§9). Les lectures `FE/FEMAIN.BIN` et `TRACKS/US/S7_V1/STATIC.DAT` ont abouti. |
+| 10 | + lectures CD au-delà d’un bloc alloué (§9) | 124 ; le chargement se termine (sous-état 5) puis le thread principal dort à 0x3ACF08 (`SleepThread` appelé par 0x1E7328), plus aucune image | 0x1E7328 attend une alarme (`SetAlarm(6, 0x1E7308, thread)`) qui ne se déclenche jamais : le correctif noyau de libkernel a remplacé les appels système d’alarme (§11). |
+| 11 | + appels système remplacés par du code non recompilé servis par le runtime | 124 ; écran noir, EE en boucle à 0x38A2C8 | Les alarmes fonctionnent ; le jeu lance la vidéo d’introduction et son analyseur MPEG-2 attend des données de l’IPU (§12). |
 
 Les lancements 4 à 6 ont été faits sous Linux à partir du paquet `tools/cloud_bundle.py`, sans l’ISO (`--disc` seul, image virtuelle). La machine à états de démarrage est `0x207D08`, état à 0x51B920 : 1 = modules IOP, 2 = police, 3 et 4 = `Data/Global%c.txd`, puis la suite.
 
@@ -103,8 +105,10 @@ Pendant les lancements 1 et 2, le compteur VBlank avance de 60 par seconde : le 
 1. Lecture de `rom0:ROMVER` : **réglé** (liaisons fileio, profil ROM0 de 16 octets).
 2. Chargement physique des 11 IRX : **réglé** (imports du §5).
 3. Client GTFS (SID « GTS ») : **réglé** sur l’ISO réelle ; le jeu lit la police, `FE/FEMAIN.BIN` et `TRACKS/US/S7_V1/STATIC.DAT` (lancement 9).
-4. Lecture de `TRACKS/EATRAX1.RWS` : **ouvert**, voir §9.
-5. Manettes et carte mémoire : absence de modèle SIO2 (§4), **ouvert** ; cela bloquera dès que le jeu attendra une entrée.
+4. Lecture de `TRACKS/EATRAX0.RWS` / `EATRAX1.RWS` : **réglé** (§9).
+5. Alarmes EE remplacées par le correctif noyau de libkernel : **réglé** (§11).
+6. Vidéo d’introduction (IPU) : **ouvert**, voir §12.
+7. Manettes et carte mémoire : absence de modèle SIO2 (§4), **ouvert** ; cela bloquera dès que le jeu attendra une entrée.
 
 ## 8. SPU2 et audio RenderWare (RWA)
 
@@ -123,7 +127,7 @@ Pendant les lancements 1 et 2, le compteur VBlank avance de 60 par seconde : le 
 - EE : gestionnaire de la commande 1 à 0x3719D8 (file de 8 entrées à 0x1F64740, `iSignalSema` du sémaphore stocké en 0x432D78), thread 2 (entrée 0x362F50). IOP : gestionnaire de la commande 0 à RWA+0x3D70 (file de 8 entrées et SignalSema), thread T11 (RWA+0x4044, 0x38B0), transferts SPU par 0x4568 puis 0xA44C (liste à 0xC300 + 8 × indice), pompes de canal T12 et T13, threads d’ISR de priorité 9.
 - Régime établi : à chaque image, commande 0x14 (0x680 octets vers l’IOP 0x5A850, avec un compteur croissant) et réponse 0x14.
 
-## 9. Blocage actuel (lancement 9)
+## 9. Lecture CD refusée (lancement 9, réglé au lancement 10)
 
 La machine d’état de 0x207D08 est terminée (état 0x1C à 0x51B920) et `main` (0x21B3F8) boucle sur 0x208390, dont le sous-état à 0x51B950 reste à 7 : tant que 0x208E50 ne renvoie rien, la scène de chargement (objet 0x4C1B38, état 8 à +0x1C ; sous-objet 0x1CEDB00, état 7) attend la requête de fichier `tracks/eatrax1.rws` (objet 0x1CF55C0, état de poignée 2 à +0x24C).
 
@@ -132,7 +136,7 @@ Observé :
 - `BDR_TRACE_CDVD=1` : environ 560 `sceCdRead` par seconde, toujours `lsn=2007487` (début de `TRACKS/EATRAX1.RWS`), 4 secteurs, vers l’IOP 0x12C210 (tampon de RWA).
 - `BDR_IOP_PROFILE=1` : près de 100 % des instructions IOP sont dans GTFSCDVD.IRX, 0x1110–0x1150 et les stubs cdvdman 0x2168 (`sceCdRead`) et 0x2180/0x2188 : c’est la boucle interne de 0x10CC, `do { sceCdDiskReady(1) ; … ; sceCdRead(…) } while (retour == 0)`. `sceCdRead` renvoie donc 0 à chaque fois et la boucle ne laisse pas le temps aux autres threads IOP, dont la requête RWA 0x32 reste sans réponse 0x33.
 
-Hypothèse non vérifiée : `readSectors` (`iop_cdvd.cpp`) refuse la lecture parce que la destination 0x12C210–0x12E210 n’est pas entièrement « possédée » (allouée ou écrite, `IopMemory::ownsRamRange`) ; les autres causes d’échec (lecture de l’ISO, écriture en RAM) ont fonctionné pour les 418 lectures précédentes. Prochaine étape : journaliser le premier octet non possédé et le bloc alloué qui contient 0x12C210.
+Cause, vérifiée en journalisant le refus : le jeu lit 4 secteurs (0x2000 octets) au début d’un bloc de 0x1840 octets alloué à 0x12C210 ; les 0x7C0 derniers octets tombent dans de la mémoire libre (premier octet libre 0x12DA50). `readSectors` (`iop_cdvd.cpp`, upstream) refusait toute lecture dont la destination n’était pas entièrement allouée ou écrite (`IopMemory::ownsRamRange`) et renvoyait 0, que GTFSCDVD réessayait sans fin. Le DMA CD de la console écrit les secteurs entiers là où on le lui demande : `readSectors` ne vérifie plus que les bornes de la RAM IOP et signale le débordement (au plus 4 fois). La même lecture vise `EATRAX0.RWS` (LSN 1911758) ou `EATRAX1.RWS` selon le morceau tiré au hasard.
 
 ## 10. Outils d’observation
 
@@ -146,6 +150,21 @@ Variables d’environnement, à poser avant `python tools/project.py run …` (t
 | `BDR_TRACE_CDVD=1` | chaque `sceCdRead` (LBA, secteurs, destination) ; le répertoire ISO9660 de l’ISO permet de retrouver le fichier |
 | `BDR_IOP_PROFILE=1` | où l’IOP passe ses instructions (par tranches de 16 octets, module + offset) |
 | `BDR_TRACE_IOPCALLS`, `BDR_TRACE_IOPHW`, `PS2X_IOP_TRACE_SPU`, `BDR_TRACE_GS` | appels de fonctions IOP choisies, écritures matérielles IOP, SPU2, GS |
+| `BDR_TRACE_KERNEL=1` | `SetSyscall` (numéro, gestionnaire, code recompilé ou non), `SetAlarm`, `CancelAlarm` et expiration des alarmes |
 | `BDR_PROFILE=1` | échantillonneur du thread invité (EE, IOP et GS y tournent) ; affiche les fonctions les plus fréquentes à la fin du lancement. Windows seulement ; il faut le PDB, produit par `/DEBUG` (`cmake/Burnout.cmake`) |
 
 Avec ces outils, le profil a montré que le jeu tournait à 7 % du temps réel parce que l’IOP et les timers étaient avancés tous les 8 cycles EE ; ils le sont maintenant par lots de 2048 cycles (CHANGES.md).
+
+## 11. Correctif noyau de libkernel (lancement 10)
+
+Au démarrage, libkernel installe deux correctifs du noyau EE, comme sur console (trace `BDR_TRACE_KERNEL=1`) :
+
+- 0x3B2AC0 puis 0x3B2E78 (alarmes) : `SetSyscall(0x83, 0x3B2A68)` (recherche d’adresse) et `SetSyscall(0x5A, …)` (copie), copie de code en mémoire noyau, `SetSyscall(0x5B, 0x80076000)`, puis pour 0xFC, 0xFE, 0xFD, 0xFF, 0x12C et 0x8 : `SetSyscall(n, syscall 0x5B(n))`.
+- 0x3B24F0 (drapeaux d’événement) : `SetSyscall(0x5A, 0x3B2498)`, copie de 0x330 octets de 0x3E2038 vers 0x80075000, `SetSyscall(0x5B, 0x80075000)`, `SetSyscall(0x54, 0x3B2840)`, puis 0x55 à 0x59.
+
+Le code copié en mémoire noyau n’est pas recompilé : le runtime ne peut pas l’exécuter. Avant, un appel système dont le gestionnaire remplacé n’était pas du code recompilé renvoyait −1 ; `syscall 0x5B` renvoyait donc −1, et `SetAlarm`, `iSetAlarm`, `ReleaseAlarm`, `iReleaseAlarm` ainsi que les drapeaux d’événement 0x55–0x59 échouaient tous. `sleep(6)` (0x1E7328 : `SetAlarm(6, 0x1E7308, thread)` puis `SleepThread`) ne se réveillait jamais. Désormais, un tel appel est servi par l’implémentation du runtime (`dispatchSyscallOverride`, `Syscalls/System.cpp`). `SetSyscall` écrit toujours l’entrée dans la table noyau visible par le jeu, que le correctif utilise aussi pour écrire des mots du noyau par des index signés. Test : « a syscall override that is not recompiled code falls back to the builtin » (`ps2x_tests`).
+
+## 12. Blocage actuel (lancement 11)
+
+Après le chargement, l’écran devient noir et le thread principal tourne dans 0x38A2C8 : l’analyseur de flux MPEG-2 de la bibliothèque vidéo du jeu (codes de début 0x1B3 séquence, 0x1B8 GOP, 0x100 image, 0x1B7 fin) cherche un code de début (`0x388030(…, 0x18)` jusqu’à 1, puis `0x3880C0(…, 8)`), en lisant les bits du décodeur IPU. Les compteurs DMA et GIF ne bougent plus. Il faut vérifier comment le flux arrive à l’IPU (DMA canal 4 vers l’IPU, commandes BCLR/FDEC/IDEC/BDEC) et ce que l’émulation IPU du runtime renvoie.
+
