@@ -90,14 +90,62 @@ Commande : `python tools/project.py run --headless --seconds 20 --status-ms 1000
 | 4 | + fileio, libcdvd internes (21), ROMVER PAL | Linux (cloud, sans ISO), 124 ; JALR vers 0 à 0x32C054 | `RwEngineInit` (0x32CBF0) échoue : `EndOfHeap` vaut 0x1F00000, sous la base du tas 0x1F9BB00. Tout `sbrk` (0x3AD6B0) échoue, RenderWare écrit par un pointeur nul et sa table de fonctions (0x1F578E4) reste vide. |
 | 5 | + `SetupHeap(-1)` terminé à la pile du thread ; mémoire du runtime sous l’image | 124 ; boucle à 0x372BC8 | `RwEngineInit` réussit et les 11 IRX se chargent. L’EE attend la réponse 0x12 de RWA.IRX : les commandes SIF de l’EE n’atteignaient pas les gestionnaires des IRX. |
 | 6 | + libsif commandes (28), sifcmd:8–11 et sifman:32 côté IOP | 124 ; boucle de démarrage 0x21B5B0 à l’état 4 | RWA répond, GTFS lit `Language/Fonts/dirtyEra.bin` (RPC 1, 3, 5, DMA puis commande 4). L’état 3 demande `Data/GlobalE.txd` (808 Ko), absent du paquet cloud de 30 Mo : seul un lancement avec l’ISO peut aller plus loin. Une image GIF par boucle. |
+| 7 | + ISO réelle (Windows) | 124 ; machine d’état 0x207D08 à l’état 9 (0x29DA28 attend l’ouverture du flux `sound_generic.awd`) ; l’écran LOADING ne bouge plus | RWA reçoit et répond aux commandes SIF, mais son moteur est cadencé par les IRQ du SPU2, que l’IOP émulé ne générait pas (§8). |
+| 8 | + SPU2 (§8) | 124 ; EE en boucle à 0x3B1DA0 (appelant 0x3B1D1C) | Tout `sound_generic.awd` est transféré (commandes 0x32/0x33). Puis 0x396A78 appelle 0x3B1EA8 (sceSifSearchModuleByName) : 0x3B1CE0 réessaie sans fin le bind du SID loadfile 0x80000006, qu’aucun serveur ne sert (loadfile est dans l’IOPRP300.IMG, non exécuté). |
+| 9 | + sceSifSearchModuleByName (29 liaisons), IOP et timers avancés par lots | 124 ; boucle principale (0x208390, sous-état 7), état de démarrage 0x1C, écran LOADING à environ 93 % ; 25 à 50 images par seconde | `0x207D08` a terminé. La scène de chargement attend `TRACKS/EATRAX1.RWS` : blocage actuel (§9). Les lectures `FE/FEMAIN.BIN` et `TRACKS/US/S7_V1/STATIC.DAT` ont abouti. |
 
 Les lancements 4 à 6 ont été faits sous Linux à partir du paquet `tools/cloud_bundle.py`, sans l’ISO (`--disc` seul, image virtuelle). La machine à états de démarrage est `0x207D08`, état à 0x51B920 : 1 = modules IOP, 2 = police, 3 et 4 = `Data/Global%c.txd`, puis la suite.
 
 Pendant les lancements 1 et 2, le compteur VBlank avance de 60 par seconde : le jeu n’a pas encore appelé SetGsCrt, qui fait passer le runtime à 50 Hz en PAL.
 
-## 7. Blocages suivants prévisibles
+## 7. Blocages suivants
 
-1. Lecture de `rom0:ROMVER` (§2, point 4) : sans liaison fileio, boucle sur le bind du SID 0x80000001. Corrigé par les liaisons fileio et un profil ROM0 de 16 octets.
-2. Chargement physique des 11 IRX : imports ci-dessus ; DS2O chargé deux fois.
-3. Client GTFS (SID « GTS ») : fonctionne avec GTFSCDVD.IRX dans l’IOP émulé (lancement 6). Reste à vérifier sur l’ISO réelle, avec les vrais numéros de secteurs.
-4. Manettes et carte mémoire : absence de modèle SIO2 (§4).
+1. Lecture de `rom0:ROMVER` : **réglé** (liaisons fileio, profil ROM0 de 16 octets).
+2. Chargement physique des 11 IRX : **réglé** (imports du §5).
+3. Client GTFS (SID « GTS ») : **réglé** sur l’ISO réelle ; le jeu lit la police, `FE/FEMAIN.BIN` et `TRACKS/US/S7_V1/STATIC.DAT` (lancement 9).
+4. Lecture de `TRACKS/EATRAX1.RWS` : **ouvert**, voir §9.
+5. Manettes et carte mémoire : absence de modèle SIO2 (§4), **ouvert** ; cela bloquera dès que le jeu attendra une entrée.
+
+## 8. SPU2 et audio RenderWare (RWA)
+
+**Modèle SPU2** (`ps2xIOP/src/emulator/core/iop_spu2.cpp`, accès 16 bits depuis `iop_memory.cpp`).
+
+- Registres à 0x1F900000 : voix de 0x10 octets (VOLL, VOLR, PITCH, ADSR1, ADSR2, ENVX, VOLX), adresses de voix SSA/LSAX/NAX, registres de cœur à +0x400 par cœur (PMON, NON, VMIXL/R, MMIX, ATTR, IRQA, KON, KOFF, TSA, DATA, ADMAS, ENDX, STATX), volumes maîtres à 0x760 + 0x28 par cœur, SPDIF_IRQINFO à 0x7C2.
+- ATTR : 0x8000 active le cœur, 0x40 les IRQ, les bits 5:4 choisissent le transfert (1 PIO en écriture, 2 DMA en écriture, 3 DMA en lecture). STATX vaut 0 au repos, 0x400 pendant un transfert et 0x80 une fois terminé tant que le mode de transfert reste actif. libsd (exécuté physiquement) attend `(STATX & 0x7FF) == 0` : un STATX forcé à 0x80 au repos bloquait `sceSdInit`.
+- DMA SPU : canal 4 (cœur 0, CHCR 0x1F8010C8, IRQ 0x24) et canal 8 (cœur 1, CHCR 0x1F801508, IRQ 0x28) ; CHCR 0x01000201 = démarrage RAM → SPU, BCR = (blocs << 16) | 16 mots. Une IRQ d’adresse (IRQA atteinte par une voix ou un transfert) lève l’IRQ IOP 9 et SPDIF_IRQINFO.
+- Horloge : à chaque échantillon (48 kHz), un cœur activé écrit les tampons de sortie du mélangeur en RAM SPU2 (voix 1, voix 3, mélange gauche et droite, 0x200 demi-mots chacun ; pour le cœur 0, les demi-mots 0x400 à 0x5FF reçoivent la voix 1) et teste IRQA sur les deux cœurs. RWA place IRQA dans l’un de ces tampons (demi-mots 0x400 puis 0x500) pour recevoir une IRQ tous les 256 échantillons : c’est l’horloge de son moteur, sans laquelle l’ouverture d’un flux ne se termine jamais.
+- Limites : pas de réverbération, de bruit, de modulation de hauteur, d’ADMA ni de balayages de volume ; interpolation linéaire ; aucune sortie vers une carte son de l’hôte.
+
+**Protocole RWA** (commandes SIF, cf. aussi SDK_FUNCTIONS.md).
+
+- EE → IOP : commande 0, type dans le mot 4 du paquet (0x49, 1, 2, 0x11, 0x13, 0x15, 0x4E, 0x30, 0x32, 5, 0x14 au démarrage). IOP → EE : commande 1, type + 1.
+- 0x32 : requête de tranche de flux ; le descripteur de 0x70 octets part vers l’IOP 0x12C030. La réponse 0x33 porte la fonction de fin 0x3721C0, qui efface l’indicateur « en attente » (0x10) du descripteur et appelle le rappel de l’emplacement de flux. 0x372110 attend ce bit.
+- EE : gestionnaire de la commande 1 à 0x3719D8 (file de 8 entrées à 0x1F64740, `iSignalSema` du sémaphore stocké en 0x432D78), thread 2 (entrée 0x362F50). IOP : gestionnaire de la commande 0 à RWA+0x3D70 (file de 8 entrées et SignalSema), thread T11 (RWA+0x4044, 0x38B0), transferts SPU par 0x4568 puis 0xA44C (liste à 0xC300 + 8 × indice), pompes de canal T12 et T13, threads d’ISR de priorité 9.
+- Régime établi : à chaque image, commande 0x14 (0x680 octets vers l’IOP 0x5A850, avec un compteur croissant) et réponse 0x14.
+
+## 9. Blocage actuel (lancement 9)
+
+La machine d’état de 0x207D08 est terminée (état 0x1C à 0x51B920) et `main` (0x21B3F8) boucle sur 0x208390, dont le sous-état à 0x51B950 reste à 7 : tant que 0x208E50 ne renvoie rien, la scène de chargement (objet 0x4C1B38, état 8 à +0x1C ; sous-objet 0x1CEDB00, état 7) attend la requête de fichier `tracks/eatrax1.rws` (objet 0x1CF55C0, état de poignée 2 à +0x24C).
+
+Observé :
+
+- `BDR_TRACE_CDVD=1` : environ 560 `sceCdRead` par seconde, toujours `lsn=2007487` (début de `TRACKS/EATRAX1.RWS`), 4 secteurs, vers l’IOP 0x12C210 (tampon de RWA).
+- `BDR_IOP_PROFILE=1` : près de 100 % des instructions IOP sont dans GTFSCDVD.IRX, 0x1110–0x1150 et les stubs cdvdman 0x2168 (`sceCdRead`) et 0x2180/0x2188 : c’est la boucle interne de 0x10CC, `do { sceCdDiskReady(1) ; … ; sceCdRead(…) } while (retour == 0)`. `sceCdRead` renvoie donc 0 à chaque fois et la boucle ne laisse pas le temps aux autres threads IOP, dont la requête RWA 0x32 reste sans réponse 0x33.
+
+Hypothèse non vérifiée : `readSectors` (`iop_cdvd.cpp`) refuse la lecture parce que la destination 0x12C210–0x12E210 n’est pas entièrement « possédée » (allouée ou écrite, `IopMemory::ownsRamRange`) ; les autres causes d’échec (lecture de l’ISO, écriture en RAM) ont fonctionné pour les 418 lectures précédentes. Prochaine étape : journaliser le premier octet non possédé et le bloc alloué qui contient 0x12C210.
+
+## 10. Outils d’observation
+
+Variables d’environnement, à poser avant `python tools/project.py run …` (toutes désactivées par défaut) :
+
+| Variable | Effet |
+|---|---|
+| `BDR_STATUS_DETAIL=1` | à chaque ligne `[status]` : threads EE (entrée, pc, ra, priorité, attente), sémaphores, drapeaux, threads et objets du noyau IOP, journal de ses opérations |
+| `BDR_STATUS_WATCH=0xA,0xB+N,@0xC+OFF` | mots de la mémoire invitée ajoutés à l’état : un mot, N mots, ou le mot situé à OFF du pointeur stocké en 0xC |
+| `BDR_TRACE_SIF=1` | commandes SIF dans les deux sens (1 200 premières, 80 pour les commandes 4 et 5 de GTFS) |
+| `BDR_TRACE_CDVD=1` | chaque `sceCdRead` (LBA, secteurs, destination) ; le répertoire ISO9660 de l’ISO permet de retrouver le fichier |
+| `BDR_IOP_PROFILE=1` | où l’IOP passe ses instructions (par tranches de 16 octets, module + offset) |
+| `BDR_TRACE_IOPCALLS`, `BDR_TRACE_IOPHW`, `PS2X_IOP_TRACE_SPU`, `BDR_TRACE_GS` | appels de fonctions IOP choisies, écritures matérielles IOP, SPU2, GS |
+| `BDR_PROFILE=1` | échantillonneur du thread invité (EE, IOP et GS y tournent) ; affiche les fonctions les plus fréquentes à la fin du lancement. Windows seulement ; il faut le PDB, produit par `/DEBUG` (`cmake/Burnout.cmake`) |
+
+Avec ces outils, le profil a montré que le jeu tournait à 7 % du temps réel parce que l’IOP et les timers étaient avancés tous les 8 cycles EE ; ils le sont maintenant par lots de 2048 cycles (CHANGES.md).
