@@ -26,7 +26,7 @@ Without `--game`, `build` compiles the tools, the runtime and every test (no gam
 
 ## Cloud sessions
 
-The owner can upload at most 30 MB, never the ISO. On the PC with the disc, `python tools/cloud_bundle.py --iso <ISO>` writes `bdr-cloud.zip` (Desktop): ELF, SYSTEM.CNF, all `IOP/` files, ELF/IRX reports, the Ghidra map, previous run logs and as many small disc files as fit, with `bundle.json` as manifest. In the cloud: unzip it into a scratch directory `W`, then with `BDR_WORK_DIR=W`: `project.py configure --generator Ninja`, `build`, `generate --tool W/build/ps2xRecomp/ps2_recomp --function-map W/local/analysis/ghidra/functions.ee.csv --augment`, `configure --game`, `build --game`. Without the ISO, disc reads beyond the bundled files fail: debug the boot up to the first missing file, and say so.
+The owner can upload at most 30 MB, never the ISO. On the PC with the disc, `python tools/cloud_bundle.py --iso <ISO>` writes `bdr-cloud.zip` (Desktop): ELF, SYSTEM.CNF, all `IOP/` files, ELF/IRX reports, the Ghidra map, previous run logs, the disc files read during the LOADING screen (`BOOT_FILES`) and as many small disc files as fit, with `bundle.json` as manifest. In the cloud: unzip it into a scratch directory `W`, then with `BDR_WORK_DIR=W`: `project.py configure --generator Ninja`, `build`, `generate --tool W/build/ps2xRecomp/ps2_recomp --function-map W/local/analysis/ghidra/functions.ee.csv --augment`, `configure --game`, `build --game`. Without the ISO, disc reads beyond the bundled files fail: debug the boot up to the first missing file, and say so.
 
 ## Rules
 

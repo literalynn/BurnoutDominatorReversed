@@ -77,6 +77,19 @@ class CloudBundleTests(unittest.TestCase):
         self.assertEqual(result["extra_disc_files"], [])
         self.assertEqual(result["disc_files_not_included"], 1)
 
+    def test_boot_files_come_first_and_never_stop_the_fill(self):
+        output = self.root / "boot.zip"
+        probe = build_bundle(self.iso, output, 29 * 1024 * 1024, self.work, self.lock)
+        needed = probe["required_zip_bytes"] + RESERVE_BYTES + ENTRY_OVERHEAD + 10
+        # IOP/IOPRP300.IMG is already required; ASSET.DAT is the only extra file.
+        result = build_bundle(self.iso, output, needed + 100, self.work, self.lock,
+                              boot_files=["ABSENT.BIN", "ASSET.DAT"])
+        self.assertEqual([e["path"] for e in result["extra_disc_files"]], ["ASSET.DAT"])
+        # A boot file that does not fit is skipped, not the end of the fill.
+        result = build_bundle(self.iso, output, needed - 100, self.work, self.lock, boot_files=["ASSET.DAT"])
+        self.assertEqual(result["extra_disc_files"], [])
+        self.assertEqual(result["disc_files_not_included"], 1)
+
     def test_rejects_another_disc_and_reports_missing_map(self):
         with self.assertRaises(BundleError):
             build_bundle(self.iso, self.root / "x.zip", 29 * 1024 * 1024, self.work,
