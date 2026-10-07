@@ -22,35 +22,6 @@ namespace ps2_stubs
         ps2_syscalls::SifLoadModule(rdram, ctx, runtime);
     }
 
-    void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        const uint32_t srcAddr = getRegU32(ctx, 7); // $a3
-        const uint32_t dstAddr = readStackU32(rdram, ctx, 16);
-        const uint32_t size = readStackU32(rdram, ctx, 20);
-        if (size != 0u && srcAddr != 0u && dstAddr != 0u)
-        {
-            std::vector<uint8_t> payload(size);
-            bool valid = runtime != nullptr;
-            for (uint32_t i = 0; i < size; ++i)
-            {
-                const uint8_t *src = getConstMemPtr(rdram, srcAddr + i);
-                if (!src)
-                {
-                    valid = false;
-                    break;
-                }
-                payload[i] = *src;
-            }
-            if (!valid || !runtime->writeIopMemory(dstAddr, payload.data(), payload.size()))
-            {
-                setReturnS32(ctx, 0);
-                return;
-            }
-        }
-
-        setReturnS32(ctx, 1);
-    }
-
     namespace
     {
         struct Ps2SifDmaTransfer
@@ -287,6 +258,57 @@ namespace ps2_stubs
             runtime->guestFree(packetAddress);
             return false;
         }
+    }
+
+    // sceSifSendCmd(cid, packet, packetSize, extraSource, extraDestination, extraSize).
+    // The EE ABI passes the fifth and sixth arguments in $t0 and $t1. Like the
+    // SDK, fills the packet header {psize | dsize << 8, dest, cid}, sends the
+    // extra data to IOP memory, then the packet, which the IOP hands to the
+    // handler of its command id. Returns a DMA id, or 0 for a bad packet.
+    void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        constexpr uint32_t kHeaderSize = 16u;
+        constexpr uint32_t kMaxPacketSize = 112u;
+        const uint32_t cid = getRegU32(ctx, 4);
+        const uint32_t packetAddr = getRegU32(ctx, 5);
+        const uint32_t packetSize = getRegU32(ctx, 6) & 0xFFu;
+        const uint32_t srcAddr = getRegU32(ctx, 7);
+        const uint32_t dstAddr = getRegU32(ctx, 8);
+        const int32_t extraSize = static_cast<int32_t>(getRegU32(ctx, 9));
+
+        if (!runtime || packetSize < kHeaderSize || packetSize > kMaxPacketSize ||
+            !canAccessEeRange(rdram, packetAddr, packetSize))
+        {
+            setReturnS32(ctx, 0);
+            return;
+        }
+
+        uint32_t header[3] = {packetSize, 0u, cid};
+        if (extraSize > 0)
+        {
+            const uint32_t size = static_cast<uint32_t>(extraSize);
+            std::vector<uint8_t> payload(size);
+            if (!readEeRange(rdram, srcAddr, payload.data(), size) ||
+                !runtime->writeIopMemory(dstAddr, payload.data(), payload.size()))
+            {
+                setReturnS32(ctx, 0);
+                return;
+            }
+            header[0] |= size << 8u;
+            header[1] = dstAddr;
+        }
+
+        const auto *headerBytes = reinterpret_cast<const uint8_t *>(header);
+        for (uint32_t i = 0u; i < sizeof(header); ++i)
+        {
+            *getMemPtr(rdram, packetAddr + i) = headerBytes[i];
+        }
+        std::array<uint8_t, kMaxPacketSize> packet{};
+        (void)readEeRange(rdram, packetAddr, packet.data(), packetSize);
+        // A command without an IOP handler is dropped by the IOP; the DMA
+        // itself still completes.
+        (void)PS2IopTransport::deliverSifCommand(runtime, rdram, ctx, packet.data(), packetSize);
+        setReturnS32(ctx, static_cast<int32_t>(allocateSifDmaTransferId()));
     }
 
     void sceSifAddCmdHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

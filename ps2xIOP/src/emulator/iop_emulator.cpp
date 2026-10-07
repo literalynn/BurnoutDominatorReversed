@@ -38,6 +38,7 @@ namespace ps2x::iop::detail
         constexpr uint32_t kCallStackSize = 0x2000u;
         constexpr uint32_t kCallStackCapacity = (kCallStackLimit - kCallStackBase) / kCallStackSize;
         constexpr uint64_t kCdvdCompletionCycles = 128u;
+        constexpr uint64_t kSifDmaCompletionCycles = 128u;
 
         uint32_t physicalAddress(uint32_t address)
         {
@@ -343,9 +344,17 @@ namespace ps2x::iop::detail
                 return ImportDisposition::Handled;
             if (iequals(call.library, "sifman"))
             {
-                return rpc.dispatchSifManImport(call.ordinal, cpu)
-                           ? ImportDisposition::Handled
-                           : missingBuiltinImport(call, cpu);
+                if (!rpc.dispatchSifManImport(call.ordinal, cpu))
+                    return missingBuiltinImport(call, cpu);
+                if (const auto callback = rpc.takeDmaCallback())
+                {
+                    // The SIF DMA interrupt runs the sceSifSetDmaIntr handler
+                    // after the transfer, not inside the call.
+                    pendingGuestCallbacks.emplace(
+                        totalCycles + kSifDmaCompletionCycles,
+                        ScheduledGuestCallback{callback->function, callback->gp, callback->argument});
+                }
+                return ImportDisposition::Handled;
             }
             if (iequals(call.library, "vblank") && vblank.dispatchImport(call.ordinal, cpu, totalCycles))
                 return ImportDisposition::Handled;
@@ -777,6 +786,11 @@ namespace ps2x::iop::detail
     RpcResult IopEmulator::handleRpc(const RpcRequest &request)
     {
         return m_impl->rpc.handleRpc(request, *m_impl);
+    }
+
+    bool IopEmulator::deliverSifCommand(const void *packet, size_t packetSize)
+    {
+        return m_impl->rpc.deliverSifCommand(packet, packetSize, *m_impl);
     }
 
     bool IopEmulator::hasRpcServer(uint32_t sid) const noexcept

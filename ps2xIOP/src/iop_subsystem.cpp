@@ -207,6 +207,11 @@ namespace ps2x::iop
         return hle->handleRpc(request);
     }
 
+    bool IopSubsystem::deliverSifCommand(const void *packet, size_t packetSize)
+    {
+        return m_impl->emulator.deliverSifCommand(packet, packetSize);
+    }
+
     void IopSubsystem::onSifTransfer(const SifTransfer &transfer)
     {
         for (auto &service : m_impl->coreServices)
