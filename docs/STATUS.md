@@ -26,7 +26,7 @@ Preuves conservées : `local/disc_inventory.json`, `local/analysis/`, `local/ana
 - Accès au disque corrigé : les recherches EE/IOP rendent maintenant les LBA originales. Cinq exécutables de tests IOP réussissent, dont sept groupes de tests ISO ; offsets de plus de 4 Gio vérifiés. Sur le disque réel : SYSTEM.CNF au secteur 2 265 203 et SLES_546.27 au secteur 2 263 507.
 
 - SPU2 (`ps2_spu2_tests`) : décodage ADPCM, registres, transferts PIO et DMA, minuterie d’IRQ des voix, IRQ de transfert, horloge du mélangeur, fin de boucle, sortie audio : réussis.
-- Après les lancements 7 à 9 (Windows, MSVC) : `ps2x_tests` 442/442, les cinq suites ps2xIOP, `ps2_spu2_tests` et `burnout_overrides_tests` (29 liaisons) réussissent.
+- Après le lancement 11 (Windows, MSVC) : `ps2x_tests` 443/443, les cinq suites ps2xIOP, `ps2_spu2_tests` et `burnout_overrides_tests` (29 liaisons) réussissent.
 - Linux (Ubuntu 24.04, GCC 13, Ninja) : `ps2_recomp`, `ps2_analyzer`, le runtime et tous les tests compilent ; 438/438 tests du moteur, les 5 suites ps2xIOP et `burnout_overrides_tests` réussissent. Le jeu compile et se lance aussi sous Linux (session cloud, `-O1`, à partir du paquet `tools/cloud_bundle.py`, sans l’ISO).
 
 ## Démarrage du jeu
@@ -50,12 +50,16 @@ Détails et preuves : [BOOT.md](BOOT.md) et [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md)
   - la machine d’état de démarrage se termine (état 0x1C), le jeu entre dans sa boucle principale et dessine l’écran LOADING (barre orange) ;
   - l’IOP et les timers EE avancent par lots : de 3,6 à 25–50 images par seconde.
 
-Blocage actuel (lancement 9) : l’écran LOADING reste à environ 93 % et attend `TRACKS/EATRAX1.RWS`. GTFSCDVD relit en boucle les mêmes 4 secteurs parce que `sceCdRead` renvoie 0, et la requête RWA qui suit n’obtient jamais de réponse. Observations et hypothèse : [BOOT.md](BOOT.md) §9. Prochaine étape : journaliser pourquoi `readSectors` refuse cette lecture.
+- Lancements 10 et 11 :
+  - les lectures CD qui débordent d’un bloc IOP alloué sont faites comme sur console : le chargement de l’écran LOADING se termine ;
+  - les appels système remplacés par le correctif noyau de libkernel (alarmes, drapeaux d’événement), dont le code copié en mémoire noyau ne peut pas s’exécuter, sont servis par le runtime : `SetAlarm` réveille de nouveau le thread principal.
+
+Blocage actuel (lancement 11) : écran noir ; la vidéo d’introduction démarre et son analyseur MPEG-2 attend des données de l’IPU. Détails : [BOOT.md](BOOT.md) §12.
 
 Reprise sur la machine qui possède l’ISO (les variables d’observation sont décrites au §10 de BOOT.md) :
 
 ```powershell
-python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run10.log --tail 120
+python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run12.log --tail 120
 ```
 
 ## Demandes à traiter une fois le jeu jouable
