@@ -89,7 +89,7 @@ static uint32_t rpcAllocPacketAddr(uint8_t *rdram)
         return 0;
 
     uint32_t slot = g_rpc_packet_index++ % kRpcPacketPoolCount;
-    uint32_t addr = kRpcPacketPoolBase + (slot * kRpcPacketSize);
+    uint32_t addr = runtimeReservedBase() + kRpcPacketPoolOffset + (slot * kRpcPacketSize);
     rpcZeroRdram(rdram, addr, kRpcPacketSize);
     return addr;
 }
@@ -100,7 +100,7 @@ static uint32_t rpcAllocServerAddr(uint8_t *rdram)
         return 0;
 
     uint32_t slot = g_rpc_server_index++ % kRpcServerPoolCount;
-    uint32_t addr = kRpcServerPoolBase + (slot * kRpcServerStride);
+    uint32_t addr = runtimeReservedBase() + kRpcServerPoolOffset + (slot * kRpcServerStride);
     rpcZeroRdram(rdram, addr, kRpcServerStride);
     return addr;
 }
@@ -332,7 +332,7 @@ static uint32_t allocTlsAddr(uint8_t *rdram)
 
     std::lock_guard<std::mutex> lock(g_tls_mutex);
     uint32_t slot = g_tls_index++ % kTlsPoolCount;
-    uint32_t addr = kTlsPoolBase + (slot * kTlsBlockSize);
+    uint32_t addr = runtimeReservedBase() + kTlsPoolOffset + (slot * kTlsBlockSize);
     rpcZeroRdram(rdram, addr, kTlsBlockSize);
     return addr;
 }
@@ -346,7 +346,7 @@ static uint32_t allocBootModeAddr(uint8_t *rdram, size_t bytes)
     if (g_bootmode_pool_offset + aligned > kBootModePoolBytes)
         return 0;
 
-    uint32_t addr = kBootModePoolBase + g_bootmode_pool_offset;
+    uint32_t addr = runtimeReservedBase() + kBootModePoolOffset + g_bootmode_pool_offset;
     g_bootmode_pool_offset += static_cast<uint32_t>(aligned);
     rpcZeroRdram(rdram, addr, aligned);
     return addr;

@@ -9,6 +9,8 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -887,6 +889,69 @@ void register_ps2_runtime_kernel_tests()
             t.Equals(gSchedulerWaitResultA, gSchedulerSemaphoreId, "first waiter receives sid on resume");
             t.Equals(gSchedulerWaitResultB, gSchedulerSemaphoreId, "second waiter receives sid on resume");
             t.Equals(ee.semaphore(gSchedulerSemaphoreId)->count, 0, "direct handoff must not increment count");
+        });
+
+        tc.Run("an image reaching the runtime's top RAM gets that RAM moved below it", [](TestCase &t)
+        {
+            TestEnv env;
+            t.IsTrue(env.runtime.memory().initialize(), "RDRAM should initialize");
+
+            // Burnout Dominator's layout: code at 0x00100000, .bss up to 0x01F9BB00.
+            constexpr uint32_t kImageBase = 0x00100000u;
+            constexpr uint32_t kBssEnd = 0x01F9BB00u;
+            std::array<uint8_t, 52u + 32u + 8u> elf{};
+            const auto put16 = [&](size_t offset, uint16_t value) { std::memcpy(elf.data() + offset, &value, 2u); };
+            const auto put32 = [&](size_t offset, uint32_t value) { std::memcpy(elf.data() + offset, &value, 4u); };
+            put32(0u, 0x464C457Fu);
+            elf[4] = 1u; elf[5] = 1u; elf[6] = 1u;
+            put16(16u, 2u);  // ET_EXEC
+            put16(18u, 8u);  // EM_MIPS
+            put32(20u, 1u);
+            put32(24u, kImageBase);
+            put32(28u, 52u); // program headers
+            put16(40u, 52u);
+            put16(42u, 32u);
+            put16(44u, 1u);
+            put32(52u, 1u);  // PT_LOAD
+            put32(56u, 84u);
+            put32(60u, kImageBase);
+            put32(64u, kImageBase);
+            put32(68u, 8u);
+            put32(72u, kBssEnd - kImageBase);
+            put32(76u, 7u);
+            put32(80u, 16u);
+            put32(84u, 0x03E00008u); // jr ra
+            const std::filesystem::path path =
+                std::filesystem::temp_directory_path() / "ps2x_runtime_reserved_below_image.elf";
+            {
+                std::ofstream out(path, std::ios::binary);
+                out.write(reinterpret_cast<const char *>(elf.data()), static_cast<std::streamsize>(elf.size()));
+            }
+            const bool loaded = env.runtime.loadELF(path.string());
+            std::error_code ignored;
+            std::filesystem::remove(path, ignored);
+            t.IsTrue(loaded, "synthetic ELF should load");
+
+            const uint32_t block = env.runtime.guestMalloc(0x80u, 16u);
+            t.IsTrue(block >= 0x00080000u && block + 0x80u <= kImageBase,
+                     "runtime heap must be below the image, not in its .bss");
+            const uint32_t stackTop = env.runtime.reserveAsyncCallbackStack(0x4000u, 16u);
+            t.IsTrue(stackTop > 0x00080000u && stackTop < kImageBase,
+                     "callback stacks must be below the image, not on its main stack");
+
+            // crt0: SetupThread(gp, 0x01FF0000, 0x10000), then SetupHeap(end of .bss, -1).
+            setRegU32(env.ctx, 4, 0x0043A4F0u);
+            setRegU32(env.ctx, 5, 0x01FF0000u);
+            setRegU32(env.ctx, 6, 0x00010000u);
+            setRegU32(env.ctx, 29, 0x01FFFFF0u);
+            t.IsTrue(callSyscall(0x3Cu, env.rdram.data(), &env.ctx, &env.runtime), "SetupThread syscall should dispatch");
+            setRegU32(env.ctx, 4, kBssEnd);
+            setRegU32(env.ctx, 5, 0xFFFFFFFFu);
+            t.IsTrue(callSyscall(0x3Du, env.rdram.data(), &env.ctx, &env.runtime), "SetupHeap syscall should dispatch");
+            t.Equals(::getRegU32(&env.ctx, 2), kBssEnd, "SetupHeap should return the game's heap base");
+            t.IsTrue(callSyscall(0x3Eu, env.rdram.data(), &env.ctx, &env.runtime), "EndOfHeap syscall should dispatch");
+            t.Equals(::getRegU32(&env.ctx, 2), 0x01FF0000u,
+                     "a heap of size -1 should end at the main thread's stack");
         });
 
         tc.Run("setup heap and allocator primitives track end-of-heap", [](TestCase &t)

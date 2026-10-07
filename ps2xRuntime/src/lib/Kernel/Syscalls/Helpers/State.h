@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -242,22 +243,49 @@ inline std::filesystem::path g_host_cwd;
 inline std::filesystem::path g_cdrom_cwd;
 inline std::string g_ps2_cwd_device = "host0";
 
+// Guest RAM the runtime keeps for its own data: the pools below, its heap and
+// the stacks of the callbacks it runs on guest threads. By default the pools
+// start at kRuntimeReservedHighBase, under the stacks at the end of RAM. When
+// the loaded image reaches into that range (Burnout Dominator: .bss up to
+// 0x01F9BB00, main stack 0x01FF0000-0x02000000), PS2Runtime::loadELF moves all
+// of it to EE user RAM below an image linked at 0x00100000, from
+// kRuntimeReservedLowBase.
+static constexpr uint32_t kRuntimeReservedHighBase = 0x01F00000u;
+static constexpr uint32_t kRuntimeReservedLowBase = 0x00080000u;
+inline std::atomic<uint32_t> g_runtime_reserved_base{kRuntimeReservedHighBase};
+
+inline uint32_t runtimeReservedBase()
+{
+    return g_runtime_reserved_base.load(std::memory_order_relaxed);
+}
+
+inline bool runtimeReservedBelowImage()
+{
+    return runtimeReservedBase() == kRuntimeReservedLowBase;
+}
+
+// Heap end given to EndOfHeap by SetupHeap when the runtime's RAM is below the
+// image and the heap belongs to the game alone; 0 otherwise.
+inline uint32_t g_ee_kernel_heap_end = 0;
+
 static constexpr uint32_t kRpcPacketSize = 64;
-static constexpr uint32_t kRpcPacketPoolBase = 0x01F00000;
+static constexpr uint32_t kRpcPacketPoolOffset = 0x00000000;
 static constexpr uint32_t kRpcPacketPoolBytes = 0x00010000;
 static constexpr uint32_t kRpcPacketPoolCount = kRpcPacketPoolBytes / kRpcPacketSize;
-static constexpr uint32_t kRpcServerPoolBase = 0x01F10000;
+static constexpr uint32_t kRpcServerPoolOffset = 0x00010000;
 static constexpr uint32_t kRpcServerPoolBytes = 0x00010000;
 static constexpr uint32_t kRpcServerStride = 0x80;
 static constexpr uint32_t kRpcServerPoolCount = kRpcServerPoolBytes / kRpcServerStride;
 
-static constexpr uint32_t kTlsPoolBase = 0x01F20000;
+static constexpr uint32_t kTlsPoolOffset = 0x00020000;
 static constexpr uint32_t kTlsPoolBytes = 0x00010000;
 static constexpr uint32_t kTlsBlockSize = 0x100;
 static constexpr uint32_t kTlsPoolCount = kTlsPoolBytes / kTlsBlockSize;
 
-static constexpr uint32_t kBootModePoolBase = 0x01F30000;
+static constexpr uint32_t kBootModePoolOffset = 0x00030000;
 static constexpr uint32_t kBootModePoolBytes = 0x00001000;
+// End of the pools, from the reserved base.
+static constexpr uint32_t kRuntimeReservedPoolsBytes = kBootModePoolOffset + kBootModePoolBytes;
 
 static constexpr uint32_t kSifRpcModeNowait = 0x01;
 static constexpr uint32_t kSifRpcModeNoWbDc = 0x02;

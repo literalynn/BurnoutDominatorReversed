@@ -10,6 +10,7 @@
 #include "Kernel/Stubs/Audio.h"
 #include "Kernel/Stubs/GS.h"
 #include "Kernel/Stubs/MPEG.h"
+#include "Kernel/Syscalls/Helpers/State.h"
 #include "ps2_host_backend.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
@@ -91,6 +92,13 @@ namespace
     constexpr uint32_t kGuestHeapDefaultAlignment = 16u;
     constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
     constexpr uint32_t kGuestHeapHardLimit = 0x01F00000u;
+    // Runtime RAM below an image linked at 0x00100000 (Helpers/State.h): the
+    // pools from kRuntimeReservedLowBase, then the runtime heap, then the
+    // callback stacks up to the image.
+    constexpr uint32_t kLowReservedEnd = 0x00100000u;
+    constexpr uint32_t kLowReservedHeapBase = 0x000B4000u;
+    constexpr uint32_t kLowReservedStackFloor = 0x000D0000u;
+    static_assert(kRuntimeReservedLowBase + kRuntimeReservedPoolsBytes <= kLowReservedHeapBase);
 
     constexpr uint32_t COP0_CAUSE_EXCCODE_MASK = 0x0000007Cu;
     constexpr uint32_t COP0_CAUSE_BD = 0x80000000u;
@@ -505,6 +513,8 @@ PS2Runtime::PS2Runtime()
     m_guestHeapConfigured = false;
     m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
     m_asyncCallbackStackTop = PS2_RAM_SIZE;
+    g_runtime_reserved_base.store(kRuntimeReservedHighBase, std::memory_order_relaxed);
+    g_ee_kernel_heap_end = 0u;
 }
 
 void PS2Runtime::setDebugUiCallbacks(DebugUiCallback initCallback,
@@ -821,6 +831,7 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
     m_debugPc.store(m_cpuContext.pc, std::memory_order_relaxed);
 
     uint32_t maxLoadedRdramEnd = kGuestHeapDefaultBase;
+    uint32_t minLoadedRdramStart = PS2_RAM_SIZE;
     uint32_t moduleBase = std::numeric_limits<uint32_t>::max();
     uint32_t moduleEnd = 0u;
     bool loadedAnySegment = false;
@@ -922,6 +933,7 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
         if (!scratch)
         {
             maxLoadedRdramEnd = std::max(maxLoadedRdramEnd, static_cast<uint32_t>(segmentMemEnd));
+            minLoadedRdramStart = std::min(minLoadedRdramStart, physAddr);
         }
 
         if (ph.flags & 0x1u) // PF_X
@@ -958,9 +970,26 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                    ? PS2_RAM_SIZE
                                    : (maxLoadedRdramEnd + kGuestHeapSafetyPad);
     const uint32_t suggestedHeapBase = alignGuestHeapValue(paddedEnd, kGuestHeapDefaultAlignment);
+    // An image reaching past kGuestHeapHardLimit would share the runtime's RAM
+    // at the end of memory with its own .bss, heap and stack. Move that RAM
+    // below the image when the image leaves EE user RAM under 0x00100000 free.
+    const bool reservedBelowImage = maxLoadedRdramEnd > kGuestHeapHardLimit &&
+                                    minLoadedRdramStart >= kLowReservedEnd;
+    g_runtime_reserved_base.store(reservedBelowImage ? kRuntimeReservedLowBase : kRuntimeReservedHighBase,
+                                  std::memory_order_relaxed);
+    if (reservedBelowImage)
+    {
+        RUNTIME_LOG("Runtime guest RAM moved below the image: 0x" << std::hex << kRuntimeReservedLowBase
+                                                                  << "-0x" << kLowReservedEnd << std::dec << std::endl);
+    }
     {
         std::lock_guard<std::mutex> lock(m_guestHeapMutex);
-        if (!m_guestHeapConfigured)
+        if (reservedBelowImage)
+        {
+            m_guestHeapSuggestedBase = kLowReservedHeapBase;
+            resetGuestHeapLocked(kLowReservedHeapBase, kLowReservedStackFloor);
+        }
+        else if (!m_guestHeapConfigured)
         {
             const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
             m_guestHeapSuggestedBase = std::min(suggestedHeapBase, hardLimit);
@@ -972,8 +1001,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
     {
         std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
         const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-        m_asyncCallbackStackFloor = std::min(std::max(hardLimit, suggestedHeapBase), PS2_RAM_SIZE);
-        m_asyncCallbackStackTop = PS2_RAM_SIZE;
+        m_asyncCallbackStackFloor = reservedBelowImage
+                                        ? kLowReservedStackFloor
+                                        : std::min(std::max(hardLimit, suggestedHeapBase), PS2_RAM_SIZE);
+        m_asyncCallbackStackTop = reservedBelowImage ? kLowReservedEnd : PS2_RAM_SIZE;
     }
 
     LoadedModule module;

@@ -543,6 +543,32 @@ namespace ps2_syscalls
 
         const uint32_t heapBase = (heapBaseRaw + 0xFu) & ~0xFu;
 
+        if (runtime && runtimeReservedBelowImage())
+        {
+            // The runtime's allocator lives below the image (PS2Runtime::loadELF),
+            // so this heap belongs to the game's malloc and sbrk alone. As in the
+            // EE kernel, a size of -1 ends it at the current thread's stack
+            // (SetupThread).
+            uint64_t heapEnd = PS2_RAM_SIZE;
+            if (heapSize != 0u && heapSize != 0xFFFFFFFFu)
+            {
+                heapEnd = std::min<uint64_t>(static_cast<uint64_t>(heapBase) + heapSize, PS2_RAM_SIZE);
+            }
+            else
+            {
+                EeScheduler &scheduler = runtime->eeScheduler();
+                const GuestThread *thread = scheduler.thread(scheduler.currentThreadId());
+                if (thread && thread->stack > heapBase && thread->stack <= PS2_RAM_SIZE)
+                {
+                    heapEnd = thread->stack;
+                }
+            }
+            g_ee_kernel_heap_end = static_cast<uint32_t>(heapEnd);
+            setReturnU32(ctx, heapBase);
+            return;
+        }
+        g_ee_kernel_heap_end = 0u;
+
         // Silent Hill and other games often pass -1 (0xFFFFFFFF) to mean "rest of RAM".
         static constexpr uint32_t kDefaultGuestHeapEnd = 0x01F00000u;
         uint32_t heapLimit = kDefaultGuestHeapEnd;
@@ -586,7 +612,9 @@ namespace ps2_syscalls
 
         static constexpr uint32_t kDefaultGuestHeapEnd = 0x01F00000u;
 
-        const uint32_t ret = runtime
+        const uint32_t ret = g_ee_kernel_heap_end != 0u
+                                 ? g_ee_kernel_heap_end
+                             : runtime
                                  ? runtime->guestHeapLimit()
                                  : kDefaultGuestHeapEnd;
 
