@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <deque>
+#include <utility>
 #include <optional>
 #include <span>
 #include <string>
@@ -78,6 +80,7 @@ namespace ps2x::iop::detail
 
         [[nodiscard]] std::optional<DmaStart> takeDmaStart() noexcept;
         [[nodiscard]] Spu2 &spu() const noexcept { return m_spu; }
+        void setSio2IrqCallback(std::function<void()> callback) { m_sio2Irq = std::move(callback); }
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
 
         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
@@ -100,5 +103,12 @@ namespace ps2x::iop::detail
         std::function<void(uint32_t, uint32_t)> m_hardwareWriteHook;
         // Reads of the SPU2 data port advance its transfer address, hence mutable.
         mutable Spu2 m_spu;
+        // SIO2 currently has no attached pad/card. Each serial byte receives 0xFF,
+        // while command status and completion IRQ describe the absent device.
+        mutable std::deque<uint8_t> m_sio2Output;
+        uint32_t m_sio2CommandIndex = 0u;
+        uint32_t m_sio2InputCount = 0u;
+        uint32_t m_sio2Ports = 0u;
+        std::function<void()> m_sio2Irq;
     };
 }

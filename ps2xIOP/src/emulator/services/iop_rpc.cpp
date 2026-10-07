@@ -447,7 +447,7 @@ namespace ps2x::iop::detail
             }
         }
 
-        uint32_t returnPointer = executor.executeGuestFunction(server.function,
+        uint32_t returnPointer = executor.executeRpcFunction(server.function,
                                                                request.function,
                                                                server.buffer,
                                                                request.send.size,

@@ -38,6 +38,7 @@ void register_ps2_ipu_tests()
             t.Equals(m.read64(cmd), uint64_t{0x1B3}, "sequence header prefix, BUSY cleared");
             m.write32(cmd, 0x40000018u);
             t.Equals(m.read32(cmd), 0xB3123456u, "FDEC skips 24 bits and peeks 32");
+            t.Equals(m.read64(cmd), uint64_t{0xB3123456}, "DATA bit 31 does not set the CMD BUSY bit 63");
             t.Equals(m.read32(bp) & 0x7Fu, 24u, "peeking does not consume the result");
             t.Equals(m.read64(top), uint64_t{0xB3123456}, "64-bit TOP and BUSY");
             m.write32(ctrl, 1u << 30);

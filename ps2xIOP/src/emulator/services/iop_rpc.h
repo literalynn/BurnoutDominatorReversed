@@ -30,6 +30,13 @@ namespace ps2x::iop::detail
                                                             uint32_t a2,
                                                             uint32_t a3,
                                                             uint32_t gp) = 0;
+        // RPC server functions may block on kernel objects. Unlike an IRQ or
+        // module entry point, they must execute in a schedulable IOP thread.
+        [[nodiscard]] virtual uint32_t executeRpcFunction(uint32_t address, uint32_t a0, uint32_t a1,
+                                                         uint32_t a2, uint32_t a3, uint32_t gp)
+        {
+            return executeGuestFunction(address, a0, a1, a2, a3, gp);
+        }
         [[nodiscard]] virtual uint32_t executeGuestFunctionWithBudget(uint32_t address,
                                                                       uint32_t a0,
                                                                       uint32_t a1,

@@ -180,3 +180,27 @@ Le recompileur (`control_flow_emitter.cpp`) utilise maintenant `GPR_S64` pour BL
 
 `BDR_TRACE_IPU=1` trace les 160 premières commandes et démarrages DMA, puis un sur 10 000 : commande, DATA, CTRL, BP, TOP et registres DMA. Désactivée par défaut, la trace reste dans les journaux locaux ignorés par Git.
 
+## 14. Écran PROFILE et carte mémoire (lancements 14 à 18)
+
+Après régénération et recompilation du correctif 64 bits, le lancement 14 (`run14-codex-branch64.log`, 60 s, code 124) franchit l'ancien blocage vidéo. La trace montre plus de 440 000 commandes IPU, dont BDEC ; le jeu affiche l'écran **PROFILE**, avec le message de vérification de carte mémoire. Les captures sont dans `local/diagnostics/run14-codex-branch64/`. Ce constat ne valide pas la fidélité complète des vidéos et du son.
+
+Lancement 15 (`run15-codex-profile-card.log`, 24 s) : l'EE attend dans `sceSifCallRpc` (0x3B0848, appelant 0x3B594C). Le thread SIO2MAN attend le drapeau 0x2000, posé par son gestionnaire d'IRQ 17 à SIO2MAN+0x584. Aucune émulation SIO2 ne produisait cette interruption. MCMAN effectue des transferts par SIO2MAN, avec des délais et sémaphores.
+
+Un transport PIO SIO2 pour ports déconnectés a été ajouté : octets `0xFF`, RECV1 indiquant l'absence de périphérique, IRQ 17 à CTRL START et acquittement INTR. Le comportement de référence est documenté par [Sio2 de PCSX2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SIO/Sio2.cpp) et [ses états de ports](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SIO/SioTypes.h). Lancement 16 (`run16-codex-sio2.log`, 25 s) : SIO2MAN reçoit bien l'interruption et revient à son attente de commande ; la vérification reste bloquée. Les cartes et manettes ne sont pas simulées comme présentes.
+
+La fonction RPC physique s'exécutait par `callFunction` hors d'un thread IOP (T0). Ses attentes ne suspendaient donc pas le serveur. Elle s'exécute maintenant dans un thread temporaire, à pile réutilisable, pendant que l'ordonnanceur fait avancer les autres threads et périphériques. Lancement 17 (`run17-codex-rpc-thread.log`) : cette correction révèle que MCMAN attend son alarme de 100 µs avant de reprendre WaitSema. `thbase:35` SetAlarm retournait jusque-là sans enregistrer de rappel ; le RPC atteint sa limite et produit une erreur explicite.
+
+Les alarmes IOP 35–38 sont maintenant prises en charge par le distributeur d'imports de l'émulateur (identités et ABI dans [thbase.h de PS2SDK](https://github.com/ps2dev/ps2sdk/blob/master/iop/system/threadman/include/thbase.h)). Un module synthétique vérifie DelayThread puis SetAlarm/SleepThread/iWakeupThread et 128 appels RPC successifs, avec une vraie reprise dans le même thread et réutilisation des piles.
+
+Lancement 18 (`run18-codex-iop-alarm.log`, 35 s, code 124) : aucune erreur d'exécution et aucune fonction manquante ; l'écran PROFILE reste sur la vérification de carte mémoire. Le thread de commande SIO2MAN revient à l'attente 0x4155, les serveurs RPC passent leurs attentes de drapeaux, et l'EE reste dans 0x3B0848 pendant le rappel libmc 0x3B57C8. Il reste à vérifier la réponse GetInfo de MCSERV (SID 0x80000400, fonction 1), les données transférées vers l'EE et la fin du rappel libmc, avant d'attribuer cette attente au seul périphérique absent.
+
+Reprise ciblée :
+
+```powershell
+$env:BDR_STATUS_DETAIL = '1'
+$env:BDR_STATUS_WATCH = '0x1F776C0+4,0x1F76600+8,0x3E36D0+3,0x1F76128+3'
+python tools/project.py run --headless --seconds 35 --status-ms 5000 --log run19-libmc.log --tail 120
+```
+
+Limites restantes : SIO2 DMA et dmacman, carte mémoire persistante, protocole DualShock 2 alimenté par les entrées du PC, menu et courses. Le transport PIO actuel représente uniquement des ports déconnectés ; aucun résultat de jeu n'est forcé.
+

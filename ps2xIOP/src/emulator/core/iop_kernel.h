@@ -68,6 +68,9 @@ namespace ps2x::iop::detail
         [[nodiscard]] uint64_t nextWakeCycle(uint64_t fallback) const;
         void endTimeslice(IopThread &thread, uint32_t returnSentinel);
         void cleanupDeadThreads();
+        [[nodiscard]] IopThread *createInternalCall(uint32_t entry, uint32_t gp, uint32_t returnAddress);
+        void removeInternalCall(int id);
+        [[nodiscard]] IopThread *findInternalCall(int id);
         void terminateThreadsInRange(uint32_t base, uint32_t size);
 
         [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
@@ -125,6 +128,7 @@ namespace ps2x::iop::detail
 
         IopMemory &m_memory;
         std::map<int, IopThread> m_threads;
+        std::vector<uint32_t> m_freeCallStacks;
         bool m_deadThreadPending = false; // a thread entered the Dead state since the last cleanup
         std::map<int, Semaphore> m_semaphores;
         std::map<int, EventFlag> m_eventFlags;

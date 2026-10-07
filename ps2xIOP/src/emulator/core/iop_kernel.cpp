@@ -205,6 +205,7 @@ namespace ps2x::iop::detail
     void IopKernel::reset()
     {
         m_threads.clear();
+        m_freeCallStacks.clear();
         m_semaphores.clear();
         m_eventFlags.clear();
         m_nextThreadId = 1;
@@ -454,8 +455,9 @@ namespace ps2x::iop::detail
         case 36:
         case 37:
         case 38:
-            setV0(0);
-            return true;
+            // Alarm callbacks need the emulator's clock and guest executor.
+            // The emulator import dispatcher handles these ordinals.
+            return false;
         case 39: // USec2SysClock
         {
             const uint64_t cycles = (static_cast<uint64_t>(cpu.gpr[4]) * kIopClockHz) / 1'000'000ull;
@@ -894,6 +896,50 @@ namespace ps2x::iop::detail
             thread.state = IopThreadState::Ready;
         m_currentThread = nullptr;
         cleanupDeadThreads();
+    }
+
+    IopThread *IopKernel::createInternalCall(uint32_t entry, uint32_t gp, uint32_t returnAddress)
+    {
+        IopThread thread;
+        thread.id = static_cast<int>(m_nextThreadId++);
+        thread.entry = entry;
+        thread.priority = thread.initialPriority = 100u;
+        thread.stackSize = 0x4000u;
+        if (!m_freeCallStacks.empty())
+        {
+            const uint32_t reusable = m_freeCallStacks.back();
+            m_freeCallStacks.pop_back();
+            thread.stackBase = m_memory.allocate(thread.stackSize + kStackGuardBytes, 16u, reusable);
+        }
+        if (thread.stackBase == 0u)
+            thread.stackBase = m_memory.allocate(thread.stackSize + kStackGuardBytes, 16u);
+        if (thread.stackBase == 0u)
+            return nullptr;
+        thread.cpu.pc = entry;
+        thread.cpu.gpr[28] = gp;
+        thread.cpu.gpr[29] = thread.stackBase + thread.stackSize - 32u;
+        thread.cpu.gpr[31] = returnAddress;
+        thread.state = IopThreadState::Ready;
+        const int id = thread.id;
+        return &m_threads.emplace(id, std::move(thread)).first->second;
+    }
+
+    IopThread *IopKernel::findInternalCall(int id)
+    {
+        const auto it = m_threads.find(id);
+        return it == m_threads.end() ? nullptr : &it->second;
+    }
+
+    void IopKernel::removeInternalCall(int id)
+    {
+        const auto it = m_threads.find(id);
+        if (it == m_threads.end())
+            return;
+        if (m_currentThread == &it->second)
+            m_currentThread = nullptr;
+        if (m_memory.freeAllocation(it->second.stackBase))
+            m_freeCallStacks.push_back(it->second.stackBase);
+        m_threads.erase(it);
     }
 
     void IopKernel::cleanupDeadThreads()
