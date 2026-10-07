@@ -9,6 +9,7 @@ unpacks into a work directory (BDR_WORK_DIR):
   local/analysis/ghidra/functions.ee.csv                            Ghidra map from the work directory
   local/logs/run*.log, recompile.log, augment-function-map.log      previous runs, if present
   generated/generation.json                                         previous generation record
+  local/disc/<boot files>                                           files read during the LOADING screen (BOOT_FILES)
   local/disc/<other files>                                          smallest disc files first, while they fit
   bundle.json                                                       manifest
 
@@ -38,6 +39,11 @@ WORK_FILES = ["local/analysis/ghidra/functions.ee.csv", "local/analysis/ghidra/g
               "local/logs/recompile.log", "local/logs/augment-function-map.log", "generated/generation.json"]
 WORK_GLOBS = ["local/logs/run*.log"]
 MAX_WORK_FILE = 4 * 1024 * 1024
+# Disc files the boot and the front-end loader read during the LOADING screen
+# (docs/BOOT.md), larger than most others: included before the smallest-first
+# fill so that a cloud session can replay the whole loading phase.
+BOOT_FILES = ["DATA/GLOBALE.TXD", "DATA/GLOBALF.TXD", "SOUND/GENERIC.AWD", "SOUND/FE.AWD",
+              "FE/LOADING.BIN", "FE/FEMAIN.BIN"]
 
 
 class BundleError(RuntimeError):
@@ -57,7 +63,8 @@ def git_commit() -> str | None:
         return None
 
 
-def build_bundle(iso: Path, output: Path, limit_bytes: int, work: Path, lock: dict) -> dict:
+def build_bundle(iso: Path, output: Path, limit_bytes: int, work: Path, lock: dict,
+                 boot_files: list[str] = BOOT_FILES) -> dict:
     if not iso.is_file():
         raise BundleError(f"ISO not found: {iso}")
     warnings: list[str] = []
@@ -104,16 +111,19 @@ def build_bundle(iso: Path, output: Path, limit_bytes: int, work: Path, lock: di
                     archive.close()
                     output.unlink()
                     raise BundleError(f"required files alone exceed {limit_bytes // (1024 * 1024)} MB")
+                first = {name.casefold(): rank for rank, name in enumerate(boot_files)}
                 candidates = sorted((e for e in disc.entries
                                      if not e.is_directory and e.path.casefold() not in included),
-                                    key=lambda e: (e.size, e.path))
+                                    key=lambda e: (first.get(e.path.casefold(), len(first)), e.size, e.path))
                 for entry in candidates:
                     # Worst case: the file does not compress.
                     if archive.fp.tell() + entry.size + ENTRY_OVERHEAD + RESERVE_BYTES > limit_bytes:
-                        skipped = len(candidates) - len(extra)
+                        if entry.path.casefold() in first:
+                            continue  # a smaller file after it may still fit
                         break
                     archive.writestr("local/disc/" + entry.path, disc.read(entry))
                     extra.append({"path": entry.path, "size": entry.size, "lba": entry.lba})
+                skipped = len(candidates) - len(extra)
                 manifest = {
                     "created_utc": datetime.now(timezone.utc).isoformat(),
                     "repository_commit": git_commit(),
