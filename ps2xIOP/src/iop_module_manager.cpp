@@ -3,6 +3,7 @@
 #include "ps2x/iop/ps2_path.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace ps2x::iop::detail
 {
@@ -160,6 +161,23 @@ namespace ps2x::iop::detail
     {
         const std::string key = ps2PathLeafKey(path);
         return m_builtinKeys.contains(key) || m_serviceKeys.contains(key);
+    }
+
+    int32_t IopModuleManager::findHleByName(std::string_view name) const
+    {
+        std::string key(name);
+        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c)
+                       { return static_cast<char>(std::tolower(c)); });
+        if (key.empty())
+            return -1;
+        // XSIO2MAN, XMCMAN and XPADMAN keep the internal names of the modules they replace.
+        const std::string extended = "x" + key;
+        for (const auto &[id, record] : m_records)
+        {
+            if (!record.physical && (record.key == key || record.key == extended))
+                return id;
+        }
+        return -1;
     }
 
     void IopModuleManager::addLoadedKey(std::string_view key)

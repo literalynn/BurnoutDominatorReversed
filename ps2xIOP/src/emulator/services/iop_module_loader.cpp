@@ -522,6 +522,15 @@ namespace ps2x::iop::detail
                 result.gp = gp != 0u
                                 ? static_cast<uint32_t>(static_cast<int64_t>(gp) + delta)
                                 : 0u;
+                // IOPMOD: moduleinfo, entry, gp, text/data/bss sizes (6 words), version (u16),
+                // then the NUL-terminated module name.
+                constexpr uint32_t kNameOffset = 0x1Au;
+                if (program.filesz > kNameOffset && checkedRange(image.size(), program.offset, program.filesz))
+                {
+                    const char *first = reinterpret_cast<const char *>(image.data() + program.offset + kNameOffset);
+                    const size_t room = program.filesz - kNameOffset;
+                    result.name.assign(first, strnlen(first, room));
+                }
                 break;
             }
         }

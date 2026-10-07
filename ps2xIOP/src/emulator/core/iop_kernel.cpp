@@ -4,6 +4,9 @@
 #include "../iop_emulator_const.h"
 
 #include <algorithm>
+#include <iterator>
+#include <sstream>
+#include <string_view>
 
 namespace ps2x::iop::detail
 {
@@ -23,6 +26,182 @@ namespace ps2x::iop::detail
     {
     }
 
+    void IopKernel::describe(std::vector<std::string> &lines,
+                             const std::function<std::string(uint32_t)> &symbolize) const
+    {
+        static constexpr const char *kStateNames[] = {"dormant", "ready", "running", "sleep", "delay",
+                                                      "sema", "evf", "suspended", "dead"};
+        for (const auto &[id, thread] : m_threads)
+        {
+            std::ostringstream out;
+            const size_t state = static_cast<size_t>(thread.state);
+            out << "iop-thread " << id << " " << (state < std::size(kStateNames) ? kStateNames[state] : "?")
+                << " entry=" << symbolize(thread.entry) << " pc=" << symbolize(thread.cpu.pc)
+                << " ra=" << symbolize(thread.cpu.gpr[31]) << " prio=" << thread.priority
+                << " waitId=" << thread.waitId << " wakeups=" << thread.wakeupCount;
+            if (thread.state == IopThreadState::Delay)
+                out << " wakeCycle=" << thread.wakeCycle;
+            if (thread.state == IopThreadState::EventFlag)
+                out << " waitBits=0x" << std::hex << thread.waitBits << " mode=0x" << thread.waitMode;
+            lines.push_back(out.str());
+        }
+        for (const auto &[id, sema] : m_semaphores)
+        {
+            std::ostringstream out;
+            out << "iop-sema " << id << " count=" << sema.current << '/' << sema.maximum;
+            uint32_t waiters = 0;
+            for (const auto &[tid, thread] : m_threads)
+                if (thread.state == IopThreadState::Semaphore && thread.waitId == id)
+                    ++waiters;
+            out << " waiters=" << waiters;
+            lines.push_back(out.str());
+        }
+        for (const auto &[id, flag] : m_eventFlags)
+        {
+            std::ostringstream out;
+            out << "iop-evf " << id << " bits=0x" << std::hex << flag.bits << " attr=0x" << flag.attr;
+            lines.push_back(out.str());
+        }
+        for (const LogEntry &entry : m_log)
+        {
+            std::ostringstream out;
+            out << "iop-log #" << entry.firstSequence << ".." << entry.lastSequence << " x" << entry.count << ' '
+                << entry.text;
+            lines.push_back(out.str());
+        }
+    }
+
+    IopKernel::LogArgs IopKernel::beginLog(const IopCpuState &cpu) const
+    {
+        LogArgs args;
+        args.a0 = cpu.gpr[4];
+        args.a1 = cpu.gpr[5];
+        args.a2 = cpu.gpr[6];
+        args.ra = cpu.gpr[31];
+        args.thread = m_currentThread != nullptr ? m_currentThread->id : 0;
+        return args;
+    }
+
+    void IopKernel::endLog(const char *library, uint16_t ordinal, const IopCpuState &cpu, const LogArgs &args)
+    {
+        const std::string_view lib(library);
+        const char *name = nullptr;
+        if (lib == "thsemap")
+        {
+            switch (ordinal)
+            {
+            case 4: name = "CreateSema"; break;
+            case 5: name = "DeleteSema"; break;
+            case 6: name = "SignalSema"; break;
+            case 7: name = "iSignalSema"; break;
+            case 8: name = "WaitSema"; break;
+            case 9: name = "PollSema"; break;
+            default: break;
+            }
+        }
+        else if (lib == "thevent")
+        {
+            switch (ordinal)
+            {
+            case 4: name = "CreateEventFlag"; break;
+            case 5: name = "DeleteEventFlag"; break;
+            case 6: name = "SetEventFlag"; break;
+            case 7: name = "iSetEventFlag"; break;
+            case 8: name = "ClearEventFlag"; break;
+            case 9: name = "iClearEventFlag"; break;
+            case 10: name = "WaitEventFlag"; break;
+            case 11: name = "PollEventFlag"; break;
+            default: break;
+            }
+        }
+        else
+        {
+            switch (ordinal)
+            {
+            case 4: name = "CreateThread"; break;
+            case 6: name = "StartThread"; break;
+            case 7: name = "StartThreadArgs"; break;
+            case 8: name = "ExitThread"; break;
+            case 9: name = "ExitDeleteThread"; break;
+            case 11: name = "TerminateThread"; break;
+            case 24: name = "SleepThread"; break;
+            case 25: name = "WakeupThread"; break;
+            case 26: name = "iWakeupThread"; break;
+            case 29: name = "SuspendThread"; break;
+            case 30: name = "iSuspendThread"; break;
+            case 31: name = "ResumeThread"; break;
+            case 32: name = "iResumeThread"; break;
+            case 33: name = "DelayThread"; break;
+            default: return; // skip the noisy clock/priority queries
+            }
+        }
+        std::ostringstream key;
+        key << "T" << args.thread << ' ' << (name != nullptr ? name : "op") << '(' << library << ':' << ordinal
+            << ") a0=0x" << std::hex << args.a0;
+        // Only event-flag operations carry meaningful a1/a2 (bits, mode).
+        if (lib == "thevent")
+            key << " bits=0x" << args.a1 << " mode=0x" << args.a2;
+        key << " -> v0=0x" << cpu.gpr[2] << std::dec;
+        if (m_currentThread != nullptr && m_currentThread->state != IopThreadState::Running &&
+            m_currentThread->state != IopThreadState::Ready)
+        {
+            static constexpr const char *kNames[] = {"dormant", "ready", "running", "sleep", "delay",
+                                                     "sema", "evf", "suspended", "dead"};
+            const size_t state = static_cast<size_t>(m_currentThread->state);
+            key << " [blocks:" << (state < std::size(kNames) ? kNames[state] : "?") << ']';
+        }
+        key << " from " << (m_symbolize ? m_symbolize(args.ra) : std::string());
+        const std::string text = key.str();
+        ++m_logSequence;
+        // Keep the first occurrence of each distinct operation, with a counter: periodic
+        // polling loops then cost one line instead of flooding the log.
+        const auto found = m_logIndex.find(text);
+        if (found != m_logIndex.end())
+        {
+            LogEntry &entry = m_log[found->second];
+            ++entry.count;
+            entry.lastSequence = m_logSequence;
+            return;
+        }
+        if (m_log.size() >= 1500u)
+            return;
+        m_logIndex.emplace(text, m_log.size());
+        m_log.push_back(LogEntry{m_logSequence, m_logSequence, 1, text});
+    }
+
+    bool IopKernel::dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle)
+    {
+        if (!m_logEnabled)
+            return dispatchThreadImportImpl(ordinal, cpu, currentCycle);
+        const LogArgs args = beginLog(cpu);
+        const bool handled = dispatchThreadImportImpl(ordinal, cpu, currentCycle);
+        if (handled)
+            endLog("thbase", ordinal, cpu, args);
+        return handled;
+    }
+
+    bool IopKernel::dispatchSemaphoreImport(uint16_t ordinal, IopCpuState &cpu)
+    {
+        if (!m_logEnabled)
+            return dispatchSemaphoreImportImpl(ordinal, cpu);
+        const LogArgs args = beginLog(cpu);
+        const bool handled = dispatchSemaphoreImportImpl(ordinal, cpu);
+        if (handled)
+            endLog("thsemap", ordinal, cpu, args);
+        return handled;
+    }
+
+    bool IopKernel::dispatchEventImport(uint16_t ordinal, IopCpuState &cpu)
+    {
+        if (!m_logEnabled)
+            return dispatchEventImportImpl(ordinal, cpu);
+        const LogArgs args = beginLog(cpu);
+        const bool handled = dispatchEventImportImpl(ordinal, cpu);
+        if (handled)
+            endLog("thevent", ordinal, cpu, args);
+        return handled;
+    }
+
     void IopKernel::reset()
     {
         m_threads.clear();
@@ -34,7 +213,7 @@ namespace ps2x::iop::detail
         m_currentThread = nullptr;
     }
 
-    bool IopKernel::dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle)
+    bool IopKernel::dispatchThreadImportImpl(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle)
     {
         const auto setV0 = [&](int32_t value)
         {
@@ -107,6 +286,7 @@ namespace ps2x::iop::detail
             if (m_currentThread != nullptr)
             {
                 m_currentThread->state = ordinal == 9 ? IopThreadState::Dead : IopThreadState::Dormant;
+                m_deadThreadPending |= ordinal == 9;
                 cpu.stopped = true;
                 cpu.yielded = true;
             }
@@ -353,7 +533,7 @@ namespace ps2x::iop::detail
         return true;
     }
 
-    bool IopKernel::dispatchSemaphoreImport(uint16_t ordinal, IopCpuState &cpu)
+    bool IopKernel::dispatchSemaphoreImportImpl(uint16_t ordinal, IopCpuState &cpu)
     {
         const auto setV0 = [&](int32_t value)
         {
@@ -527,7 +707,7 @@ namespace ps2x::iop::detail
         return true;
     }
 
-    bool IopKernel::dispatchEventImport(uint16_t ordinal, IopCpuState &cpu)
+    bool IopKernel::dispatchEventImportImpl(uint16_t ordinal, IopCpuState &cpu)
     {
         const auto setV0 = [&](int32_t value)
         {
@@ -674,15 +854,11 @@ namespace ps2x::iop::detail
 
     IopThread *IopKernel::beginNextReady(uint64_t currentCycle)
     {
+        IopThread *next = nullptr;
         for (auto &[id, thread] : m_threads)
         {
             if (thread.state == IopThreadState::Delay && thread.wakeCycle <= currentCycle)
                 thread.state = IopThreadState::Ready;
-        }
-
-        IopThread *next = nullptr;
-        for (auto &[id, thread] : m_threads)
-        {
             if (thread.state != IopThreadState::Ready)
                 continue;
             if (next == nullptr || thread.priority < next->priority ||
@@ -722,6 +898,9 @@ namespace ps2x::iop::detail
 
     void IopKernel::cleanupDeadThreads()
     {
+        if (!m_deadThreadPending)
+            return;
+        m_deadThreadPending = false;
         for (auto thread = m_threads.begin(); thread != m_threads.end();)
         {
             if (thread->second.state != IopThreadState::Dead)
@@ -741,7 +920,10 @@ namespace ps2x::iop::detail
         {
             const uint32_t pc = IopMemory::physicalAddress(thread.cpu.pc);
             if (pc >= base && pc < base + size)
+            {
                 thread.state = IopThreadState::Dead;
+                m_deadThreadPending = true;
+            }
         }
     }
 }
