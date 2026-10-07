@@ -713,7 +713,9 @@ namespace
     }
 
     // Registers a user SIF command handler (cid 2) in a 4-entry table given to
-    // sceSifSetCmdBuffer. The handler stores packet word 4 and its argument.
+    // sceSifSetCmdBuffer, and the same handler as system command 0x80000001 in
+    // a 2-entry table given to sceSifSetSysCmdBuffer. The handler stores packet
+    // word 4 and its argument.
     void writeSifCmdHandlerIrx(TestHost &host, uint32_t address)
     {
         constexpr uint32_t codeOffset = 0x100u;
@@ -721,6 +723,7 @@ namespace
         constexpr uint32_t importTableAddress = loadAddress + 0x100u;
         constexpr uint32_t setCmdBufferStub = importTableAddress + 20u;
         constexpr uint32_t addCmdHandlerStub = setCmdBufferStub + 8u;
+        constexpr uint32_t setSysCmdBufferStub = addCmdHandlerStub + 8u;
 
         ElfHeader header{};
         header.ident[0] = 0x7Fu; header.ident[1] = 'E'; header.ident[2] = 'L'; header.ident[3] = 'F';
@@ -743,8 +746,16 @@ namespace
             0x3C050001u, 0x34A50080u, // a1 = handler (0x10080)
             0x24061234u,              // a2 = harg 0x1234
             jal(addCmdHandlerStub), 0x00000000u,
+            0x3C040001u, 0x348401D0u, // a0 = system table (0x101D0)
+            0x24050002u,              // a1 = 2 entries
+            jal(setSysCmdBufferStub), 0x00000000u,
+            0x3C048000u, 0x34840001u, // a0 = cid 0x80000001
+            0x3C050001u, 0x34A50080u, // a1 = handler (0x10080)
+            0x24065678u,              // a2 = harg 0x5678
+            jal(addCmdHandlerStub), 0x00000000u,
             0x8FBF000Cu, 0x27BD0010u, 0x03E00008u, 0x00001021u,
         };
+        static_assert(sizeof(entry) <= 0x80u);
         const uint32_t handler[] = {
             0x8C880010u, // lw  t0, 0x10(a0)
             0x00000000u,
@@ -758,6 +769,7 @@ namespace
             0x63666973u, 0x0000646Du, // "sifcmd"
             0x03E00008u, 0x24000008u, // sceSifSetCmdBuffer
             0x03E00008u, 0x2400000Au, // sceSifAddCmdHandler
+            0x03E00008u, 0x24000009u, // sceSifSetSysCmdBuffer
             0u, 0u,
         };
 
@@ -1229,6 +1241,16 @@ int main()
     if (!expect(iop.readMemory(0x000101C0u, cmdSeen, sizeof(cmdSeen)) &&
                     cmdSeen[0] == 0xC0FFEE11u && cmdSeen[1] == 0x1234u,
                 "IOP SIF command handler got the wrong packet or argument")) return 1;
+    // System entries are SifCmdSysHandlerData_t, 12 bytes each.
+    uint32_t sysEntry[3] = {};
+    if (!expect(iop.readMemory(0x000101D0u + 12u, sysEntry, sizeof(sysEntry)) &&
+                    sysEntry[0] == 0x00010080u && sysEntry[1] == 0x5678u,
+                "sceSifAddCmdHandler did not fill the 12-byte system table entry")) return 1;
+    const uint32_t sysPacket[5] = {20u, 0u, 0x80000001u, 0u, 0x5157E401u};
+    if (!expect(iop.deliverSifCommand(sysPacket, sizeof(sysPacket)) &&
+                    iop.readMemory(0x000101C0u, cmdSeen, sizeof(cmdSeen)) &&
+                    cmdSeen[0] == 0x5157E401u && cmdSeen[1] == 0x5678u,
+                "System SIF command did not reach the handler in the system table")) return 1;
     const uint32_t unhandledPacket[4] = {16u, 0u, 3u, 0u};
     const uint32_t outOfTablePacket[4] = {16u, 0u, 9u, 0u};
     const uint32_t systemPacket[4] = {16u, 0u, 0x80000005u, 0u};

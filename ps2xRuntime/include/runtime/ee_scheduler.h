@@ -380,6 +380,8 @@ private:
     [[nodiscard]] GuestThread *selectReady();
     void makeRunning(GuestThread &thread);
     void makeDormant(GuestThread &thread);
+    // Hands the invocation stacks of a deleted thread to the next threads.
+    void releaseInvocationStacks(int threadId);
     void removeFromWaitObject(GuestThread &thread);
     [[noreturn]] void blockCurrent(EeWaitState wait);
     void makeReady(GuestThread &thread, int result, bool interruptSafe);
@@ -452,6 +454,7 @@ private:
     uint32_t m_gsVSyncCallbackGp = 0;
     uint32_t m_gsVSyncCallbackSp = 0;
     std::unordered_map<uint64_t, uint32_t> m_invocationStackTops;
+    std::vector<uint32_t> m_freeInvocationStackTops;
     std::atomic<uint64_t> m_nextDeadlineCycle{0};
 
     mutable std::mutex m_snapshotMutex;

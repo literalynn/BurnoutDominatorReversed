@@ -3,6 +3,7 @@
 #include "ps2_syscalls.h"
 #include "runtime/ee_scheduler.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -72,6 +73,12 @@ namespace
     constexpr uint32_t kInvocationQueuePc = 0x00160530u;
     constexpr uint32_t kInvocationQueueResumePc = 0x00160540u;
     constexpr uint32_t kInvocationQueueHandlerPc = 0x00160550u;
+    constexpr uint32_t kStackReuseMainPc = 0x00160600u;
+    constexpr uint32_t kStackReuseMainResumePc = 0x00160610u;
+    constexpr uint32_t kStackReuseWorkerPc = 0x00160620u;
+    constexpr uint32_t kStackReuseWorkerResumePc = 0x00160630u;
+    constexpr uint32_t kStackReuseHandlerPc = 0x00160640u;
+    constexpr uint32_t kStackReuseWorkerCount = 80u; // more than the 64 stacks above 0x01F00000
 
     constexpr uint32_t kTimer2Count = 0x10001000u;
     constexpr uint32_t kTimer2Mode = 0x10001010u;
@@ -373,6 +380,60 @@ namespace
         ctx->pc = 0u;
         runtime->requestStop();
     }
+
+    uint32_t g_stackReuseWorkers = 0u;
+    uint32_t g_stackReuseHandlerRuns = 0u;
+    std::vector<uint32_t> g_stackReuseSps;
+
+    // Main: start one worker, sleep until it wakes us, repeat.
+    void schedulerStackReuseMain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (g_stackReuseWorkers == kStackReuseWorkerCount)
+        {
+            ctx->pc = 0u;
+            runtime->requestStop();
+            return;
+        }
+        EeThreadCreateParams worker{};
+        worker.entry = kStackReuseWorkerPc;
+        worker.stack = 0x30000u;
+        worker.stackSize = 0x1000u;
+        worker.priority = 10;
+        EeScheduler &scheduler = runtime->eeScheduler();
+        const int id = scheduler.createThread(worker);
+        scheduler.startThread(id, 0u, *ctx, false);
+        ++g_stackReuseWorkers;
+        ctx->pc = kStackReuseMainResumePc;
+        SleepThread(rdram, ctx, runtime);
+    }
+
+    // Worker: one callback on its own invocation stack, then wake main and
+    // delete itself.
+    void schedulerStackReuseWorker(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        GuestInvocation invocation{};
+        invocation.kind = GuestInvocationKind::Interrupt;
+        invocation.tag = g_stackReuseWorkers;
+        invocation.context.pc = kStackReuseHandlerPc;
+        setRegU32(invocation.context, 31, 0u);
+        runtime->eeScheduler().queueInvocation(std::move(invocation));
+        ctx->pc = kStackReuseWorkerResumePc;
+    }
+
+    void schedulerStackReuseWorkerResume(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        runtime->eeScheduler().wakeupThread(EeScheduler::kMainThreadId, false);
+        ExitDeleteThread(rdram, ctx, runtime);
+    }
+
+    void schedulerStackReuseHandler(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        const uint32_t sp = getRegU32(ctx, 29);
+        if (std::find(g_stackReuseSps.begin(), g_stackReuseSps.end(), sp) == g_stackReuseSps.end())
+            g_stackReuseSps.push_back(sp);
+        ++g_stackReuseHandlerRuns;
+        ctx->pc = 0u;
+    }
 }
 
 void register_ps2_runtime_interrupt_tests()
@@ -600,6 +661,38 @@ void register_ps2_runtime_interrupt_tests()
             t.IsFalse(exhausted, "queued callbacks must not consume one invocation stack per pending item");
             t.Equals(g_invocationQueueRuns, 96u, "every queued callback should execute exactly once");
             t.IsFalse(g_invocationQueueSpChanged, "sequential callbacks should reuse the same stack depth");
+        });
+
+        tc.Run("deleted threads give their invocation stacks back", [](TestCase &t)
+        {
+            TestEnv env;
+            env.runtime.registerFunction(kStackReuseMainPc, schedulerStackReuseMain);
+            env.runtime.registerFunction(kStackReuseMainResumePc, schedulerStackReuseMain);
+            env.runtime.registerFunction(kStackReuseWorkerPc, schedulerStackReuseWorker);
+            env.runtime.registerFunction(kStackReuseWorkerResumePc, schedulerStackReuseWorkerResume);
+            env.runtime.registerFunction(kStackReuseHandlerPc, schedulerStackReuseHandler);
+
+            g_stackReuseWorkers = 0u;
+            g_stackReuseHandlerRuns = 0u;
+            g_stackReuseSps.clear();
+
+            R5900Context mainContext{};
+            mainContext.pc = kStackReuseMainPc;
+            env.runtime.eeScheduler().reset(env.rdram.data(), mainContext);
+
+            bool exhausted = false;
+            try
+            {
+                env.runtime.eeScheduler().run();
+            }
+            catch (const std::runtime_error &error)
+            {
+                exhausted = std::string_view(error.what()) == "EE invocation stack space exhausted";
+            }
+
+            t.IsFalse(exhausted, "each created and deleted thread must not keep an invocation stack");
+            t.Equals(g_stackReuseHandlerRuns, kStackReuseWorkerCount, "every worker callback should run once");
+            t.IsTrue(g_stackReuseSps.size() <= 2u, "workers should reuse the stacks of deleted workers");
         });
 
         tc.Run("iSignalSema defers selection until IRQ return", [](TestCase &t)

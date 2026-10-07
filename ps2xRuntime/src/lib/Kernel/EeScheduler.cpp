@@ -474,8 +474,25 @@ int EeScheduler::deleteThread(int id, uint32_t &ownedStack)
         ownedStack = it->second.stack;
     }
     m_threads.erase(it);
+    releaseInvocationStacks(id);
     publishSnapshot();
     return KE_OK;
+}
+
+void EeScheduler::releaseInvocationStacks(int threadId)
+{
+    for (auto it = m_invocationStackTops.begin(); it != m_invocationStackTops.end();)
+    {
+        if (static_cast<uint32_t>(it->first >> 32u) == static_cast<uint32_t>(threadId))
+        {
+            m_freeInvocationStackTops.push_back(it->second);
+            it = m_invocationStackTops.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, bool interruptSafe)
@@ -522,6 +539,7 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
     if (deleteThreadRecord && id != kMainThreadId)
     {
         m_threads.erase(id);
+        releaseInvocationStacks(id);
     }
     if (ownedStack != 0u)
     {
@@ -1171,6 +1189,15 @@ uint32_t EeScheduler::invocationStackTop()
     if (existing != m_invocationStackTops.end())
     {
         return existing->second;
+    }
+    // Thread ids are never reused, so stacks of deleted threads go back to a
+    // free list; reserved stack space is never returned.
+    if (!m_freeInvocationStackTops.empty())
+    {
+        const uint32_t reused = m_freeInvocationStackTops.back();
+        m_freeInvocationStackTops.pop_back();
+        m_invocationStackTops.emplace(key, reused);
+        return reused;
     }
     constexpr uint32_t kInvocationStackSize = 0x4000u;
     const uint32_t top = m_runtime.reserveAsyncCallbackStack(kInvocationStackSize, 16u);

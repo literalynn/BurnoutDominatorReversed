@@ -23,7 +23,8 @@ namespace ps2x::iop::detail
     {
         constexpr uint32_t kSystemCmdBit = 0x80000000u;
         constexpr uint32_t kBuiltinSystemCmdCount = 32u;
-        constexpr uint32_t kCmdHandlerEntrySize = 8u; // SifCmdHandlerData_t {handler, harg}
+        constexpr uint32_t kCmdHandlerEntrySize = 8u;     // SifCmdHandlerData_t {handler, harg}
+        constexpr uint32_t kSysCmdHandlerEntrySize = 12u; // SifCmdSysHandlerData_t {handler, harg, unknown08}
         constexpr uint32_t kCmdHeaderSize = 16u;
         constexpr uint32_t kCmdPacketMaxSize = 112u;
     }
@@ -48,6 +49,7 @@ namespace ps2x::iop::detail
     {
         uint32_t table = m_userCmdTable;
         uint32_t count = m_userCmdCount;
+        uint32_t stride = kCmdHandlerEntrySize;
         uint32_t index = cid;
         if ((cid & kSystemCmdBit) != 0u)
         {
@@ -62,10 +64,11 @@ namespace ps2x::iop::detail
             }
             table = m_systemCmdTable;
             count = m_systemCmdCount;
+            stride = kSysCmdHandlerEntrySize;
         }
         if (table == 0u || index >= count)
             return false;
-        const uint32_t entry = table + index * kCmdHandlerEntrySize;
+        const uint32_t entry = table + index * stride;
         handler.function = m_memory.read32(entry);
         handler.argument = m_memory.read32(entry + 4u);
         return true;
@@ -75,6 +78,7 @@ namespace ps2x::iop::detail
     {
         uint32_t table = m_userCmdTable;
         uint32_t count = m_userCmdCount;
+        uint32_t stride = kCmdHandlerEntrySize;
         uint32_t index = cid;
         if ((cid & kSystemCmdBit) != 0u)
         {
@@ -88,12 +92,13 @@ namespace ps2x::iop::detail
             }
             table = m_systemCmdTable;
             count = m_systemCmdCount;
+            stride = kSysCmdHandlerEntrySize;
         }
         // sifcmd indexes the table without a bound check; a table that is
         // missing or too small would be overwritten past its end.
         if (table == 0u || index >= count)
             return false;
-        const uint32_t entry = table + index * kCmdHandlerEntrySize;
+        const uint32_t entry = table + index * stride;
         m_memory.write32(entry, handler.function);
         m_memory.write32(entry + 4u, handler.argument);
         return true;
