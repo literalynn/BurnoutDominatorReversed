@@ -208,7 +208,33 @@ def audit(args) -> None:
     print(f"Generated {len(files)} C++ files, {len(ranges)} function ranges; {len(blockers)} unsupported/TODO markers; {len(log_errors)} reported errors.")
 
 
+def configured_source(build_dir: Path) -> Path | None:
+    """Source directory recorded in a build tree's CMakeCache.txt."""
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("CMAKE_HOME_DIRECTORY:"):
+            return Path(line.partition("=")[2])
+    return None
+
+
+def foreign_build_tree(build_dir: Path) -> Path | None:
+    """The other checkout a build tree was configured from (a moved checkout or a new clone)."""
+    source = configured_source(build_dir)
+    if source is None or os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(ROOT)):
+        return None
+    return source
+
+
 def configure(args) -> None:
+    foreign = foreign_build_tree(args.build_dir)
+    if foreign:
+        # CMake refuses a cache made for another source directory, and every
+        # object is rebuilt anyway since all source paths change.
+        print(f"Build tree configured for {foreign}; configuring it again for {ROOT}")
+        (args.build_dir / "CMakeCache.txt").unlink()
+        shutil.rmtree(args.build_dir / "CMakeFiles", ignore_errors=True)
     command = [args.cmake, "-S", str(ROOT), "-B", str(args.build_dir.resolve()),
                "-DPS2X_BUILD_STUDIO=OFF", "-DPS2X_ENABLE_DEBUG_UI=OFF", "-DPS2X_BUILD_TEST=ON",
                "-DPS2X_IOP_BUILD_TESTS=ON", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF",
@@ -244,6 +270,11 @@ def set_work_dir(args) -> None:
 
 
 def build(args) -> None:
+    foreign = foreign_build_tree(args.build_dir)
+    if foreign:
+        # Building it would compile the other checkout's sources.
+        raise RuntimeError(f"{args.build_dir} was configured for another checkout ({foreign}). "
+                           "Run configure first (tools/install.py does it).")
     cache = args.build_dir / "CMakeCache.txt"
     if os.name == "nt" and cache.is_file() and "CMAKE_GENERATOR:INTERNAL=Visual Studio" in cache.read_text(encoding="utf-8", errors="replace"):
         pwsh = shutil.which("pwsh")
