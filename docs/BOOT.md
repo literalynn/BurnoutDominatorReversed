@@ -164,7 +164,19 @@ Au démarrage, libkernel installe deux correctifs du noyau EE, comme sur console
 
 Le code copié en mémoire noyau n’est pas recompilé : le runtime ne peut pas l’exécuter. Avant, un appel système dont le gestionnaire remplacé n’était pas du code recompilé renvoyait −1 ; `syscall 0x5B` renvoyait donc −1, et `SetAlarm`, `iSetAlarm`, `ReleaseAlarm`, `iReleaseAlarm` ainsi que les drapeaux d’événement 0x55–0x59 échouaient tous. `sleep(6)` (0x1E7328 : `SetAlarm(6, 0x1E7308, thread)` puis `SleepThread`) ne se réveillait jamais. Désormais, un tel appel est servi par l’implémentation du runtime (`dispatchSyscallOverride`, `Syscalls/System.cpp`). `SetSyscall` écrit toujours l’entrée dans la table noyau visible par le jeu, que le correctif utilise aussi pour écrire des mots du noyau par des index signés. Test : « a syscall override that is not recompiled code falls back to the builtin » (`ps2x_tests`).
 
-## 12. Blocage actuel (lancement 11)
+## 12. Vidéo d'introduction (lancement 11)
 
 Après le chargement, l’écran devient noir et le thread principal tourne dans 0x38A2C8 : l’analyseur de flux MPEG-2 de la bibliothèque vidéo du jeu (codes de début 0x1B3 séquence, 0x1B8 GOP, 0x100 image, 0x1B7 fin) cherche un code de début (`0x388030(…, 0x18)` jusqu’à 1, puis `0x3880C0(…, 8)`), en lisant les bits du décodeur IPU. Les compteurs DMA et GIF ne bougent plus. Il faut vérifier comment le flux arrive à l’IPU (DMA canal 4 vers l’IPU, commandes BCLR/FDEC/IDEC/BDEC) et ce que l’émulation IPU du runtime renvoie.
+
+## 13. IPU et branchements signés (lancements 12 et 13)
+
+Un modèle IPU est maintenant raccordé aux registres et FIFO de `PS2Memory`, ainsi qu'aux DMA 3/4. Les tests vérifient notamment la reprise d'une commande après apport de données, BDEC vers RAW16, la conversion CSC et les chaînes source. BDEC attend la sortie DMA, puis détecte le code de début suivant après les octets de bourrage. Les échantillons intra sont saturés à 0–255 ; les blocs inter conservent leurs résidus signés. IDEC reste non implémentée. Aucun code vidéo invité n'est remplacé ou ignoré.
+
+Lancement 12 (`run12-codex-ipu.log`, 60 s, code 124) : l'écran de chargement se termine, puis l'écran reste noir. Le PC est désormais dans `0x387DC8` (attente de CMD), notamment `0x387EF4`, et le jeu redémarre continuellement le DMA d'entrée. En fin d'essai : 739 491 démarrages DMA et 426 paquets GIF, sans fonction manquante.
+
+Lancement 13 (`run13-codex-ipu-trace.log`, 24 s, `BDR_TRACE_IPU=1`) : le flux arrive bien. Trois FDEC de 8 bits donnent successivement `0x0001B328`, `0x01B32801`, puis `0xB32801E0`. Sur la dernière, BUSY est effacé (`CTRL=0x00800008`) et le FIFO contient 8 qwords, avec QWC d'entrée `0xFF7`. Le jeu reste pourtant dans l'attente : les `BGEZL` à `0x387E08` et `0x387EF8` sont traduits avec `GPR_S32`. Cela teste le bit 31 des données, au lieu du bit 63 qui porte BUSY dans le registre CMD lu par `LD`.
+
+Le recompileur (`control_flow_emitter.cpp`) utilise maintenant `GPR_S64` pour BLEZ/BGTZ/BLTZ/BGEZ et toutes leurs variantes likely/link. Les douze variantes sont couvertes par un test ; les 452 tests runtime/recompileur passent sous MSVC. La comparaison sur le registre 64 bits est aussi celle de l'[interpréteur R5900 de PCSX2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Interpreter.cpp). Il faut régénérer les fichiers C++ et recompiler le jeu pour appliquer cette correction.
+
+`BDR_TRACE_IPU=1` trace les 160 premières commandes et démarrages DMA, puis un sur 10 000 : commande, DATA, CTRL, BP, TOP et registres DMA. Désactivée par défaut, la trace reste dans les journaux locaux ignorés par Git.
 

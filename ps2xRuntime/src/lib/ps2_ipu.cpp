@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cstdlib>
 #include <deque>
 #include <iostream>
 #include <vector>
@@ -424,9 +425,30 @@ struct Ps2Ipu::State
     uint32_t threshold1 = 0u;
     int dcPredictor[3] = {128, 128, 128};
     uint32_t macroblocksDone = 0u; // CSC/PACK progress
+    bool blockDecoded = false;
 
     // DMA channel 4: stop when the current transfer drains (last tag ended the chain).
     bool toIpuFinished = true;
+
+    const bool traceEnabled = std::getenv("BDR_TRACE_IPU") != nullptr;
+    uint32_t traceCommands = 0u;
+    uint32_t traceDmas = 0u;
+    void trace(const char *event, uint32_t value)
+    {
+        if (!traceEnabled)
+            return;
+        uint32_t &count = event[0] == 'c' ? traceCommands : traceDmas;
+        ++count;
+        if (count > 160u && count % 10000u != 0u)
+            return;
+        std::cerr << "[ipu] " << event << " #" << count << " value=0x" << std::hex << value
+                  << " cmd=0x" << command << " ctrl=0x" << ctrlValue() << " data=0x" << data
+                  << " bp=0x" << bpValue() << " top=0x" << top
+                  << " to[chcr=0x" << reg(Ps2Ipu::kToIpuChannel, 0u)
+                  << " madr=0x" << reg(Ps2Ipu::kToIpuChannel, kOffsetMadr)
+                  << " qwc=0x" << reg(Ps2Ipu::kToIpuChannel, kOffsetQwc)
+                  << "] from[qwc=0x" << reg(Ps2Ipu::kFromIpuChannel, kOffsetQwc) << "]" << std::dec << '\n';
+    }
 
     bool warnedIdec = false;
     bool warnedCommandWhileBusy = false;
@@ -918,6 +940,10 @@ struct Ps2Ipu::State
             const Result result = decodeBlock(intra, component, quantiserScale, blocks[i]);
             if (result != Result::Done)
                 return result;
+            // Intra samples are unsigned pixels; inter samples are signed residuals.
+            if (intra)
+                for (int16_t &sample : blocks[i])
+                    sample = std::clamp(sample, int16_t{0}, int16_t{255});
         }
 
         int16_t raw[384];
@@ -934,6 +960,34 @@ struct Ps2Ipu::State
         std::memcpy(&raw[320], blocks[5], 64 * sizeof(int16_t));
         out.resize(sizeof(raw));
         std::memcpy(out.data(), raw, sizeof(raw));
+        return Result::Done;
+    }
+
+    // After BDEC, skip byte-aligned zero stuffing and expose the next start code.
+    // This phase can wait for input after the output DMA has already completed.
+    Result finishBlock()
+    {
+        if (!fill(8u))
+            return Result::NeedData;
+        if (peek(8u) == 0u)
+        {
+            if (!skip((8u - (bp & 7u)) & 7u))
+                return Result::NeedData;
+            for (;;)
+            {
+                if (!fill(24u))
+                    return Result::NeedData;
+                const uint32_t prefix = peek(24u);
+                if (prefix != 0u)
+                {
+                    ctrl |= prefix == 1u ? kCtrlScd : kCtrlEcd;
+                    break;
+                }
+                advance(8u);
+            }
+        }
+        if (!fill(32u))
+            return Result::NeedData;
         return Result::Done;
     }
 
@@ -1195,15 +1249,32 @@ struct Ps2Ipu::State
                 break;
             case 0x2: // BDEC
             {
-                std::vector<uint8_t> macroblock;
+                if (!blockDecoded)
+                {
+                    std::vector<uint8_t> macroblock;
+                    beginTransaction();
+                    result = blockDecode(command, macroblock);
+                    if (result == Result::NeedData)
+                        rollback();
+                    else
+                        commit();
+                    if (result != Result::Done)
+                        break;
+                    output.insert(output.end(), macroblock.begin(), macroblock.end());
+                    blockDecoded = true;
+                }
+                drainOutput();
+                if (!output.empty())
+                {
+                    result = Result::NeedData;
+                    break;
+                }
                 beginTransaction();
-                result = blockDecode(command, macroblock);
+                result = finishBlock();
                 if (result == Result::NeedData)
                     rollback();
                 else
                     commit();
-                if (result == Result::Done)
-                    output.insert(output.end(), macroblock.begin(), macroblock.end());
                 break;
             }
             case 0x3: // VDEC
@@ -1277,8 +1348,10 @@ struct Ps2Ipu::State
         command = word;
         busy = true;
         macroblocksDone = 0u;
+        blockDecoded = false;
         ctrl &= ~(kCtrlEcd | kCtrlScd);
         process();
+        trace("cmd", word);
     }
 
     void reset()
@@ -1297,6 +1370,7 @@ struct Ps2Ipu::State
         recording = false;
         delivered.clear();
         macroblocksDone = 0u;
+        blockDecoded = false;
     }
 
     uint32_t ctrlValue() const
@@ -1427,6 +1501,7 @@ void Ps2Ipu::onDmaStart(uint32_t channelBase)
         }
     }
     state.process();
+    state.trace("dma", channelBase);
 }
 
 bool Ps2Ipu::busy() const

@@ -12,6 +12,9 @@ Base complète conservée depuis `ran-j/PS2Recomp`, commit indiqué dans `UPSTRE
 
 ## Modifications précédentes
 
+- `ps2_ipu.cpp` : BDEC conserve son état après sortie RAW16 pour attendre le prochain code MPEG, détecte SCD/ECD après le bourrage et sature les pixels intra. Trace optionnelle `BDR_TRACE_IPU`. Deux tests supplémentaires couvrent les chaînes IPU REF/REFE et l'arrivée tardive du DMA de sortie puis du code de début.
+- `ps2xRecomp/src/lib/control_flow_emitter.cpp` : BLEZ/BGTZ/BLTZ/BGEZ, y compris les formes likely/link, comparent le registre scalaire signé sur 64 bits. L'ancienne comparaison 32 bits confondait le bit 31 des données IPU avec BUSY (bit 63). Test des douze variantes dans `code_generator_tests.cpp` ; 452/452 tests réussis sur Windows. Une régénération du code invité est nécessaire.
+
 - `tools/` : extraction ISO9660, analyse ELF32, contrôle SHA256 du PAL SLES_546.27, génération et audit de traduction.
 - `cmake/Burnout.cmake` : liaison des fonctions traduites dans `burnout_dominator`, sans modifier les sources upstream avec du code de jeu.
 - `src/burnout_main.cpp` : montage explicite de l’ISO d’origine et du disque extrait, sauvegardes locales, arrêt strict sur fonction absente, diagnostic sans fenêtre avec délai borné.

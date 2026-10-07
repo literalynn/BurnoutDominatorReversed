@@ -191,6 +191,34 @@ void register_code_generator_tests()
                  "the registration source must use the same unambiguous stub header");
     });
 
+    tc.Run("signed branches test the low 64-bit lane, including likely and link forms", [](TestCase &t) {
+        // An IPU result such as 0x00000000B32801E0 is positive even with bit 31
+        // set. BUSY occupies bit 63; testing the low word confuses data with BUSY.
+        const std::pair<uint32_t, uint8_t> variants[] = {
+            {OPCODE_BLEZ, 0}, {OPCODE_BLEZL, 0}, {OPCODE_BGTZ, 0}, {OPCODE_BGTZL, 0},
+            {OPCODE_REGIMM, REGIMM_BLTZ}, {OPCODE_REGIMM, REGIMM_BLTZL},
+            {OPCODE_REGIMM, REGIMM_BLTZAL}, {OPCODE_REGIMM, REGIMM_BLTZALL},
+            {OPCODE_REGIMM, REGIMM_BGEZ}, {OPCODE_REGIMM, REGIMM_BGEZL},
+            {OPCODE_REGIMM, REGIMM_BGEZAL}, {OPCODE_REGIMM, REGIMM_BGEZALL}};
+        for (const auto &[opcode, rt] : variants)
+        {
+            Function func;
+            func.name = "signed_branch";
+            func.start = 0x9000u;
+            func.end = 0x900Cu;
+            func.isRecompiled = true;
+            Instruction branch = makeBranch(func.start, 1);
+            branch.opcode = opcode;
+            branch.rs = 17;
+            branch.rt = rt;
+            branch.raw = (opcode << 26) | (17u << 21) | (uint32_t{rt} << 16) | 1u;
+            CodeGenerator gen({}, {});
+            const auto generated = gen.generateFunction(func, {branch, makeNop(0x9004), makeNop(0x9008)}, false);
+            t.IsTrue(generated.find("GPR_S64(ctx, 17)") != std::string::npos, "signed R5900 branch uses bit 63");
+            t.IsTrue(generated.find("GPR_S32(ctx, 17)") == std::string::npos, "bit 31 is not the sign of a 64-bit register");
+        }
+    });
+
     tc.Run("unsigned integer loads use explicit zero extension", [](TestCase &t) {
         CodeGenerator gen({}, {});
         const std::string lbu = gen.translateInstruction(makeIType(0x8F10, OPCODE_LBU, 1, 2, 0x10));
