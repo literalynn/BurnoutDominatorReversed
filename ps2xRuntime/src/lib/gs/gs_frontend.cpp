@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -14,6 +15,51 @@ namespace
 {
     static constexpr uint32_t kHostFrameWidth = 640u;
 
+    void tracePresentation(const GSPresentationRequest &request, const PresentationFrame &frame)
+    {
+        static const bool enabled = []
+        {
+            const char *value = std::getenv("BDR_TRACE_GS");
+            return value && std::strcmp(value, "1") == 0;
+        }();
+        if (!enabled)
+            return;
+
+        std::ostringstream configuration;
+        configuration << " pmode=0x" << std::hex << request.pmode
+                      << " smode2=0x" << request.smode2
+                      << " dispfb1=0x" << request.dispfb1 << " display1=0x" << request.display1
+                      << " dispfb2=0x" << request.dispfb2 << " display2=0x" << request.display2
+                      << " bgcolor=0x" << request.bgcolor << std::dec
+                      << " INT=" << (request.smode2 & 1u) << " FFMD=" << ((request.smode2 >> 1) & 1u)
+                      << " mag1=" << (((request.display1 >> 23) & 15u) + 1u) << ',' << (((request.display1 >> 27) & 3u) + 1u)
+                      << " mag2=" << (((request.display2 >> 23) & 15u) + 1u) << ',' << (((request.display2 >> 27) & 3u) + 1u)
+                      << " origin1=" << ((request.dispfb1 >> 32) & 2047u) << ',' << ((request.dispfb1 >> 43) & 2047u)
+                      << " origin2=" << ((request.dispfb2 >> 32) & 2047u) << ',' << ((request.dispfb2 >> 43) & 2047u)
+                      << " output=" << frame.width << 'x' << frame.height
+                      << " hasFrame=" << static_cast<bool>(frame)
+                      << " displayFbp=" << frame.displayFbp << " sourceFbp=" << frame.sourceFbp
+                      << " usedPreferred=" << frame.usedPreferred
+                      << " preferred=" << request.hasPreferredSource << ',' << request.preferredDestFbp
+                      << ',' << request.preferredSource.fbp << ',' << request.preferredSource.fbw << ',' << static_cast<uint32_t>(request.preferredSource.psm)
+                      << " contexts=" << request.contextFrames[0].fbp << ',' << request.contextFrames[0].fbw << ',' << static_cast<uint32_t>(request.contextFrames[0].psm)
+                      << ';' << request.contextFrames[1].fbp << ',' << request.contextFrames[1].fbw << ',' << static_cast<uint32_t>(request.contextFrames[1].psm);
+
+        static std::mutex traceMutex;
+        static std::string previous;
+        static uint32_t samples = 0u;
+        static uint32_t emitted = 0u;
+        std::lock_guard<std::mutex> traceLock(traceMutex);
+        const std::string current = configuration.str();
+        if (emitted < 64u && (samples < 8u || current != previous))
+        {
+            std::cout << "[bdr:gs:present] sample=" << samples << " tick=" << request.vsyncTick
+                      << " field=" << (request.vsyncTick & 1u) << current << std::endl;
+            ++emitted;
+        }
+        previous = current;
+        ++samples;
+    }
     GSPrimReg decodePrimRegister(uint64_t value)
     {
         GSPrimReg prim{};
@@ -551,6 +597,7 @@ void GS::latchHostPresentationFrame()
         }
     }
 
+    tracePresentation(request, frame);
     const bool hasFrame = static_cast<bool>(frame);
     const uint32_t displayFbp = frame.displayFbp;
     const uint32_t sourceFbp = frame.sourceFbp;
@@ -966,7 +1013,7 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
         vtx.x = static_cast<float>(x) / 16.0f;
         vtx.y = static_cast<float>(y) / 16.0f;
-        vtx.z = static_cast<float>(z);
+        vtx.z = static_cast<double>(z);
         vtx.r = m_curR;
         vtx.g = m_curG;
         vtx.b = m_curB;
@@ -1031,7 +1078,7 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
         vtx.x = static_cast<float>(lo & 0xFFFF) / 16.0f;
         vtx.y = static_cast<float>((lo >> 32) & 0xFFFF) / 16.0f;
-        vtx.z = static_cast<float>(hi & 0xFFFFFFFF);
+        vtx.z = static_cast<double>(hi & 0xFFFFFFFF);
         vtx.r = m_curR;
         vtx.g = m_curG;
         vtx.b = m_curB;
