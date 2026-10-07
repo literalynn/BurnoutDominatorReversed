@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -31,6 +32,7 @@ namespace ps2x::iop::detail
         uint32_t gp = 0;
         uint32_t nextModuleCursor = 0;
         bool relocationsComplete = true;
+        std::string name; // module name stored in the IOPMOD header (what loadcore searches by)
 
         [[nodiscard]] explicit operator bool() const noexcept
         {

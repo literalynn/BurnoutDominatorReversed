@@ -1,7 +1,10 @@
 #pragma once
 
+#include "iop_spu2.h"
+
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -41,6 +44,10 @@ namespace ps2x::iop::detail
 
         void reset();
 
+        // Diagnostics: called with (address, merged 32-bit value) for every write to the
+        // hardware register ranges. Survives reset().
+        void setHardwareWriteHook(std::function<void(uint32_t, uint32_t)> hook) { m_hardwareWriteHook = std::move(hook); }
+
         [[nodiscard]] uint8_t read8(uint32_t address) const;
         [[nodiscard]] uint16_t read16(uint32_t address) const;
         [[nodiscard]] uint32_t read32(uint32_t address) const;
@@ -68,6 +75,7 @@ namespace ps2x::iop::detail
         void setInterruptControl(uint32_t value) noexcept { m_interruptControl = value & 1u; }
 
         [[nodiscard]] std::optional<DmaStart> takeDmaStart() noexcept;
+        [[nodiscard]] Spu2 &spu() const noexcept { return m_spu; }
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
 
         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
@@ -87,5 +95,8 @@ namespace ps2x::iop::detail
         uint32_t m_interruptMask = 0;
         uint32_t m_interruptControl = 1;
         std::optional<DmaStart> m_dmaStart;
+        std::function<void(uint32_t, uint32_t)> m_hardwareWriteHook;
+        // Reads of the SPU2 data port advance its transfer address, hence mutable.
+        mutable Spu2 m_spu;
     };
 }

@@ -328,11 +328,23 @@ namespace
             0x03801021u, // addu v0, gp, zero
         };
         constexpr uint32_t gpData = 0x47505250u; // "GPRP"
-        const uint32_t iopModuleHeader[] = {
-            0u,
-            entryAddress,
-            gpAddress,
+        struct IopModuleHeader
+        {
+            uint32_t moduleInfo;
+            uint32_t entry;
+            uint32_t gp;
+            uint32_t textSize;
+            uint32_t dataSize;
+            uint32_t bssSize;
+            uint16_t version;
+            char name[14];
         };
+        static_assert(sizeof(IopModuleHeader) == 40u);
+        IopModuleHeader iopModuleHeader{};
+        iopModuleHeader.entry = entryAddress;
+        iopModuleHeader.gp = gpAddress;
+        iopModuleHeader.version = 0x0101u;
+        std::memcpy(iopModuleHeader.name, "relocsrv", sizeof("relocsrv"));
 
         ProgramHeader iopModule{};
         iopModule.type = 0x70000080u; // PT_SCE_IOPMOD
@@ -378,7 +390,7 @@ namespace
         std::memcpy(host.guest.data() + address + sizeof(header), &iopModule, sizeof(iopModule));
         std::memcpy(host.guest.data() + address + sizeof(header) + sizeof(iopModule), &program, sizeof(program));
         std::memcpy(host.guest.data() + address + iopModFileOffset,
-                    iopModuleHeader, sizeof(iopModuleHeader));
+                    &iopModuleHeader, sizeof(iopModuleHeader));
         std::memcpy(host.guest.data() + address + codeOffset + entryAddress, code, sizeof(code));
         std::memcpy(host.guest.data() + address + codeOffset + importTableAddress,
                     importTable, sizeof(importTable));
@@ -1129,6 +1141,11 @@ int main()
                 "Relocatable RPC server IRX did not start")) return 1;
     if (!expect(iop.canBindRpc(relocatableRpcSid),
                 "R_MIPS_26 did not relocate a symbol-less IRX import call")) return 1;
+    if (!expect(iop.searchModuleByName("relocsrv") == relocatableRpcModule.moduleId,
+                "loadcore name search did not find the IRX by its IOPMOD name")) return 1;
+    if (!expect(iop.searchModuleByName("reloc") < 0 && iop.searchModuleByName("RELOCSRV") < 0 &&
+                    iop.searchModuleByName("") < 0,
+                "module name search must compare the whole name exactly")) return 1;
 
     RpcRequest relocatableRequest{};
     relocatableRequest.sid = relocatableRpcSid;
@@ -1147,6 +1164,8 @@ int main()
                 "Physical RPC callback did not inherit the registering module's GP")) return 1;
 
     iop.reset();
+    if (!expect(iop.searchModuleByName("relocsrv") < 0,
+                "IOP reset did not forget the module name")) return 1;
     writeExportProviderIrx(host, 0x100u);
     const ModuleLoadResult exportProvider = iop.loadModuleBuffer(0x100u);
     if (!expect(exportProvider.handled && exportProvider.startResult == 0,

@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <set>
@@ -75,6 +76,7 @@ namespace ps2x::iop::detail
             int id = 0;
             std::string path;
             std::string name;
+            std::string irxName; // internal module name from the IRX header
             uint32_t base = 0;
             uint32_t size = 0;
             uint32_t entry = 0;
@@ -113,6 +115,42 @@ namespace ps2x::iop::detail
               loadcore(memory, imports)
         {
             reset();
+            // The SPU2 asserts IOP interrupt 9 when a voice or a transfer reaches its IRQ address.
+            memory.spu().raiseIrq = [this]
+            {
+                pendingDmaInterrupts[kSpu2Irq] = totalCycles;
+            };
+            static const bool traceHardware = []
+            {
+                const char *env = std::getenv("BDR_TRACE_IOPHW");
+                return env && env[0] != '\0' && env[0] != '0';
+            }();
+            if (traceHardware)
+                memory.setHardwareWriteHook([this](uint32_t address, uint32_t value)
+                                            { traceHardwareWrite(address, value); });
+            static const bool kernelLog = []
+            {
+                const char *env = std::getenv("BDR_STATUS_DETAIL");
+                return env && env[0] != '\0' && env[0] != '0';
+            }();
+            if (kernelLog)
+                kernel.enableLog([this](uint32_t address)
+                                 { return symbolize(address); });
+        }
+
+        std::string symbolize(uint32_t address) const
+        {
+            std::ostringstream out;
+            for (const auto &[id, module] : modules)
+            {
+                if (address >= module.base && address < module.base + module.size)
+                {
+                    out << (module.name.empty() ? module.path : module.name) << "+0x" << std::hex << address - module.base;
+                    return out.str();
+                }
+            }
+            out << "0x" << std::hex << address;
+            return out.str();
         }
 
         void reset()
@@ -159,6 +197,38 @@ namespace ps2x::iop::detail
             return memory.read32(address);
         }
 
+        // BDR_TRACE_IOPHW=1: bounded log of IOP writes to the DMA and SPU2 register ranges.
+        void traceHardwareWrite(uint32_t address, uint32_t value)
+        {
+            const uint32_t phys = address & 0x1FFFFFFFu;
+            const bool dma = phys >= 0x1F8010C0u && phys < 0x1F801100u;
+            const bool dma2 = phys >= 0x1F801500u && phys < 0x1F801570u;
+            // SPU2 core registers without the per-voice parameters and the PIO data port.
+            const uint32_t coreOffset = phys & 0x3FFu;
+            const bool spuCore = (phys >= 0x1F900000u && phys < 0x1F900800u) && coreOffset >= 0x180u;
+            const bool dataPort = coreOffset == 0x1ACu || coreOffset == 0x1ADu || coreOffset == 0x1AEu;
+            const bool spu = spuCore && !dataPort;
+            if (!(dma || dma2 || spu) || traceHardwareWrites >= 6000u)
+                return;
+            ++traceHardwareWrites;
+            std::ostringstream out;
+            const uint32_t pc = activeCpu ? activeCpu->pc : 0u;
+            std::string where = "?";
+            for (const auto &[id, module] : modules)
+            {
+                if (pc >= module.base && pc < module.base + module.size)
+                {
+                    std::ostringstream w;
+                    w << module.name << "+0x" << std::hex << pc - module.base;
+                    where = w.str();
+                    break;
+                }
+            }
+            out << "[iop-hw] cyc=" << totalCycles << " pc=" << where << " 0x" << std::hex << phys
+                << " = 0x" << value;
+            log(LogLevel::Info, out.str());
+        }
+
         void write8(uint32_t address, uint8_t value)
         {
             memory.write8(address, value);
@@ -180,7 +250,25 @@ namespace ps2x::iop::detail
         void schedulePendingDma()
         {
             if (const auto dma = memory.takeDmaStart())
+            {
                 pendingDmaInterrupts[dma->irq] = totalCycles + dma->delayCycles;
+                if (traceSpu && traceSpuDmas++ < 64u)
+                {
+                    const bool core1 = dma->irq == 0x28;
+                    const uint32_t channel = core1 ? 0x1F801500u : 0x1F8010C0u;
+                    std::ostringstream out;
+                    out << "[IOP SPU trace] start irq=0x" << std::hex << dma->irq
+                        << " pc=0x" << (activeCpu ? activeCpu->pc : 0u)
+                        << " gp=0x" << (activeCpu ? activeCpu->gpr[28] : 0u)
+                        << " madr=0x" << memory.read32(channel)
+                        << " bcr=0x" << memory.read32(channel + 4u)
+                        << " chcr=0x" << memory.read32(channel + 8u)
+                        << " attr=0x" << memory.read16(0x1F90019Au + (core1 ? 0x400u : 0u))
+                        << " statx=0x" << memory.read16(0x1F900344u + (core1 ? 0x400u : 0u))
+                        << std::dec << " due=" << totalCycles + dma->delayCycles;
+                    log(LogLevel::Info, out.str());
+                }
+            }
         }
 
         bool readRam(uint32_t address, void *destination, size_t size) const
@@ -266,6 +354,19 @@ namespace ps2x::iop::detail
         ImportDisposition dispatchImport(const IopImportCall &call, CpuState &cpu)
         {
             const uint32_t a0 = cpu.gpr[4];
+            if (traceSpu && iequals(call.library, "libsd") &&
+                (call.ordinal == 17u || call.ordinal == 19u || call.ordinal == 28u) &&
+                traceSpuImports++ < 96u)
+            {
+                std::ostringstream out;
+                out << "[IOP SPU trace] libsd:" << call.ordinal
+                    << " pc=0x" << std::hex << cpu.pc << " gp=0x" << cpu.gpr[28]
+                    << " a0=0x" << cpu.gpr[4] << " a1=0x" << cpu.gpr[5]
+                    << " a2=0x" << cpu.gpr[6] << " a3=0x" << cpu.gpr[7]
+                    << " stackarg=0x" << memory.read32(cpu.gpr[29] + 16u)
+                    << " irqctl=0x" << memory.interruptControl();
+                log(LogLevel::Info, out.str());
+            }
             auto setV0 = [&](uint32_t value)
             {
                 cpu.gpr[2] = value;
@@ -412,6 +513,32 @@ namespace ps2x::iop::detail
             if (checkInterrupt(cpu))
                 return true;
 
+            if (!tracedPcs.empty())
+            {
+                for (auto pending = tracedReturns.begin(); pending != tracedReturns.end(); ++pending)
+                {
+                    if (pending->returnAddress == cpu.pc && pending->stackPointer == cpu.gpr[29])
+                    {
+                        std::ostringstream out;
+                        out << "[iop-ret] cyc=" << totalCycles << " " << pending->name << " v0=0x" << std::hex << cpu.gpr[2];
+                        log(LogLevel::Info, out.str());
+                        tracedReturns.erase(pending);
+                        break;
+                    }
+                }
+                if (tracedPcs.count(cpu.pc) != 0u && traceCallCount < 4000u)
+                {
+                    ++traceCallCount;
+                    std::ostringstream out;
+                    out << "[iop-call] cyc=" << totalCycles << " " << symbolize(cpu.pc) << " a0=0x" << std::hex << cpu.gpr[4]
+                        << " a1=0x" << cpu.gpr[5] << " a2=0x" << cpu.gpr[6] << " a3=0x" << cpu.gpr[7] << " sp0=0x"
+                        << memory.read32(cpu.gpr[29] + 16u) << " ra=" << symbolize(cpu.gpr[31]);
+                    log(LogLevel::Info, out.str());
+                    if (tracedReturns.size() < 256u)
+                        tracedReturns.push_back({cpu.gpr[31], cpu.gpr[29], symbolize(cpu.pc)});
+                }
+            }
+
             if (const auto import = imports.decode(cpu.pc))
             {
                 const ImportDisposition disposition = dispatchImport(*import, cpu);
@@ -438,8 +565,12 @@ namespace ps2x::iop::detail
             const uint64_t start = totalInstructions;
             while (!cpu.stopped && !cpu.yielded && totalInstructions - start < instructionBudget)
             {
+                if (profileIop && (totalInstructions & 0x3Fu) == 0u)
+                    ++pcHistogram[cpu.pc & ~0xFu];
                 if (!step(cpu))
                     break;
+                if (totalCycles >= memory.spu().dueCycle())
+                    memory.spu().advanceTo(totalCycles);
                 if (!servicingDmaInterrupts && !pendingDmaInterrupts.empty())
                     servicePendingDmaInterrupts();
                 if (!servicingGuestCallbacks && !pendingGuestCallbacks.empty())
@@ -536,7 +667,24 @@ namespace ps2x::iop::detail
             try
             {
                 for (const int irq : completed)
-                    (void)intrman.dispatchInterrupt(irq, *this);
+                {
+                    if (irq == kSpu0DmaIrq)
+                        memory.spu().dmaCompleted(0);
+                    else if (irq == kSpu1DmaIrq)
+                        memory.spu().dmaCompleted(1);
+                    const bool dispatched = intrman.dispatchInterrupt(irq, *this);
+                    if (traceSpu && traceSpuIrqs++ < 64u)
+                    {
+                        std::ostringstream out;
+                        out << "[IOP SPU trace] complete irq=0x" << std::hex << irq
+                            << " dispatched=" << dispatched
+                            << " pc=0x" << (activeCpu ? activeCpu->pc : 0u)
+                            << " gp=0x" << (activeCpu ? activeCpu->gpr[28] : 0u)
+                            << " irqctl=0x" << memory.interruptControl()
+                            << std::dec << " cycle=" << totalCycles;
+                        log(LogLevel::Info, out.str());
+                    }
+                }
             }
             catch (...)
             {
@@ -594,6 +742,8 @@ namespace ps2x::iop::detail
                 const uint64_t target = totalCycles + cycles;
                 while (totalCycles < target)
                 {
+                    if (totalCycles >= memory.spu().dueCycle())
+                        memory.spu().advanceTo(totalCycles);
                     servicePendingDmaInterrupts();
                     servicePendingGuestCallbacks();
                     timrman.serviceDue(totalCycles, *this);
@@ -605,6 +755,7 @@ namespace ps2x::iop::detail
                             nextWake = std::min(nextWake, completionCycle);
                         if (!pendingGuestCallbacks.empty())
                             nextWake = std::min(nextWake, pendingGuestCallbacks.begin()->first);
+                        nextWake = std::min(nextWake, memory.spu().dueCycle());
                         nextWake = timrman.nextEventCycle(nextWake);
                         totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
                         continue;
@@ -643,6 +794,7 @@ namespace ps2x::iop::detail
             module.path = std::move(path);
             const size_t slash = module.path.find_last_of("/\\:");
             module.name = slash == std::string::npos ? module.path : module.path.substr(slash + 1u);
+            module.irxName = loaded.name;
             module.base = loaded.base;
             module.size = loaded.size;
             module.entry = loaded.entry;
@@ -696,6 +848,18 @@ namespace ps2x::iop::detail
             return loadImage(tag.str(), image, arguments, argumentSize);
         }
 
+        int32_t findModuleByName(std::string_view name) const noexcept
+        {
+            if (name.empty())
+                return -1;
+            for (const auto &[id, module] : modules)
+            {
+                if (module.resident && module.irxName == name)
+                    return id;
+            }
+            return -1;
+        }
+
         bool stopModule(int32_t moduleId, int32_t *result)
         {
             auto it = modules.find(moduleId);
@@ -741,6 +905,48 @@ namespace ps2x::iop::detail
         bool servicingDmaInterrupts = false;
         bool servicingGuestCallbacks = false;
         uint32_t callDepth = 0u;
+        // Opt-in bounded diagnostics; do not alter guest transfer semantics.
+        bool traceSpu = []
+        {
+            const char *value = std::getenv("PS2X_IOP_TRACE_SPU");
+            return value && value[0] != '\0' && value[0] != '0';
+        }();
+        static constexpr int kSpu2Irq = 9;
+        static constexpr int kSpu0DmaIrq = 0x24;
+        static constexpr int kSpu1DmaIrq = 0x28;
+        uint32_t traceHardwareWrites = 0u;
+        // BDR_TRACE_IOPCALLS=0xADDR,...: log each time the IOP executes one of these absolute
+        // addresses (function entry points), with a0-a3, the first stack argument and ra.
+        std::set<uint32_t> tracedPcs = []
+        {
+            std::set<uint32_t> result;
+            if (const char *env = std::getenv("BDR_TRACE_IOPCALLS"))
+            {
+                std::stringstream list(env);
+                for (std::string item; std::getline(list, item, ',');)
+                    if (!item.empty())
+                        result.insert(static_cast<uint32_t>(std::stoul(item, nullptr, 16)));
+            }
+            return result;
+        }();
+        uint32_t traceCallCount = 0u;
+        // BDR_IOP_PROFILE=1: where the IOP spends its instructions (sampled every 64th), in 16-byte buckets.
+        const bool profileIop = []
+        {
+            const char *value = std::getenv("BDR_IOP_PROFILE");
+            return value && value[0] != '\0' && value[0] != '0';
+        }();
+        std::unordered_map<uint32_t, uint32_t> pcHistogram;
+        struct PendingReturn
+        {
+            uint32_t returnAddress = 0u;
+            uint32_t stackPointer = 0u;
+            std::string name;
+        };
+        std::vector<PendingReturn> tracedReturns;
+        uint32_t traceSpuImports = 0u;
+        uint32_t traceSpuDmas = 0u;
+        uint32_t traceSpuIrqs = 0u;
         std::set<std::pair<std::string, uint16_t>> reportedMissingImports;
         GuestCallback secrMcCommandHandler;
         GuestCallback secrMcDevIdHandler;
@@ -772,6 +978,11 @@ namespace ps2x::iop::detail
     bool IopEmulator::stopModule(int32_t moduleId, int32_t *result)
     {
         return m_impl->stopModule(moduleId, result);
+    }
+
+    int32_t IopEmulator::findModuleByName(std::string_view name) const noexcept
+    {
+        return m_impl->findModuleByName(name);
     }
 
     void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
@@ -860,6 +1071,41 @@ namespace ps2x::iop::detail
     uint32_t IopEmulator::threadCount() const noexcept
     {
         return static_cast<uint32_t>(m_impl->kernel.threadCount());
+    }
+
+    void IopEmulator::describeKernel(std::vector<std::string> &lines) const
+    {
+        const auto &modules = m_impl->modules;
+        if (m_impl->profileIop)
+        {
+            std::vector<std::pair<uint32_t, uint32_t>> ranked(m_impl->pcHistogram.begin(), m_impl->pcHistogram.end());
+            std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b)
+                      { return a.second > b.second; });
+            uint64_t total = 0u;
+            for (const auto &entry : ranked)
+                total += entry.second;
+            for (size_t i = 0; i < ranked.size() && i < 24u; ++i)
+            {
+                std::ostringstream out;
+                out << "iop-prof " << std::dec << ranked[i].second * 100u / std::max<uint64_t>(total, 1u) << "% "
+                    << m_impl->symbolize(ranked[i].first);
+                lines.push_back(out.str());
+            }
+        }
+        m_impl->kernel.describe(lines, [&modules](uint32_t address)
+                                {
+            std::ostringstream out;
+            for (const auto &[id, module] : modules)
+            {
+                if (address >= module.base && address < module.base + module.size)
+                {
+                    out << (module.name.empty() ? module.path : module.name) << "+0x" << std::hex << address - module.base
+                        << " (0x" << address << ')';
+                    return out.str();
+                }
+            }
+            out << "0x" << std::hex << address;
+            return out.str(); });
     }
 
     uint32_t IopEmulator::rpcServerCount() const noexcept

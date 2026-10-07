@@ -4,7 +4,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace ps2x::iop::detail
 {
@@ -68,7 +72,35 @@ namespace ps2x::iop::detail
 
         [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
 
+        // One line per thread, semaphore and event flag, for diagnostics. `symbolize`
+        // turns a guest address into text such as "RWA.IRX+0x1234".
+        void describe(std::vector<std::string> &lines,
+                      const std::function<std::string(uint32_t)> &symbolize) const;
+
+        // Diagnostics: keep the last distinct thread/semaphore/event-flag operations
+        // (shown by describe()). `symbolize` turns the caller's address into text.
+        void enableLog(std::function<std::string(uint32_t)> symbolize)
+        {
+            m_symbolize = std::move(symbolize);
+            m_logEnabled = true;
+        }
+
     private:
+        [[nodiscard]] bool dispatchThreadImportImpl(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle);
+        [[nodiscard]] bool dispatchSemaphoreImportImpl(uint16_t ordinal, IopCpuState &cpu);
+        [[nodiscard]] bool dispatchEventImportImpl(uint16_t ordinal, IopCpuState &cpu);
+
+        struct LogArgs
+        {
+            uint32_t a0 = 0;
+            uint32_t a1 = 0;
+            uint32_t a2 = 0;
+            uint32_t ra = 0;
+            int thread = 0;
+        };
+        [[nodiscard]] LogArgs beginLog(const IopCpuState &cpu) const;
+        void endLog(const char *library, uint16_t ordinal, const IopCpuState &cpu, const LogArgs &args);
+
         struct Semaphore
         {
             int id = 0;
@@ -93,11 +125,25 @@ namespace ps2x::iop::detail
 
         IopMemory &m_memory;
         std::map<int, IopThread> m_threads;
+        bool m_deadThreadPending = false; // a thread entered the Dead state since the last cleanup
         std::map<int, Semaphore> m_semaphores;
         std::map<int, EventFlag> m_eventFlags;
         uint32_t m_nextThreadId = 1;
         uint32_t m_nextSemaphoreId = 1;
         uint32_t m_nextEventFlagId = 1;
         IopThread *m_currentThread = nullptr;
+
+        bool m_logEnabled = false;
+        std::function<std::string(uint32_t)> m_symbolize;
+        struct LogEntry
+        {
+            uint64_t firstSequence = 0;
+            uint64_t lastSequence = 0;
+            uint64_t count = 0;
+            std::string text;
+        };
+        std::vector<LogEntry> m_log;
+        std::unordered_map<std::string, size_t> m_logIndex;
+        uint64_t m_logSequence = 0;
     };
 }

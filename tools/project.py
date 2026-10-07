@@ -282,14 +282,14 @@ def build(args) -> None:
             raise RuntimeError("PowerShell 7 is required for the MSBuild environment wrapper (scripts/Invoke-MSBuild.ps1)")
         targets = ["ps2EntryRunner"] if args.game else [
             "ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests",
-            "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "burnout_overrides_tests"]
+            "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests"]
         for target in targets:
             run([pwsh, "-NoProfile", "-File", str(ROOT / "scripts" / "Invoke-MSBuild.ps1"),
                  "-BuildDirectory", str(args.build_dir.resolve()), "-Target", target,
                  "-Jobs", str(args.jobs), "-LogPath", str(LOCAL / "logs" / ("msbuild-" + target + ".log"))], "native-build-" + target + ".log")
         return
     command = [args.cmake, "--build", str(args.build_dir.resolve()), "--config", "Release", "--parallel", str(args.jobs), "--target"]
-    command += ["ps2EntryRunner"] if args.game else ["ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests", "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "burnout_overrides_tests"]
+    command += ["ps2EntryRunner"] if args.game else ["ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests", "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests"]
     run(command, "native-build.log")
 
 

@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace ps2x::iop::detail
@@ -46,5 +47,8 @@ namespace ps2x::iop::detail
 
         IopMemory &m_memory;
         std::map<uint32_t, ExportLibrary> m_libraries;
+        // Stub address to its import: finding the table of a stub scans memory backwards,
+        // and every call of an import goes through decode().
+        mutable std::unordered_map<uint32_t, IopImportCall> m_decodeCache;
     };
 }

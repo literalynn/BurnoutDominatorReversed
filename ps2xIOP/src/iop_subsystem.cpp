@@ -6,6 +6,7 @@
 #include "module_factories.h"
 #include "ps2x/iop/ps2_path.h"
 
+#include <cstdlib>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -164,6 +165,12 @@ namespace ps2x::iop
         return true;
     }
 
+    int32_t IopSubsystem::searchModuleByName(std::string_view name) const
+    {
+        const int32_t physical = m_impl->emulator.findModuleByName(name);
+        return physical > 0 ? physical : m_impl->moduleManager.findHleByName(name);
+    }
+
     void IopSubsystem::runEeCycles(uint64_t eeCycles) noexcept
     {
         m_impl->emulator.runEeCycles(eeCycles);
@@ -263,6 +270,14 @@ namespace ps2x::iop
         snapshot.emulatorThreads = m_impl->emulator.threadCount();
         snapshot.emulatorRpcServers = m_impl->emulator.rpcServerCount();
         snapshot.diagnostics = m_impl->loadOutcomes;
+        // BDR_STATUS_DETAIL=1 adds the IOP kernel objects (threads, semaphores, event flags).
+        static const bool detail = []
+        {
+            const char *value = std::getenv("BDR_STATUS_DETAIL");
+            return value && value[0] != '\0' && value[0] != '0';
+        }();
+        if (detail)
+            m_impl->emulator.describeKernel(snapshot.diagnostics);
         if (!m_impl->lastError.empty())
         {
             snapshot.diagnostics.push_back(m_impl->lastError);

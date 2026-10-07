@@ -10,10 +10,12 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -704,8 +706,30 @@ namespace ps2x::iop::detail
             return host.readHostFile(node->handle, offset, destination, wanted, bytesRead) && bytesRead == wanted;
         }
 
+        // BDR_TRACE_CDVD=1: every sceCdRead, to follow what a game streams from the disc.
+        void traceRead(uint32_t lsn, uint32_t sectors, uint32_t destination)
+        {
+            static const bool enabled = []
+            {
+                const char *value = std::getenv("BDR_TRACE_CDVD");
+                return value && value[0] != '\0' && value[0] != '0';
+            }();
+            if (!enabled)
+                return;
+            static uint32_t reads = 0u;
+            static uint64_t totalSectors = 0u;
+            totalSectors += sectors;
+            if (++reads > 20000u)
+                return;
+            std::ostringstream out;
+            out << "[iop-cd] read #" << reads << " lsn=" << lsn << " sectors=" << sectors << " dest=0x" << std::hex
+                << destination << std::dec << " total=" << totalSectors;
+            host.log(LogLevel::Info, out.str());
+        }
+
         bool readSectors(uint32_t lsn, uint32_t sectors, uint32_t destination)
         {
+            traceRead(lsn, sectors, destination);
             if (sectors == 0u)
             {
                 lastError = kCdvdErrorNone;

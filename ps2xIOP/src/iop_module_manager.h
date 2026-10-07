@@ -27,6 +27,8 @@ namespace ps2x::iop::detail
 
         [[nodiscard]] bool isLoaded(std::span<const std::string_view> aliases) const;
         [[nodiscard]] bool recognizes(std::string_view path) const;
+        // Id of the loaded HLE module that stands for the IRX with this internal name, or -1.
+        [[nodiscard]] int32_t findHleByName(std::string_view name) const;
 
     private:
         struct Record
