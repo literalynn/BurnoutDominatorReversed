@@ -1,11 +1,11 @@
-# Données du projet
+# Project data
 
-`functions.ee.csv` : carte des fonctions de l’ELF PAL `SLES_546.27` (SHA256 dans `project.json`). Chaque ligne donne un nom généré par Ghidra (`FUN_…`, `entry_…`, `caseD_…`), une adresse de début, une adresse de fin et une taille. Elle ne contient aucun octet du jeu.
+`functions.ee.csv`: function map of the PAL ELF `SLES_546.27` (SHA256 in `project.json`). Each line gives a Ghidra-generated name (`FUN_…`, `entry_…`, `caseD_…`), a start address, an end address and a size. It contains no game bytes.
 
-Provenance : analyse de `SLES_546.27` par Ghidra 12.1.4 avec l’extension Emotion Engine Reloaded 2.1.38 (processeur `r5900:LE:32:default` ; archives et empreintes dans `tools/ghidra/docs/toolchain.json`), exportée par le script upstream `ps2xRecomp/tools/ghidra/ExportPS2Functions.java` (méthode : `ps2xAnalyzer/Readme.md`, section « Ghidra Integration »). Seuls les enregistrements de `.text` (`0x00100000` à `0x003BEB28`) sont gardés : 48 969 lignes, soit 8 860 fonctions et 40 109 labels de reprise. Les 65 enregistrements hors de `.text` sont écartés (`docs/FINDINGS.md`, E003 et E004).
+Provenance: analysis of `SLES_546.27` by Ghidra 12.1.4 with the Emotion Engine Reloaded 2.1.38 extension (processor `r5900:LE:32:default`; archives and hashes in `tools/ghidra/docs/toolchain.json`), exported by the upstream script `ps2xRecomp/tools/ghidra/ExportPS2Functions.java` (method: `ps2xAnalyzer/Readme.md`, section "Ghidra Integration"). Only the `.text` records (`0x00100000` to `0x003BEB28`) are kept: 48,969 lines, i.e. 8,860 functions and 40,109 resume labels. The 65 records outside `.text` are dropped (`docs/FINDINGS.md`, E003 and E004).
 
-`tools/install.py` l’utilise sur place, sauf si le dossier de travail contient `local/analysis/ghidra/functions.ee.csv` (un export plus récent) ; `--function-map` choisit une autre carte. `project.py generate --augment` écrit la carte complétée par `tools/augment_function_map.py` dans `local/analysis/ghidra/` du dossier de travail, jamais ici.
+`tools/install.py` uses it in place, unless the work directory contains `local/analysis/ghidra/functions.ee.csv` (a newer export); `--function-map` picks another map. `project.py generate --augment` writes the map completed by `tools/augment_function_map.py` into `local/analysis/ghidra/` of the work directory, never here.
 
-Pour la refaire : analyser `SLES_546.27` dans Ghidra avec ces versions, lancer `ExportPS2Functions.java`, garder les lignes dont l’adresse de début est dans `.text` et enregistrer le résultat sous `functions.ee.csv`. `tools/ghidra/README.md` décrit l’export du pseudocode et les scripts d’analyse du projet, pas cette carte.
+To redo it: analyse `SLES_546.27` in Ghidra with these versions, run `ExportPS2Functions.java`, keep the lines whose start address is in `.text` and save the result as `functions.ee.csv`. `tools/ghidra/README.md` describes the pseudocode export and the project's analysis scripts, not this map.
 
-SHA256 : `449eb932a36f348a6e032e023c8dd1b1f5a3996e0e5129ddbf12773df8011138`
+SHA256: `449eb932a36f348a6e032e023c8dd1b1f5a3996e0e5129ddbf12773df8011138`

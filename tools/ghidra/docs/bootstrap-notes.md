@@ -1,23 +1,23 @@
-# Amorçage EE observé dans le pseudocode
+# EE bootstrap seen in the pseudocode
 
-L'entrée PAL est `0x00100008`, dans `local/decompiled/functions/00100008_entry.pseudocode.c`. La décompilation conserve des types inférés tels que `undefined4` et des noms automatiques. Les valeurs associées aux différentes parties du registre zéro sont des artefacts de représentation du décompilateur ; consulter les instructions R5900 avant de modifier une opération mémoire.
+The PAL entry is `0x00100008`, in `local/decompiled/functions/00100008_entry.pseudocode.c`. The decompilation keeps inferred types such as `undefined4` and automatic names. Values attached to different parts of the zero register are artefacts of the decompiler's representation; check the R5900 instructions before changing a memory operation.
 
-Le pseudocode montre cette séquence :
+The pseudocode shows this sequence:
 
-1. `SYNC(0x10)` et initialisation à zéro de la zone `0x00432B00` à `0x01F9BB00`, par écritures alignées de 16 octets puis gestion des bords.
-2. Les appels système `0x3C` et `0x3D`. Le répartiteur actuel de PS2Recomp associe ces identifiants à `SetupThread` et `SetupHeap`.
-3. Appel à `0x003B2BD0`, qui appelle neuf sous-routines d'initialisation. Leur signification complète reste à identifier.
-4. `FlushCache(0)` et `EI()`.
-5. Appel à `0x0021B3F8` avec les données globales à `0x00433080` et `0x00433084`.
-6. Appel à `0x00322630` après son retour ; cette routine appelle `0x00321E18`, `0x003A2A50`, puis un thunk à `0x003B2DE0`.
+1. `SYNC(0x10)` and zeroing of `0x00432B00` to `0x01F9BB00`, with aligned 16-byte writes then edge handling.
+2. System calls `0x3C` and `0x3D`. PS2Recomp's current dispatcher maps these ids to `SetupThread` and `SetupHeap`.
+3. Call to `0x003B2BD0`, which calls nine initialisation subroutines. Their full meaning is still to be identified.
+4. `FlushCache(0)` and `EI()`.
+5. Call to `0x0021B3F8` with the global data at `0x00433080` and `0x00433084`.
+6. Call to `0x00322630` after it returns; this routine calls `0x00321E18`, `0x003A2A50`, then a thunk at `0x003B2DE0`.
 
-Le code à `0x0021B3F8` prépare notamment une chaîne de chemin, utilise `GetThreadId`, puis appelle `ChangeThreadPriority(..., 10)`. Il répète une séquence jusqu'à ce que `FUN_00207D08(0x00491540)` retourne une valeur non nulle, puis attend que l'octet global `DAT_0051B910` devienne non nul. Ces adresses servent de points d'observation pour distinguer une progression de l'initialisation d'une attente. Elles ne justifient pas de forcer ces résultats ni de remplacer les boucles par des retours fictifs.
+The code at `0x0021B3F8` notably prepares a path string, uses `GetThreadId`, then calls `ChangeThreadPriority(..., 10)`. It repeats a sequence until `FUN_00207D08(0x00491540)` returns non-zero, then waits for the global byte `DAT_0051B910` to become non-zero. These addresses are observation points to tell initialisation progress from a wait. They do not justify forcing these results or replacing the loops with fake returns.
 
-Fichiers utiles :
+Useful files:
 
 - `00100008_entry.pseudocode.c`
 - `003B2BD0_FUN_003b2bd0.pseudocode.c`
 - `0021B3F8_FUN_0021b3f8.pseudocode.c`
 - `00322630_FUN_00322630.pseudocode.c`
 
-Les plages de corps exactes et tentatives d'export figurent dans `local/decompiled/manifest.json`. Aucun nom du projet Ghidra ni octet de l'ELF original n'a été modifié lors de cet export.
+The exact body ranges and export attempts are in `local/decompiled/manifest.json`. No Ghidra project name and no byte of the original ELF was changed by this export.

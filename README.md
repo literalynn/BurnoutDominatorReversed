@@ -1,28 +1,34 @@
 # Burnout Dominator Reversed
 
-Projet de recompilation statique de **Burnout Dominator PS2, version européenne SLES_546.27**, pour Windows. L’architecture C++20/CMake prépare Linux et macOS, qui doivent être validés séparément.
+[![build](https://github.com/literalynn/BurnoutDominatorReversed/actions/workflows/build.yml/badge.svg)](https://github.com/literalynn/BurnoutDominatorReversed/actions/workflows/build.yml)
 
-**Projet en cours : la rétro-ingénierie intégrale et le jeu jouable ne sont pas encore établis.** La génération C++ et une compilation native ne prouvent pas la fidélité des graphismes, de l’audio, de la physique, des sauvegardes ou de tous les chemins d’exécution. Les résultats réels et les blocages sont consignés dans [docs/STATUS.md](docs/STATUS.md).
+A static recompilation of **Burnout Dominator** for PlayStation 2 (European release, `SLES_546.27`) into a native PC program. The game's MIPS R5900 code is translated to C++ with [PS2Recomp](https://github.com/ran-j/PS2Recomp) and runs on top of its runtime, which emulates the rest of the console (IOP, SPU2, GS, IPU…). Windows comes first; the C++20/CMake code base also builds on Linux, and macOS is planned.
 
-La base est un instantané de [PS2Recomp](https://github.com/ran-j/PS2Recomp), identifié dans `UPSTREAM.json`. [REA](https://github.com/morluto/rea) sert de méthode d’investigation ; son fournisseur Ghidra Windows x86-64 PE ne prend pas en charge ce binaire PS2. Le jeu est un ELF MIPS R5900 dépourvu de symboles. Son identité exacte est verrouillée dans `project.json`.
+**No game data is included.** You need your own copy of the disc: the installer checks that your ISO is exactly the expected European image (size and SHA256 pinned in [`project.json`](project.json)).
 
-## Installation simple (Windows)
+## Status
 
-> **Où en est le jeu :** il se compile et démarre, mais n’affiche encore aucune image et ne va pas jusqu’au menu. Installer aujourd’hui sert à tester et à envoyer le journal de lancement.
+**Work in progress — not playable yet.** The game builds and boots: it goes through the LOADING screen and the intro video, then stops at the memory card check on the PROFILE screen. Menus, races, controllers and saves do not work yet.
 
-**Il te faut :**
+A successful build is not proof of a faithful port. Verified results, run history and current blockers are in [docs/STATUS.md](docs/STATUS.md) and [docs/BOOT.md](docs/BOOT.md).
 
-- ta propre copie du jeu : l’ISO européenne de Burnout Dominator (SLES-54627). Le script vérifie que c’est bien elle (taille et empreinte SHA256). **Laisse-la ensuite à sa place, sans la renommer ni la supprimer** : le jeu la relit à chaque lancement. Si tu la déplaces, glisse-la de nouveau sur `Installer.bat` ;
-- environ 20 Go libres sur le disque `C:` : les gros fichiers (disque extrait, code traduit, compilation) vont dans `C:\bdr-work` ;
-- ces quatre programmes, à installer une seule fois. Ouvre l’application « Terminal » et tape :
-  1. **Python** : `winget install Python.Python.3.12` (ou <https://www.python.org/downloads/>, en cochant **« Add python.exe to PATH »** pendant l’installation).
-  2. **Git** : `winget install Git.Git` (ou <https://git-scm.com/download/win>, options par défaut).
-  3. **PowerShell 7** : `winget install Microsoft.PowerShell`.
-  4. **Visual Studio 2026 Community** : <https://visualstudio.microsoft.com/fr/downloads/>. Dans l’installateur, coche **« Développement Desktop en C++ »**.
+## Install and run
 
-  Ferme ensuite le Terminal et rouvre-le pour qu’il trouve ces programmes.
+### Windows
 
-**Installer.** Dans « Terminal », colle ces trois lignes :
+You need:
+
+- your own ISO of the European Burnout Dominator disc (SLES-54627). **Leave it where it is afterwards**: the game reads it at every launch. If you move it, drop it onto `Installer.bat` again;
+- about 20 GB free on `C:` (the extracted disc, the translated code and the build go to `C:\bdr-work`);
+- four programs, installed once. In the Terminal app:
+  1. **Python**: `winget install Python.Python.3.12` (or <https://www.python.org/downloads/>, ticking **"Add python.exe to PATH"**);
+  2. **Git**: `winget install Git.Git`;
+  3. **PowerShell 7**: `winget install Microsoft.PowerShell`;
+  4. **Visual Studio 2026 Community** (2022 also works): <https://visualstudio.microsoft.com/downloads/>, with the **"Desktop development with C++"** workload.
+
+  Then close and reopen the Terminal so it finds them.
+
+Get the project:
 
 ```powershell
 cd $HOME
@@ -30,13 +36,11 @@ git clone https://github.com/literalynn/BurnoutDominatorReversed.git
 explorer BurnoutDominatorReversed
 ```
 
-Si le dépôt est privé, il faut un compte GitHub qui y a accès : au premier `git clone`, Git ouvre une fenêtre de connexion à GitHub (Git Credential Manager). Connecte-toi, la commande continue ensuite toute seule.
+In the folder that opens, **drop your ISO onto `Installer.bat`**. The first installation takes 30 to 90 minutes. If something is missing, the message says what to install: install it and run `Installer.bat` again. To put the large files on another drive, run instead `python tools\install.py --iso "<path to the ISO>" --work-dir D:\bdr-work` (a path without accents).
 
-Dans le dossier qui s’ouvre, **glisse ton fichier ISO sur `Installer.bat`**. La première fois, compte 30 à 90 minutes. S’il manque quelque chose, le message dit quoi installer : installe-le, puis relance `Installer.bat`. Pour placer les gros fichiers sur un autre disque, lance plutôt dans le Terminal `python tools\install.py --iso "<chemin de l’ISO>" --work-dir D:\bdr-work` (un chemin sans accents).
+**Play:** double-click **`Play.bat`**. Close the window to stop. The console then prints the last lines of the log and its location after `Log:` (normally `C:\bdr-work\local\logs\run.log`). Attach that file when you report a problem.
 
-**Jouer.** Double-clique sur **`Jouer.bat`**. Aujourd’hui, une fenêtre s’ouvre mais reste noire : le lancement s’arrête de lui-même quand le jeu atteint du code pas encore pris en charge (`Exit code: 3`, fonction manquante) ; sinon, ferme la fenêtre. La console affiche ensuite les dernières lignes du journal et son emplacement après `Log:`, normalement `C:\bdr-work\local\logs\run.log`. C’est ce fichier qu’il faut envoyer.
-
-**Mettre à jour.** Dans le Terminal : `cd $HOME\BurnoutDominatorReversed` puis `git pull`, et relance `Installer.bat` (appuie juste sur Entrée quand il demande l’ISO). Seules les étapes nécessaires sont refaites : les outils sont recompilés pour les fichiers modifiés, et le jeu n’est retraduit que si le recompilateur, la carte des fonctions ou l’exécutable du jeu ont changé.
+**Update:** `cd $HOME\BurnoutDominatorReversed`, `git pull`, then run `Installer.bat` again (just press Enter when it asks for the ISO). Only the needed steps are redone: the tools are rebuilt for the changed files, and the game is translated again only if the recompiler, the function map or the game executable changed.
 
 ### Linux
 
@@ -44,64 +48,116 @@ Dans le dossier qui s’ouvre, **glisse ton fichier ISO sur `Installer.bat`**. L
 sudo apt install git python3 cmake ninja-build g++ pkg-config libgl-dev libx11-dev libxrandr-dev libxinerama-dev \
   libxcursor-dev libxi-dev libasound2-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
 git clone https://github.com/literalynn/BurnoutDominatorReversed.git && cd BurnoutDominatorReversed
-python3 tools/install.py --iso "/chemin/vers/Burnout Dominator.iso"
+python3 tools/install.py --iso "/path/to/Burnout Dominator.iso"
 python3 tools/project.py run
 ```
 
-`tools/install.py` enchaîne les étapes détaillées ci-dessous et place les gros fichiers dans `~/bdr-work` (`C:\bdr-work` sous Windows), ou dans le dossier passé avec `--work-dir`. Comme sous Windows, l’ISO doit rester à sa place.
+The large files go to `~/bdr-work`, or to the folder given with `--work-dir`. As on Windows, the ISO must stay where it is.
 
-## Préparer les fichiers locaux
+### macOS
 
-Python 3.11+, CMake 3.21+, compilateur C++20. Sur Windows : MSVC x64 avec SDK Windows ; la construction initiale utilise Visual Studio 2026. Les outils n’installent aucune configuration globale.
+Not verified yet. The upstream runtime has an SSE-to-NEON path for ARM64; building on macOS, behaviour on Apple Silicon and performance remain to be checked. The Linux commands (with Homebrew equivalents of the packages) are the starting point.
 
-Les commandes se lancent depuis la racine du dépôt. `local/`, `generated/` et `build/` sont dans le dossier de travail : le dépôt lui-même par défaut, ou le dossier donné par `BDR_WORK_DIR` ou par `work.json` (écrit par `python tools/project.py workdir <dossier>` et par `tools/install.py`). Dans ce cas, les chemins `build/…` passés en argument ci-dessous commencent par ce dossier.
+## Development
+
+`tools/install.py` chains the steps below. Running them by hand is useful when working on the recompiler, the runtime or the game integration. Requirements: Python 3.11+, CMake 3.21+, a C++20 compiler (MSVC x64 with the Windows SDK on Windows). The tools install no global configuration.
+
+### Work directory
+
+Commands run from the repository root. Generated and local data (`local/`, `generated/`, `build/`) live in the work directory: the repository itself by default, or the folder given by `BDR_WORK_DIR` or by `work.json` (written by `python tools/project.py workdir <folder>` and by `tools/install.py`). `build/…` paths below are relative to it.
+
+### 1. Extract the disc
 
 ```powershell
-python tools/project.py extract --iso "D:\ISO EMU\PS2\Burnout Dominator (Europe) (En,Fr,De,Es,It).iso" --all --hash-iso
-python -m unittest discover -s tests/python -v
+python tools/project.py extract --iso "D:\path\to\Burnout Dominator (Europe) (En,Fr,De,Es,It).iso" --all --hash-iso
 ```
 
-`local/disc/` reçoit les 570 fichiers du disque, dont l’exécutable et les 12 IRX ; l’ISO d’origine reste requise pour conserver les adresses de secteurs : `run` la relit à chaque lancement, à l’emplacement noté dans `local/paths.json`. L’inventaire complet, les segments ELF, les sections, les chaînes et les SHA256 sont dans `local/`. Ces fichiers, les sauvegardes et `generated/` sont ignorés par Git.
+`local/disc/` receives the 570 files of the disc, including the executable and the 12 IRX modules. The original ISO is still needed to keep the real sector addresses: `run` reads it at every launch, from the location recorded in `local/paths.json`. The inventory, ELF segments, sections, strings and SHA256 hashes are written to `local/`. These files, saves and `generated/` are ignored by Git.
 
-## Construire les outils et traduire
+### 2. Build the tools
 
 ```powershell
 python tools/project.py configure --generator "Visual Studio 18 2026" --arch x64
-python tools/project.py build --jobs 4
+python tools/project.py build --jobs 8
 ```
 
-Les dépendances sont téléchargées par CMake aux versions fixées dans les fichiers du projet. Les outils compilés sont `ps2_recomp` et `ps2_analyzer`. Les chemins exacts varient selon le générateur ; avec MSVC ils sont sous `build/ps2xRecomp/Release/` et `build/ps2xAnalyzer/Release/`.
+On Linux/macOS, use `--generator Ninja` and no `--arch`; `configure` adds `-msse4.1` on x86-64. CMake downloads the dependencies at the versions pinned in the project files. This builds `ps2_recomp`, `ps2_analyzer`, the runtime and every test; no game file is needed.
 
-Pour ce jeu sans symboles, la carte des fonctions issue de Ghidra est fournie dans [data/functions.ee.csv](data/README.md) ; `generate --augment` y ajoute le code atteint seulement par pointeur. Sa provenance et la façon de la refaire avec Ghidra et `ps2xRecomp/tools/ghidra/ExportPS2Functions.java` sont décrites dans [data/README.md](data/README.md). La section `.data` porte aussi le drapeau exécutable dans ce disque : les limites de fonctions doivent être examinées, faute de quoi des données sont traduites en fausses instructions.
+### 3. Translate the game
 
 ```powershell
 python tools/project.py generate --tool build/ps2xRecomp/Release/ps2_recomp.exe --function-map data/functions.ee.csv --augment
 python tools/project.py audit
 ```
 
-La génération ne force aucune fonction à retourner une réussite et ne configure ni `skip`, ni remplacement arbitraire d’instructions. `local/translation_audit.json` contient les erreurs réelles du recompileur et les comptes statiques. Le mode sans `--function-map` est une expérience heuristique ; il ne justifie pas une couverture complète. `--regenerate` conserve les sources précédentes dans `local/backups/` ; `tools/install.py` n’y garde que la plus récente.
+The game has no symbols: the function map comes from a Ghidra analysis and ships in [data/functions.ee.csv](data/README.md) (no game bytes; provenance and how to redo it in [data/README.md](data/README.md)). `--augment` adds the code reached only through pointers. `.data` is also flagged executable on this disc, so function boundaries matter: without them, data gets translated into bogus instructions.
 
-## Compiler et essayer le jeu
+Generation never forces a function to return success and configures no `skip` or arbitrary instruction patch. `local/translation_audit.json` holds the recompiler's real errors and static counts. `--regenerate` keeps the previous sources in `local/backups/`.
+
+### 4. Build and run the game
 
 ```powershell
 python tools/project.py configure --game --generator "Visual Studio 18 2026" --arch x64
-python tools/project.py build --game --jobs 4
-python tools/project.py run --smoke-seconds 10
+python tools/project.py build --game --jobs 8
 python tools/project.py run
 ```
 
-`run` trouve le programme dans `build/` du dossier de travail ; `--exe` en désigne un autre. Options de diagnostic : `--trace-calls 0xADRESSE,…` journalise les appels et retours de ces fonctions, `--trace-watch 0xADRESSE,…` ajoute ces mots mémoire à chaque ligne de trace, `--no-iso` lit les secteurs dans une image virtuelle des fichiers extraits au lieu de l’ISO (numéros de secteurs différents de l’original).
+`run` finds the program in the work directory's `build/`; `--exe` picks another one. Useful options:
 
-Le diagnostic sans fenêtre s’arrête sur une fonction manquante. Le code 124 indique que le délai a été atteint ; il ne constitue pas une validation de jouabilité. Les journaux sont sous `local/logs/`. FFmpeg est activé pour le décodage vidéo ; `--no-ffmpeg` sert uniquement à un diagnostic limité et remplace les vidéos par des images factices.
+| Option | Effect |
+|---|---|
+| `--headless --seconds N` (or `--smoke-seconds N`) | no window or audio, stop after N seconds |
+| `--status-ms N` | print a scheduler/IOP status line every N ms |
+| `--log NAME --tail N` | log file under `local/logs/`, lines printed at the end |
+| `--dump-frames DIR [--dump-every-ms N]` | save the presented frame as PNG every N ms (default 1000) |
+| `--trace-calls 0xADDR,…` | log calls and returns of these guest functions |
+| `--trace-watch 0xADDR,…` | guest memory words printed with each trace line |
+| `--no-iso` | serve sectors from a virtual image of the extracted files instead of the ISO (different sector numbers) |
 
-## Linux et macOS
+Exit codes: `124` = time limit reached (an observation, not a pass), `3` = missing guest function, `1` = failure. More diagnostics are driven by environment variables (`BDR_STATUS_DETAIL`, `BDR_TRACE_SIF`, `BDR_TRACE_IPU`, `BDR_PROFILE`…), listed in [docs/BOOT.md §10](docs/BOOT.md#10-observation-tools).
 
-Utiliser les mêmes commandes Python/CMake sans `--arch` ; `--generator Ninja` est conseillé. `configure` ajoute `-msse4.1` sur x86-64. Le programme se situe alors sous `build/ps2xRuntime/burnout_dominator`. Les chemins du disque sont configurés à l’extraction ; aucune lettre de lecteur n’est intégrée dans le code C++.
+Editing `ps2xRuntime/include/ps2_runtime.h` (or another header included by the generated code) rebuilds the ~51,000 generated files; prefer changes in `.cpp` files or in `src/`.
 
-Paquets Ubuntu 24.04 utilisés pour la vérification : `ninja-build libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev`. Avec GCC 13, les outils, le runtime et tous les tests compilent et réussissent (lancer `ps2x_tests` depuis la racine du dépôt). Le jeu n’y a pas encore été compilé.
+### Tests
 
-Le runtime upstream possède un chemin SSE vers NEON pour ARM64. La compilation macOS, le comportement sur Apple Silicon et les performances du jeu restent à vérifier sur ces systèmes.
+```powershell
+python -m unittest discover -s tests/python
+```
 
-## Licence et provenance
+Native test programs are built by `project.py build`: `ps2x_tests` (run it from the repository root), `ps2_iop_emulator_tests`, `ps2_iop_import_tests`, `ps2_iop_compatibility_tests`, `ps2_iop_import_version_tests`, `ps2_iso9660_tests`, `ps2_spu2_tests` and `burnout_overrides_tests`. CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs them with GCC, Clang and MSVC.
 
-Les sources PS2Recomp incluses conservent leur licence GPLv3, dans `LICENSE`. Le code d’intégration ajouté est sous la même licence. Les fichiers extraits du jeu et le C++ dérivé ne reçoivent pas une licence open source par cette opération et restent locaux. [docs/CHANGES.md](docs/CHANGES.md) décrit les modifications par rapport à l’instantané upstream.
+### Working without the disc on the build machine
+
+`python tools/cloud_bundle.py --iso <ISO>` (on the machine with the disc) writes `bdr-cloud.zip`: the ELF, SYSTEM.CNF, the IOP modules, the analysis reports, the function map, previous run logs and as many small disc files as fit in 30 MB. Unzip it into a folder `W` elsewhere and use `BDR_WORK_DIR=W` with the steps above. Disc reads beyond the bundled files fail, so this only helps debugging the boot up to the first missing file.
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `ps2xRecomp/`, `ps2xRuntime/`, `ps2xIOP/`, `ps2xAnalyzer/`, `ps2xTest/`, `ps2xStudio/`, `android/`, `vita/` | PS2Recomp snapshot (commit in [`UPSTREAM.json`](UPSTREAM.json)), with the changes listed in [docs/CHANGES.md](docs/CHANGES.md) |
+| `src/` | game integration: runner (`burnout_main.cpp`), SDK bindings by address and ROM0 profile (`burnout_overrides.cpp`), sampling profiler |
+| `cmake/Burnout.cmake` | links the translated functions into the `burnout_dominator` executable |
+| `tools/` | Python driver (`project.py`, `install.py`), ISO9660/ELF tools, function map augmentation, cloud bundle, Ghidra scripts |
+| `data/` | Ghidra function map of the game (names, addresses, sizes; no game bytes) |
+| `tests/` | Python tests of the tools, native tests of the bindings |
+| `docs/` | status, boot analysis, findings, identified SDK functions, upstream changes |
+| `Installer.bat`, `Play.bat` | Windows one-click install and launch |
+
+## Documentation
+
+- [docs/STATUS.md](docs/STATUS.md) — what is verified, what works, what is left
+- [docs/BOOT.md](docs/BOOT.md) — boot sequence, IOP modules, run history, diagnostics
+- [docs/SDK_FUNCTIONS.md](docs/SDK_FUNCTIONS.md) — Sony SDK functions identified in the executable and their evidence
+- [docs/FINDINGS.md](docs/FINDINGS.md) — findings log with the limits of each conclusion
+- [docs/CHANGES.md](docs/CHANGES.md) — changes to the PS2Recomp snapshot
+- [docs/PS2Recomp-UPSTREAM.md](docs/PS2Recomp-UPSTREAM.md) — upstream PS2Recomp README
+
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: the project has strict rules (no faked success, evidence for every SDK binding, every upstream change documented).
+
+## License and credits
+
+Built on [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors. The included PS2Recomp sources keep their GPLv3 license ([LICENSE](LICENSE)); the integration code added here is under the same license. Game files and the C++ derived from them are not covered by this license, are never committed and stay on your machine.
+
+Burnout Dominator is a trademark of Electronic Arts. This project is not affiliated with or endorsed by Electronic Arts, Criterion Games or Sony Interactive Entertainment.

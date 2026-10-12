@@ -8,9 +8,9 @@ set "ISO=%~1"
 if not "%~2"=="" set "ISO=%*"
 if defined ISO set "ISO=%ISO:"=%"
 if defined ISO goto run
-echo Glisse le fichier ISO de Burnout Dominator dans cette fenetre puis appuie sur Entree.
-echo (Entree seule si l'ISO n'a pas change d'emplacement depuis la derniere installation.)
-set /p "ISO=ISO : "
+echo Drag the Burnout Dominator ISO file into this window, then press Enter.
+echo (Just press Enter if the ISO has not moved since the last installation.)
+set /p "ISO=ISO: "
 if defined ISO set "ISO=%ISO:"=%"
 :run
 set "PY=python"

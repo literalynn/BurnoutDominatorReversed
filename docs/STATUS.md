@@ -1,83 +1,80 @@
-# État réel du projet
+# Project status
 
-La demande de rétro-ingénierie intégrale n’est pas encore satisfaite. Ce dépôt conserve le travail reproductible, la chaîne de recompilation et les observations vérifiées sur l’ISO fournie. Il ne revendique pas un port jouable ou une récupération des sources originales.
+The full reverse-engineering goal is not reached yet. This repository holds the reproducible work, the recompilation pipeline and the observations verified on the original disc. It does not claim a playable port or recovered original source code.
 
-## Identité observée
+## Observed identity
 
-- ISO : 4 660 166 656 octets, SHA256 `dc4fc4e9700d6a5ae26531618d880541b1ff2d2deaf191f1359b98d3f63f96a5`.
-- BOOT2 : `SLES_546.27`, 3 472 132 octets, SHA256 `fe8b4b28e165620a35e55bcf6fb452de16cf7982ea6584ab28dc5f6b4b187301`.
-- ELF32 little endian, MIPS R5900, point d’entrée `0x00100008`, 2 segments PT_LOAD, 79 sections, aucune table de symboles.
-- `.text` : adresse `0x00100000`, taille 2 878 248 octets. `.data` est aussi marquée exécutable ; cela ne prouve pas que ses mots sont des instructions.
-- 64 overlays DVP/VU, accompagnés des tables d’overlays ; 12 modules IOP IRX.
-- Disque inventorié : 570 fichiers, 50 répertoires. Tous les fichiers sont extraits localement ; les lectures de secteurs doivent utiliser l’ISO originale.
+- ISO: 4,660,166,656 bytes, SHA256 `dc4fc4e9700d6a5ae26531618d880541b1ff2d2deaf191f1359b98d3f63f96a5`.
+- BOOT2: `SLES_546.27`, 3,472,132 bytes, SHA256 `fe8b4b28e165620a35e55bcf6fb452de16cf7982ea6584ab28dc5f6b4b187301`.
+- ELF32 little endian, MIPS R5900, entry point `0x00100008`, 2 PT_LOAD segments, 79 sections, no symbol table.
+- `.text`: address `0x00100000`, 2,878,248 bytes. `.data` is also marked executable; that does not prove its words are instructions.
+- 64 DVP/VU overlays with their overlay tables; 12 IOP IRX modules.
+- Disc inventory: 570 files, 50 directories. Every file is extracted locally; sector reads must use the original ISO.
 
-Preuves conservées : `local/disc_inventory.json`, `local/analysis/`, `local/analysis_validation.json`.
+Kept evidence: `local/disc_inventory.json`, `local/analysis/`, `local/analysis_validation.json`.
 
-## Vérifications déjà réalisées
+## Checks done so far
 
-- 20 tests Python des parseurs ISO9660/ELF32 réussis : bornes, endianness, symboles, chemins, extraction limitée et complète.
-- SHA256 des 13 binaires extraits et de SYSTEM.CNF vérifiés.
-- Outils PS2Recomp et PS2Analyzer compilés sous MSVC x64, commit upstream fixé dans `UPSTREAM.json`.
-- Diagnostic REA en lecture seule : aucun moteur configuré ; le périmètre Windows documenté ne couvre pas PS2 ELF/R5900. La configuration personnelle de Codex n’a pas été modifiée.
-- Premier essai heuristique : 8 514 fonctions générées, 0 fonctions forcées en stub, 0 fonctions ignorées. Le rapport signale **5 216 instructions non traitées** et 2 086 avertissements. Les premières/dernières erreurs observées sont dans `.data`. L’exit code 0 du recompileur ne garantit donc pas une traduction correcte.
-- Analyse Ghidra 12.1.4 avec EmotionEngine Reloaded 2.1.38 : 8 860 fonctions identifiées dans `.text`, 40 109 labels exécutables supplémentaires ; les 65 enregistrements hors de `.text` sont conservés séparément.
-- Traduction affinée : **0 instruction non traitée, 0 erreur**, 4 158 avertissements relatifs aux branchements indirects ; 48 961 corps traduits et 8 adaptateurs SIF automatiques du moteur, 0 fonction ignorée. Les 8 adaptateurs sont listés dans `generated/ps2_recompiled_stubs.h` ; ils ne sont pas des retours de réussite inventés.
-- 437/437 tests upstream du moteur et 45/45 tests CTest du cache GS réussis sur Windows. Ces tests portent sur le moteur ; ils ne valident pas les courses de Burnout.
-- Accès au disque corrigé : les recherches EE/IOP rendent maintenant les LBA originales. Cinq exécutables de tests IOP réussissent, dont sept groupes de tests ISO ; offsets de plus de 4 Gio vérifiés. Sur le disque réel : SYSTEM.CNF au secteur 2 265 203 et SLES_546.27 au secteur 2 263 507.
+- 20 Python tests of the ISO9660/ELF32 parsers pass: bounds, endianness, symbols, paths, partial and full extraction.
+- SHA256 of the 13 extracted binaries and of SYSTEM.CNF verified.
+- PS2Recomp and PS2Analyzer tools built with MSVC x64, upstream commit pinned in `UPSTREAM.json`.
+- Read-only [REA](https://github.com/morluto/rea) diagnosis: no engine configured; its documented Windows scope does not cover PS2 ELF/R5900.
+- First heuristic attempt: 8,514 functions generated, 0 functions forced to a stub, 0 functions skipped. The report shows **5,216 unhandled instructions** and 2,086 warnings. The first and last errors are in `.data`. The recompiler's exit code 0 therefore does not guarantee a correct translation.
+- Ghidra 12.1.4 analysis with EmotionEngine Reloaded 2.1.38: 8,860 functions identified in `.text`, plus 40,109 executable labels; the 65 records outside `.text` are kept separately.
+- Refined translation: **0 unhandled instructions, 0 errors**, 4,158 warnings about indirect branches; 48,961 translated bodies and 8 automatic SIF adapters from the engine, 0 skipped functions. The 8 adapters are listed in `generated/ps2_recompiled_stubs.h`; they are not invented success returns.
+- 437/437 upstream engine tests and 45/45 GS cache CTest tests pass on Windows. These tests cover the engine; they do not validate Burnout's races.
+- Disc access fixed: EE/IOP file searches now return the original LBAs. Five IOP test programs pass, including seven ISO test groups; offsets above 4 GiB verified. On the real disc: SYSTEM.CNF at sector 2,265,203 and SLES_546.27 at sector 2,263,507.
+- SPU2 (`ps2_spu2_tests`): ADPCM decoding, registers, PIO and DMA transfers, voice IRQ timing, transfer IRQ, mixer clock, loop end, audio output: pass.
+- After run 11 (Windows, MSVC): `ps2x_tests` 443/443, the five ps2xIOP suites, `ps2_spu2_tests` and `burnout_overrides_tests` (29 bindings) pass.
+- After run 18 (Windows, MSVC): `ps2x_tests` 452/452 and all IOP, SPU2, ISO9660 and Burnout binding suites pass; the RPC test really waits on DelayThread and an alarm, then repeats 128 calls without running out of stacks. The 43 Python tests pass. The IPU and 64-bit branch commits also passed the Windows/GCC/Clang CI.
+- Linux (Ubuntu 24.04, GCC 13, Ninja): `ps2_recomp`, `ps2_analyzer`, the runtime and every test build; 438/438 engine tests, the 5 ps2xIOP suites and `burnout_overrides_tests` pass. The game also builds and starts on Linux (cloud session, `-O1`, from the `tools/cloud_bundle.py` bundle, without the ISO).
 
-- SPU2 (`ps2_spu2_tests`) : décodage ADPCM, registres, transferts PIO et DMA, minuterie d’IRQ des voix, IRQ de transfert, horloge du mélangeur, fin de boucle, sortie audio : réussis.
-- Après le lancement 11 (Windows, MSVC) : `ps2x_tests` 443/443, les cinq suites ps2xIOP, `ps2_spu2_tests` et `burnout_overrides_tests` (29 liaisons) réussissent.
-- Après le lancement 18 (Windows, MSVC) : `ps2x_tests` 452/452 et toutes les suites IOP, SPU2, ISO9660 et liaisons Burnout réussissent ; le test RPC attend réellement DelayThread et une alarme, puis répète 128 appels sans épuiser les piles. Les 43 tests Python réussissent. Les commits IPU et branches 64 bits ont aussi passé la CI Windows/GCC/Clang.
-- Linux (Ubuntu 24.04, GCC 13, Ninja) : `ps2_recomp`, `ps2_analyzer`, le runtime et tous les tests compilent ; 438/438 tests du moteur, les 5 suites ps2xIOP et `burnout_overrides_tests` réussissent. Le jeu compile et se lance aussi sous Linux (session cloud, `-O1`, à partir du paquet `tools/cloud_bundle.py`, sans l’ISO).
+## Game boot
 
-## Démarrage du jeu
+Details and evidence: [BOOT.md](BOOT.md) and [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md).
 
-Détails et preuves : [BOOT.md](BOOT.md) et [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md).
+- First Windows executable: 134 MB, built without LTO in 9 min 20 s.
+- Bounded runs 1 to 3: the game goes through crt0, `main`, SIF and libcdvd initialisation, then the third run stops on an indirect call to 0x1E5020, code missing from the Ghidra map.
+- `tools/augment_function_map.py` adds 2,191 entry points reached through pointers; regeneration (51,161 files, 0 errors) and the full rebuild succeeded.
+- Since then: 29 SDK functions bound to the runtime (libsif with SIF commands, loadfile, iopheap, fileio, libcdvd), a 16-byte European ROMVER, `sceCdReadClock` and `GetSystemTimeLow` on the IOP side, a warning for every unknown built-in IOP import.
+- Runs 4 to 6 (Linux, without the ISO):
+  - `RwEngineInit` succeeds once the end of the heap is fixed;
+  - the runtime's own memory moves below the game image;
+  - SIF commands between the EE and the IRX modules (RWA audio, GTFS file system) and `sceSifSetDmaIntr` work;
+  - boot reads the font `Language/Fonts/dirtyEra.bin`, then waits for `Data/GlobalE.txd`, missing from the cloud bundle;
+  - the game sends one GIF frame per wait loop.
+- Runs 7 to 9 (Windows, with the ISO):
+  - a real SPU2 on the IOP side gives RWA the clock it expects: all of `sound_generic.awd` is then transferred;
+  - `sceSifSearchModuleByName` (0x3B1EA8) is bound: the game checks that IOP modules (`sio2man`, `mcman`, `mcserv`, `multitap_manager`) are present before initialising the memory card library;
+  - the boot state machine finishes (state 0x1C), the game enters its main loop and draws the LOADING screen (orange bar);
+  - the IOP and the EE timers advance in batches: from 3.6 to 25–50 frames per second.
+- Runs 10 and 11:
+  - CD reads that overflow an allocated IOP block are done like on the console: the LOADING screen finishes;
+  - system calls replaced by libkernel's kernel patch (alarms, event flags), whose code copied into kernel memory cannot run, are served by the runtime: `SetAlarm` wakes the main thread again.
 
-- Premier exécutable Windows : 134 Mo, compilé sans LTO en 9 min 20 s.
-- Lancements bornés 1 à 3 : le jeu passe crt0, `main`, l’initialisation SIF et libcdvd, puis s’arrête au troisième lancement sur un appel indirect vers 0x1E5020, code absent de la carte Ghidra.
-- `tools/augment_function_map.py` ajoute 2 191 points d’entrée atteints par pointeur ; la régénération (51 161 fichiers, 0 erreur) et la recompilation complète ont réussi.
-- Depuis : 29 fonctions SDK liées au runtime (libsif avec les commandes SIF, loadfile, iopheap, fileio, libcdvd), ROMVER européen de 16 octets, `sceCdReadClock` et `GetSystemTimeLow` côté IOP, avertissement sur tout import IOP intégré inconnu.
-- Lancements 4 à 6 (Linux, sans l’ISO) :
-  - `RwEngineInit` réussit une fois corrigée la fin du tas ;
-  - la mémoire propre du runtime est déplacée sous l’image du jeu ;
-  - les commandes SIF entre l’EE et les IRX (audio RWA, système de fichiers GTFS) et `sceSifSetDmaIntr` fonctionnent ;
-  - le démarrage lit la police `Language/Fonts/dirtyEra.bin`, puis attend `Data/GlobalE.txd`, absent du paquet cloud ;
-  - le jeu envoie une image GIF par boucle d’attente.
+Runs 12 to 18: the IPU model delivers the MPEG data and the signed branches of the generated code now test the full 64-bit register. Regeneration (51,161 files, no unhandled instruction, no error) and the Windows rebuild succeeded. The game gets past the former video blocker and now shows **PROFILE**. SIO2 PIO transport for disconnected ports, RPC execution in scheduled IOP threads and IOP alarms are implemented and tested. The memory card check is still pending: next step is the MCSERV GetInfo reply and the EE libmc callback. The menu and the races are not reached yet. Details: [BOOT.md](BOOT.md) §13–14.
 
-- Lancements 7 à 9 (Windows, avec l’ISO) :
-  - un SPU2 réel côté IOP donne à RWA l’horloge qu’il attend : tout `sound_generic.awd` est alors transféré ;
-  - `sceSifSearchModuleByName` (0x3B1EA8) est liée : le jeu vérifie la présence de modules IOP (`sio2man`, `mcman`, `mcserv`, `multitap_manager`) avant d’initialiser la bibliothèque de carte mémoire ;
-  - la machine d’état de démarrage se termine (état 0x1C), le jeu entre dans sa boucle principale et dessine l’écran LOADING (barre orange) ;
-  - l’IOP et les timers EE avancent par lots : de 3,6 à 25–50 images par seconde.
-
-- Lancements 10 et 11 :
-  - les lectures CD qui débordent d’un bloc IOP alloué sont faites comme sur console : le chargement de l’écran LOADING se termine ;
-  - les appels système remplacés par le correctif noyau de libkernel (alarmes, drapeaux d’événement), dont le code copié en mémoire noyau ne peut pas s’exécuter, sont servis par le runtime : `SetAlarm` réveille de nouveau le thread principal.
-
-Lancements 12 à 18 : le modèle IPU fournit les données MPEG et les branches signées du code généré sont corrigées pour tester le registre sur 64 bits. La régénération (51 161 fichiers, aucune instruction non traitée, aucune erreur) et la recompilation Windows ont réussi. Le jeu franchit l'ancien blocage vidéo et affiche maintenant **PROFILE**. Le transport PIO SIO2 pour ports déconnectés, l'exécution RPC dans des threads IOP ordonnancés et les alarmes IOP sont implémentés et testés. La vérification de carte mémoire reste en attente : prochaine analyse, réponse GetInfo de MCSERV et rappel EE libmc. Le menu et les courses ne sont pas encore atteints. Détails : [BOOT.md](BOOT.md) §13–14.
-
-Reprise sur la machine qui possède l’ISO (les variables d’observation sont décrites au §10 de BOOT.md) :
+To resume on the machine that has the ISO (the observation variables are described in BOOT.md §10):
 
 ```powershell
 python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run12.log --tail 120
 ```
 
-## Demandes à traiter une fois le jeu jouable
+## Requests for once the game is playable
 
-Ces objectifs supposent que le jeu atteigne les courses ; ils seront traités après le démarrage. Pistes déjà établies :
+These goals assume the game reaches the races; they come after boot. Leads already established:
 
-- **Mods de fichiers.** Le jeu lit ses données par GTFSCDVD.IRX, c’est-à-dire par secteurs (`sceCdRead` dans l’IOP émulé), pas par noms de fichiers EE. Une surcouche `mods/<chemin sur le disque>` doit donc agir au niveau des secteurs : table LBA → fichier tirée du répertoire ISO9660, remplacement direct si la taille ne dépasse pas l’original, image virtuelle reconstruite sinon (`iop_cdvd.cpp` contient déjà une construction d’ISO virtuelle). À vérifier : si GTFS relit lui-même les répertoires ISO9660, les nouvelles tailles et LBA lui parviennent sans autre changement.
-- **Mods de code.** Toute fonction invitée peut être remplacée par une fonction native (mécanisme de `src/burnout_overrides.cpp`) ; une API chargeant des bibliothèques natives depuis `mods/` en découle directement.
-- **Images par seconde.** Au démarrage, `0x207820` fixe la cadence et le pas de simulation selon l’octet 0x432E98 : `0x1E68A0(60)` et `0x1E6668(16,667 ms)`, ou `0x1E68A0(50)` et `0x1E6668(20 ms)`. La physique suppose ce pas fixe : accélérer la boucle la fausserait. 60 Hz est donc disponible nativement ; au-delà (jusqu’à 480 Hz), il faut garder la simulation à 60 Hz et interpoler le rendu (objets, caméra) entre deux pas, ce qui demande d’identifier la boucle de jeu et la scène RenderWare.
-- **Résolution 2K.** Le runtime ne rend le GS que sur le CPU (`gs_cpu_backend`), à la résolution PS2. Une résolution interne plus élevée demande un rendu GS sur GPU, derrière l’interface `GSRasterBackend` existante : chantier du runtime, indépendant du jeu.
-- **Manettes.** Le runtime lit une manette du PC (Xbox, DualSense…) mais seulement pour `libpad`. Burnout utilise `libdbc`/`libpad2` avec DBCMAN.IRX et DS2O.IRX, qui parlent au port SIO2 : l’IOP émulé n’a pas de modèle SIO2 et le service DBCMAN simplifié ne lit aucune entrée. Il faut soit un SIO2 émulé alimenté par la manette du PC, soit un DBCMAN/libpad2 de haut niveau ; priorité dès que le jeu affiche quelque chose.
-- **Chargements.** Lectures disque (latence CDVD simulée : 128 cycles IOP) et carte mémoire (fichiers hôte) sont déjà quasi instantanées. Restent les attentes codées dans le jeu (durée minimale d’un écran de chargement, temporisations de sauvegarde), à repérer une fois ces écrans atteints.
+- **File mods.** The game reads its data through GTFSCDVD.IRX, i.e. by sectors (`sceCdRead` in the emulated IOP), not by EE file names. A `mods/<path on the disc>` overlay therefore has to work at sector level: an LBA → file table taken from the ISO9660 directory, direct replacement when the file is not larger than the original, a rebuilt virtual image otherwise (`iop_cdvd.cpp` already builds a virtual ISO). To check: if GTFS reads the ISO9660 directories itself, new sizes and LBAs reach it without further changes.
+- **Code mods.** Any guest function can be replaced by a native one (the mechanism of `src/burnout_overrides.cpp`); an API that loads native libraries from `mods/` follows directly.
+- **Frame rate.** At boot, `0x207820` sets the frame rate and the simulation step from the byte at 0x432E98: `0x1E68A0(60)` and `0x1E6668(16.667 ms)`, or `0x1E68A0(50)` and `0x1E6668(20 ms)`. The physics assume this fixed step: running the loop faster would break it. 60 Hz is therefore available natively; above that (up to 480 Hz), the simulation must stay at 60 Hz and rendering (objects, camera) must be interpolated between steps, which requires identifying the game loop and the RenderWare scene.
+- **2K resolution.** The runtime renders the GS on the CPU only (`gs_cpu_backend`), at PS2 resolution. A higher internal resolution needs GPU GS rendering behind the existing `GSRasterBackend` interface: runtime work, independent of the game.
+- **Controllers.** The runtime reads a PC controller (Xbox, DualSense…) but only for `libpad`. Burnout uses `libdbc`/`libpad2` with DBCMAN.IRX and DS2O.IRX, which talk to the SIO2 port: the emulated IOP only has a SIO2 transport for disconnected ports and the simplified DBCMAN service reads no input. It needs either an emulated SIO2 fed by the PC controller, or a high-level DBCMAN/libpad2; a priority as soon as the game shows something.
+- **Loading times.** Disc reads (simulated CDVD latency: 128 IOP cycles) and memory card (host files) are already nearly instant. What remains are waits coded in the game (minimum loading screen duration, save delays), to find once those screens are reached.
 
-## Travaux en cours et critères restants
+## Work in progress and remaining criteria
 
-L’analyse Ghidra/R5900 affine les limites des fonctions. Les journaux et l’audit de traduction doivent être examinés avant toute affirmation de couverture totale. La compilation du runtime et les essais du binaire exact sont des étapes distinctes.
+The Ghidra/R5900 analysis refines function boundaries. Logs and the translation audit must be checked before any claim of full coverage. Building the runtime and running the exact binary are separate steps.
 
-Restent à établir : code indirect et données exécutées, overlays VU et IOP, démarrage réel, menu, courses, physique, collisions, entrées, graphismes, synchronisation DMA/VIF/GIF, son, vidéos et sauvegardes. Les comportements observés doivent être comparés avec l’exécution PS2/PCSX2. Linux et macOS doivent être compilés et testés sur leurs systèmes.
+Still to establish: indirect code and executed data, VU and IOP overlays, real boot, menu, races, physics, collisions, input, graphics, DMA/VIF/GIF synchronisation, sound, videos and saves. Observed behaviour must be compared with PS2/PCSX2 execution. Linux and macOS must be built and tested on their own systems.
 
-Le runtime upstream reste expérimental : support matériel partiel, performances VU/GS limitées et implémentations audio incomplètes. Une compilation Windows réussie établira seulement un exécutable natif issu des fonctions traduites.
+The upstream runtime is still experimental: partial hardware support, limited VU/GS performance and incomplete audio. A successful Windows build only establishes a native executable made of the translated functions.

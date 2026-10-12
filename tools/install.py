@@ -34,13 +34,13 @@ BUILD_BYTES = 10 * GIB            # tools, runtime and game build tree
 RECORDED_INPUTS = ("elf_sha256", "ps2recomp_commit", "tool_sha256", "augmenter_sha256")
 CHANGE_LABELS = {
     "regenerate": "option --regenerate",
-    "translation": "aucune traduction complète",
-    "augmentation": "traduction faite sans --augment",
-    "elf_sha256": "exécutable du jeu modifié",
-    "ps2recomp_commit": "nouvelle version de PS2Recomp",
-    "tool_sha256": "recompilateur ps2_recomp modifié",
-    "augmenter_sha256": "tools/augment_function_map.py modifié",
-    "function_map_sha256": "carte des fonctions modifiée",
+    "translation": "no complete translation",
+    "augmentation": "translated without --augment",
+    "elf_sha256": "game executable changed",
+    "ps2recomp_commit": "new PS2Recomp version",
+    "tool_sha256": "ps2_recomp recompiler changed",
+    "augmenter_sha256": "tools/augment_function_map.py changed",
+    "function_map_sha256": "function map changed",
 }
 BACKUP_NAME = re.compile(r"generated-\d{8}-\d{6}-\d{6}")  # project.py generate --regenerate
 
@@ -72,7 +72,7 @@ def read_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        raise SetupError(f"{path} est illisible ({error}). Corrige ou supprime ce fichier, puis relance.") from None
+        raise SetupError(f"{path} cannot be read ({error}). Fix or delete this file, then run again.") from None
 
 
 def default_jobs(cpu_count: int | None) -> int:
@@ -94,7 +94,7 @@ def choose_work_dir(requested: Path | None, environ: dict, root: Path, home: Pat
     if environ.get("BDR_WORK_DIR"):
         work, write = Path(environ["BDR_WORK_DIR"]).resolve(), False
         if requested and requested.resolve() != work:
-            raise SetupError(f"BDR_WORK_DIR vaut déjà {work} ; retire cette variable ou n’utilise pas --work-dir.")
+            raise SetupError(f"BDR_WORK_DIR is already {work}; remove this variable or do not use --work-dir.")
     elif requested:
         work, write = requested.resolve(), True
     elif (root / "work.json").is_file():
@@ -106,8 +106,8 @@ def choose_work_dir(requested: Path | None, environ: dict, root: Path, home: Pat
     else:
         work, write = (home / "bdr-work").resolve(), True
     if windows and not str(work).isascii():
-        raise SetupError(f"Le dossier de travail {work} contient des accents ou d’autres caractères spéciaux, "
-                         "que MSBuild, CMake et Ninja gèrent mal. Choisis un dossier au nom simple, par exemple "
+        raise SetupError(f"The work directory {work} contains accents or other special characters, "
+                         "which MSBuild, CMake and Ninja handle badly. Choose a plain folder name, for example "
                          "--work-dir C:\\bdr-work")
     return work, write
 
@@ -184,44 +184,44 @@ def check_prerequisites(work: Path, build_dir: Path, needed: int) -> dict:
     windows = os.name == "nt"
     problems = []
     if sys.version_info < (3, 11):
-        problems.append("Python 3.11 ou plus récent : dans un terminal, tape  winget install Python.Python.3.12"
-                        if windows else "Python 3.11 ou plus récent.")
+        problems.append("Python 3.11 or later: in a terminal, type  winget install Python.Python.3.12"
+                        if windows else "Python 3.11 or later.")
     if not shutil.which("git"):
-        problems.append("Git, qui télécharge les dépendances et les mises à jour : dans un terminal, tape  "
-                        "winget install Git.Git" if windows else "Git (Ubuntu : sudo apt install git).")
+        problems.append("Git, which downloads the dependencies and the updates: in a terminal, type  "
+                        "winget install Git.Git" if windows else "Git (Ubuntu: sudo apt install git).")
     toolchain = {"cmake": cached_cmake(build_dir), "generator": [], "path": []}
     if windows:
         studio = find_visual_studio()
         if not studio or studio[0] not in GENERATORS:
-            problems.append("Visual Studio 2026 (ou 2022) Community avec la charge de travail "
-                            "« Développement Desktop en C++ » : https://visualstudio.microsoft.com/fr/downloads/")
+            problems.append("Visual Studio 2026 (or 2022) Community with the "
+                            "\"Desktop development with C++\" workload: https://visualstudio.microsoft.com/downloads/")
         else:
             major, location = studio
             if not toolchain["cmake"]:
                 bundled = location / "Common7" / "IDE" / "CommonExtensions" / "Microsoft" / "CMake" / "CMake" / "bin" / "cmake.exe"
                 toolchain["cmake"] = str(bundled) if bundled.is_file() else shutil.which("cmake")
                 if not toolchain["cmake"]:
-                    problems.append("CMake : coche « Outils CMake C++ pour Windows » dans l’installateur de Visual Studio.")
+                    problems.append("CMake: tick \"C++ CMake tools for Windows\" in the Visual Studio Installer.")
             toolchain["generator"] = ["--generator", GENERATORS[major], "--arch", "x64"]
         pwsh = find_pwsh()
         if not pwsh:
-            problems.append("PowerShell 7 : dans un terminal, tape  winget install Microsoft.PowerShell")
+            problems.append("PowerShell 7: in a terminal, type  winget install Microsoft.PowerShell")
         else:
             toolchain["path"].append(str(pwsh.parent))
     else:
         if not toolchain["cmake"]:
             toolchain["cmake"] = shutil.which("cmake")
             if not toolchain["cmake"]:
-                problems.append("CMake 3.21+ (Ubuntu : sudo apt install cmake ninja-build).")
+                problems.append("CMake 3.21+ (Ubuntu: sudo apt install cmake ninja-build).")
         if not any(shutil.which(c) for c in ("c++", "g++", "clang++")):
-            problems.append("Un compilateur C++20 (Ubuntu : sudo apt install g++).")
+            problems.append("A C++20 compiler (Ubuntu: sudo apt install g++).")
         if shutil.which("ninja"):
             toolchain["generator"] = ["--generator", "Ninja"]
         if sys.platform.startswith("linux"):
             probe = subprocess.run(["pkg-config", "--exists", "libavcodec", "libavformat", "libswscale", "libswresample", "gl", "x11"],
                                    capture_output=True) if shutil.which("pkg-config") else None
             if probe is None or probe.returncode:
-                problems.append("Bibliothèques de développement (Ubuntu) : sudo apt install pkg-config libgl-dev libx11-dev "
+                problems.append("Development libraries (Ubuntu): sudo apt install pkg-config libgl-dev libx11-dev "
                                 "libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev libavcodec-dev "
                                 "libavformat-dev libavutil-dev libswresample-dev libswscale-dev")
     if cache_entry(build_dir, "CMAKE_GENERATOR"):
@@ -229,11 +229,11 @@ def check_prerequisites(work: Path, build_dir: Path, needed: int) -> dict:
         toolchain["generator"] = []
     free = shutil.disk_usage(existing_parent(work)).free
     if free < needed:
-        problems.append(f"Au moins {needed / GIB:.0f} Go libres pour {work} "
-                        f"(il en reste {free / GIB:.1f} Go). Libère de la place ou choisis un autre disque avec --work-dir.")
+        problems.append(f"At least {needed / GIB:.0f} GB free for {work} "
+                        f"({free / GIB:.1f} GB left). Free some space or choose another drive with --work-dir.")
     if problems:
-        raise SetupError("Il manque :\n  - " + "\n  - ".join(problems)
-                         + "\nInstalle-les, ferme et rouvre le terminal, puis relance la même commande.")
+        raise SetupError("Missing:\n  - " + "\n  - ".join(problems)
+                         + "\nInstall them, close and reopen the terminal, then run the same command again.")
     return toolchain
 
 
@@ -258,22 +258,22 @@ def recorded_iso(local: Path) -> Path | None:
 
 def iso_hint(windows: bool) -> str:
     if windows:
-        return ("Glisse ton fichier ISO sur Installer.bat, ou tape  "
-                'python tools\\install.py --iso "D:\\chemin\\vers\\le jeu.iso"')
-    return 'Indique-la avec  python3 tools/install.py --iso "/chemin/vers/le jeu.iso"'
+        return ("Drop your ISO file onto Installer.bat, or type  "
+                'python tools\\install.py --iso "D:\\path\\to\\the game.iso"')
+    return 'Give it with  python3 tools/install.py --iso "/path/to/the game.iso"'
 
 
 def choose_iso(given: Path | None, recorded: Path | None, windows: bool) -> Path:
     """The ISO given now, else the one recorded by the last extraction. The game
     reads it at every launch, so the recorded one must still exist."""
     if given is None and recorded is None:
-        raise SetupError("Indique ton ISO de Burnout Dominator (version européenne). " + iso_hint(windows))
+        raise SetupError("Give your Burnout Dominator ISO (European version). " + iso_hint(windows))
     source = given or recorded
     if not source.is_file():
         if given is None:
-            raise SetupError(f"L’ISO enregistrée à l’installation précédente est introuvable : {source}\n"
-                             "Elle a été déplacée ou supprimée. " + iso_hint(windows))
-        raise SetupError(f"ISO introuvable : {source}")
+            raise SetupError(f"The ISO recorded by the previous installation cannot be found: {source}\n"
+                             "It was moved or deleted. " + iso_hint(windows))
+        raise SetupError(f"ISO not found: {source}")
     return source.resolve()
 
 
@@ -289,13 +289,13 @@ def verify_iso(iso: Path, local: Path, lock: dict) -> bool:
     record, cache = iso_record(iso, lock), local / ISO_RECORD_NAME
     if cache.is_file() and read_json(cache) == record:
         return False
-    expected = ("Il faut une copie 1:1 du disque européen de Burnout Dominator (SLES-54627), "
-                "celle décrite dans project.json.")
+    expected = ("A 1:1 copy of the European Burnout Dominator disc (SLES-54627) is needed, "
+                "the one described in project.json.")
     if record["size"] != lock["iso_size"]:
-        raise SetupError(f"{iso} n’est pas l’ISO attendue ({record['size']} octets au lieu de {lock['iso_size']}). " + expected)
-    say("Vérification de l’ISO (une seule fois, une à trois minutes)")
+        raise SetupError(f"{iso} is not the expected ISO ({record['size']} bytes instead of {lock['iso_size']}). " + expected)
+    say("Checking the ISO (only once, one to three minutes)")
     if sha256(iso, progress=True) != lock["iso_sha256"]:
-        raise SetupError(f"{iso} n’est pas l’ISO attendue (empreinte SHA256 différente). " + expected)
+        raise SetupError(f"{iso} is not the expected ISO (different SHA256 hash). " + expected)
     local.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return True
@@ -310,8 +310,8 @@ def choose_function_map(local: Path, explicit: Path | None, shipped: Path) -> Pa
     work_map = local / MAP_RELATIVE
     source = explicit.resolve() if explicit else work_map if work_map.is_file() else shipped
     if not source.is_file():
-        raise SetupError(f"Carte des fonctions introuvable : {source}. Mets le dépôt à jour (git pull) "
-                         "ou passe --function-map.")
+        raise SetupError(f"Function map not found: {source}. Update the repository (git pull) "
+                         "or pass --function-map.")
     return source
 
 
@@ -354,7 +354,7 @@ def remove_inside(path: Path, work: Path) -> None:
     """shutil.rmtree limited to a real directory (not a link) inside the work directory."""
     resolved = path.resolve()
     if work.resolve() not in resolved.parents or resolved != path.parent.resolve() / path.name or not resolved.is_dir():
-        raise SetupError(f"Suppression refusée : {path} n’est pas un dossier du dossier de travail {work}.")
+        raise SetupError(f"Deletion refused: {path} is not a folder inside the work directory {work}.")
     shutil.rmtree(resolved)
 
 
@@ -392,15 +392,15 @@ def project(env: dict, *arguments: str) -> None:
     command = [sys.executable, str(PROJECT), *arguments]
     if subprocess.run(command, cwd=ROOT, env=env).returncode:
         step = " ".join([arguments[0]] + (["--game"] if "--game" in arguments else []))
-        raise SetupError(f"Étape échouée : {step}. Le journal complet est indiqué juste au-dessus.")
+        raise SetupError(f"Step failed: {step}. The full log is shown just above.")
 
 
 def final_message(windows: bool) -> list[str]:
-    launch = ("Pour lancer le jeu : double-clique sur Jouer.bat (ou tape  python tools\\project.py run)."
-              if windows else "Pour lancer le jeu : python3 tools/project.py run")
+    launch = ("To start the game: double-click Play.bat (or type  python tools\\project.py run)."
+              if windows else "To start the game: python3 tools/project.py run")
     return [launch,
-            "Garde l’ISO à son emplacement actuel : le jeu la lit à chaque lancement.",
-            "Le jeu ne va pas encore jusqu’au menu : envoie le journal affiché à la fin du lancement pour la suite."]
+            "Keep the ISO where it is: the game reads it at every launch.",
+            "The game does not reach the menu yet: the log shown at the end of a run is what helps development."]
 
 
 # --- Main -------------------------------------------------------------------
@@ -411,12 +411,12 @@ def setup(args: argparse.Namespace) -> int:
     iso = Path(given).resolve() if given else None
     work, write_config = choose_work_dir(args.work_dir, dict(os.environ), ROOT, Path.home(), windows)
     build_dir, local, generated = work / "build", work / "local", work / "generated"
-    say(f"Dossier de travail : {work}")
+    say(f"Work directory: {work}")
     lock = read_json(ROOT / "project.json")
     disc = disc_state(local, lock)
     toolchain = check_prerequisites(work, build_dir, required_space(disc == "ok", find_game(build_dir) is not None))
     if args.check:
-        say("Tous les prérequis sont présents.")
+        say("All prerequisites are present.")
         return 0
     work.mkdir(parents=True, exist_ok=True)
     if write_config:
@@ -429,41 +429,41 @@ def setup(args: argparse.Namespace) -> int:
     known_iso = recorded_iso(local)
     source = choose_iso(iso, known_iso, windows)
     if not verify_iso(source, local, lock):
-        say(f"ISO déjà vérifiée : {source}")
+        say(f"ISO already checked: {source}")
     if disc != "ok":
-        say("Extraction du disque (environ 4,7 Go, quelques minutes)")
+        say("Extracting the disc (about 4.7 GB, a few minutes)")
         project(env, "extract", "--iso", str(source), "--all")
     elif source != known_iso:
         (local / "paths.json").write_text(json.dumps({"iso": str(source), "disc": str(local / "disc")}, indent=2) + "\n",
                                           encoding="utf-8")
-        say(f"Nouvel emplacement de l’ISO enregistré : {source}")
+        say(f"New ISO location recorded: {source}")
     else:
-        say("Disque déjà extrait")
+        say("Disc already extracted")
 
     map_path = choose_function_map(local, args.function_map, SHIPPED_MAP)
     recompiler = find_recompiler(build_dir)
     foreign = foreign_source(build_dir)
     if foreign:
-        say(f"La compilation existante vient d’une autre copie du projet ({foreign}) : "
-            "nouvelle configuration, puis recompilation complète")
+        say(f"The existing build comes from another copy of the project ({foreign}): "
+            "configuring again, then a full rebuild")
     if not recompiler or not (build_dir / "CMakeCache.txt").is_file() or foreign:
-        say("Configuration des outils (téléchargement des dépendances)")
+        say("Configuring the tools (downloading dependencies)")
         project(env, "configure", *cmake, *toolchain["generator"])
         toolchain["generator"] = []
     # Always built: after an update, only the changed sources are compiled again.
-    say("Compilation des outils et des tests (10 à 30 minutes la première fois)" if not recompiler
-        else "Mise à jour des outils (seuls les fichiers modifiés sont recompilés)")
+    say("Building the tools and the tests (10 to 30 minutes the first time)" if not recompiler
+        else "Updating the tools (only changed files are rebuilt)")
     project(env, "build", *cmake, "--jobs", str(args.jobs))
     recompiler = find_recompiler(build_dir)
     if not recompiler:
-        raise SetupError(f"ps2_recomp introuvable dans {build_dir} après la compilation.")
+        raise SetupError(f"ps2_recomp not found in {build_dir} after the build.")
 
     current = generation_inputs(lock, recompiler, map_path)
     changes = ["regenerate"] if args.regenerate else generation_changes(generated, local, current)
     if changes:
-        say("Traduction du jeu en C++ (quelques minutes) : " + ", ".join(CHANGE_LABELS[c] for c in changes))
+        say("Translating the game to C++ (a few minutes): " + ", ".join(CHANGE_LABELS[c] for c in changes))
         if generated.is_dir() and not (generated / "generation.json").is_file():
-            say(f"Suppression d’une traduction interrompue : {generated}")
+            say(f"Deleting an interrupted translation: {generated}")
             remove_inside(generated, work)
         prune_backups(local / "backups", work)
         regenerate = ["--regenerate"] if generated.is_dir() and any(generated.iterdir()) else []
@@ -471,12 +471,12 @@ def setup(args: argparse.Namespace) -> int:
         write_state(local, current)
         prune_backups(local / "backups", work)
     else:
-        say("Code du jeu déjà traduit")
+        say("Game code already translated")
 
-    say("Compilation du jeu (10 à 60 minutes selon le processeur)")
+    say("Building the game (10 to 60 minutes depending on the processor)")
     project(env, "configure", "--game", *cmake, *toolchain["generator"])
     project(env, "build", "--game", *cmake, "--jobs", str(args.jobs))
-    say("Installation terminée.")
+    say("Installation finished.")
     print("\n".join(final_message(windows)))
     return 0
 
@@ -497,23 +497,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return setup(args)
     except KeyboardInterrupt:
-        print("\nInstallation interrompue. Relance la même commande pour reprendre.", file=sys.stderr)
+        print("\nInstallation interrupted. Run the same command again to resume.", file=sys.stderr)
         return 130
     except SetupError as error:
         message = str(error)
     except subprocess.CalledProcessError as error:
         command = error.cmd if isinstance(error.cmd, str) else subprocess.list2cmdline([str(c) for c in error.cmd])
-        message = f"La commande {command} a échoué (code {error.returncode})."
+        message = f"The command {command} failed (code {error.returncode})."
     except json.JSONDecodeError as error:
-        message = f"Un fichier JSON est illisible ({error}). Corrige ou supprime ce fichier, puis relance."
+        message = f"A JSON file cannot be read ({error}). Fix or delete this file, then run again."
     except KeyError as error:
-        message = f"Information {error} absente d’un fichier de configuration (work.json, project.json ou local/*.json)."
+        message = f"Entry {error} is missing from a configuration file (work.json, project.json or local/*.json)."
     except OSError as error:
-        message = (f"Accès impossible à un fichier ou un dossier : {error}\n"
-                   "Vérifie que le disque est branché, qu’il reste de la place et que le dossier n’est pas en lecture seule.")
+        message = (f"Cannot access a file or folder: {error}\n"
+                   "Check that the drive is connected, that there is space left and that the folder is not read-only.")
     except ValueError as error:
-        message = f"Valeur invalide : {error}"
-    print(f"\nERREUR : {message}", file=sys.stderr)
+        message = f"Invalid value: {error}"
+    print(f"\nERROR: {message}", file=sys.stderr)
     return 1
 
 

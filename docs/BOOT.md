@@ -1,30 +1,30 @@
-# Démarrage de SLES_546.27
+# Boot of SLES_546.27
 
-Séquence établie par analyse statique (désassemblage, pseudocode Ghidra, graphe d’appels), puis confrontée aux lancements bornés du binaire recompilé. Les fonctions SDK citées sont documentées dans [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md).
+Sequence established by static analysis (disassembly, Ghidra pseudocode, call graph), then checked against bounded runs of the recompiled binary. The SDK functions mentioned are documented in [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md).
 
 ## 1. crt0 (`entry` 0x100008)
 
-| Adresse | Action |
+| Address | Action |
 |---|---|
-| 0x100008–0x100110 | Mise à zéro des GPR/FPR, `sync`. |
-| 0x10011C–0x100194 | Mise à zéro du BSS 0x432B00–0x1F9BB00. |
-| 0x1001C8 | `syscall 0x3C` SetupThread(gp = 0x43A4F0, pile 0x1FF0000, taille 0x10000, args 0x433080, racine 0x100220). |
+| 0x100008–0x100110 | Clears the GPRs/FPRs, `sync`. |
+| 0x10011C–0x100194 | Clears the BSS 0x432B00–0x1F9BB00. |
+| 0x1001C8 | `syscall 0x3C` SetupThread(gp = 0x43A4F0, stack 0x1FF0000, size 0x10000, args 0x433080, root 0x100220). |
 | 0x1001E4 | `syscall 0x3D` SetupHeap(0x1F9BB00, −1). |
-| 0x1001E8 | `jal 0x3B2BD0` : initialisation de libkernel. |
-| 0x1001F0 | FlushCache(0), puis `ei`. |
+| 0x1001E8 | `jal 0x3B2BD0`: libkernel initialisation. |
+| 0x1001F0 | FlushCache(0), then `ei`. |
 | 0x100208 | `main(argc = *0x433080, argv = 0x433084)` = 0x21B3F8. |
-| 0x100210 | `j 0x322630` : exit(main()). |
+| 0x100210 | `j 0x322630`: exit(main()). |
 
 ## 2. Initialisation (main → 0x207820)
 
-`0x207820` initialise l’état global du jeu, puis appelle notamment :
+`0x207820` initialises the global game state, then calls among others:
 
-1. `0x2156B8` : redémarrage de l’IOP (§3) ;
-2. `0x215928`, `0x215918`, `0x1E7018`, `0x1E7050`, `0x2160C8(0x561E78)`, `0x214128`, `0x1E6BE0` ;
-3. `0x1E68A0(0x3C)` et `0x1E6668(0x41855555, …)` si l’octet 0x432E98 vaut 0, sinon `0x1E68A0(0x32)` et `0x1E6668(0x41A00000, …)` : 60 ou 50 images par seconde, donc NTSC ou PAL (déduit des constantes) ;
-4. plus loin, `0x1B48F8` (à 0x207A44) → `0x1E6EB8` → `0x38B0F8` → `0x38B050` → `0x38AFE0` : lecture de `rom0:ROMVER` par fileio.
+1. `0x2156B8`: IOP reboot (§3);
+2. `0x215928`, `0x215918`, `0x1E7018`, `0x1E7050`, `0x2160C8(0x561E78)`, `0x214128`, `0x1E6BE0`;
+3. `0x1E68A0(0x3C)` and `0x1E6668(0x41855555, …)` if the byte at 0x432E98 is 0, otherwise `0x1E68A0(0x32)` and `0x1E6668(0x41A00000, …)`: 60 or 50 frames per second, i.e. NTSC or PAL (deduced from the constants);
+4. further on, `0x1B48F8` (at 0x207A44) → `0x1E6EB8` → `0x38B0F8` → `0x38B050` → `0x38AFE0`: reads `rom0:ROMVER` through fileio.
 
-## 3. Redémarrage de l’IOP (0x2156B8)
+## 3. IOP reboot (0x2156B8)
 
 ```
 sceSifInitRpc(0)                                   0x3B0020
@@ -32,169 +32,170 @@ sceCdInit(0)                                       0x377CA0
 do r = sceSifRebootIop("cdrom0:\IOP\IOPRP300.IMG;1") while (r == 0)   0x3B2370
 do r = sceSifSyncIop() while (r == 0)              0x3B2320
 sceSifInitRpc(0)
-0x3B1E70()   remise à zéro du client loadfile (EE seulement)
-0x3B1430()   remise à zéro du client fileio (EE seulement)
-sceCdInit(0); sceCdGetDiskType(); sceCdMmode(2 si DVD, 1 si CD); sceCdDiskReady(0)
+0x3B1E70()   loadfile client reset (EE only)
+0x3B1430()   fileio client reset (EE only)
+sceCdInit(0); sceCdGetDiskType(); sceCdMmode(2 if DVD, 1 if CD); sceCdDiskReady(0)
 ```
 
-La commande réellement envoyée est `rom0:UDNL cdrom0:\IOP\IOPRP300.IMG;1`. Le runtime traite le reboot comme une remise à zéro de l’IOP émulé ; les modules d’IOPRP300.IMG (CDVDMAN, CDVDFSV, FILEIO, LOADFILE, MODLOAD, SIFCMD…) ne sont pas exécutés. Leurs services EE sont fournis par les liaisons de `src/burnout_overrides.cpp`.
+The command actually sent is `rom0:UDNL cdrom0:\IOP\IOPRP300.IMG;1`. The runtime treats the reboot as a reset of the emulated IOP; the modules of IOPRP300.IMG (CDVDMAN, CDVDFSV, FILEIO, LOADFILE, MODLOAD, SIFCMD…) are not run. Their EE services are provided by the bindings in `src/burnout_overrides.cpp`.
 
-## 4. Chargement des modules IOP (0x215798)
+## 4. Loading the IOP modules (0x215798)
 
-`sceSifInitIopHeap()` (0x3B1B48), puis 11 itérations sur la table de pointeurs 0x3C5268, chacune `0x215688(path, 0, 0)` → `sceSifLoadModule(path, 0, NULL)`. Un retour négatif interrompt la boucle.
+`sceSifInitIopHeap()` (0x3B1B48), then 11 iterations over the pointer table 0x3C5268, each `0x215688(path, 0, 0)` → `sceSifLoadModule(path, 0, NULL)`. A negative return stops the loop.
 
-| # | Module | Rôle (déduit) |
+| # | Module | Role (deduced) |
 |---|---|---|
-| 1 | `cdrom0:\IOP\SIO2MAN.IRX;1` (VA 0x419230) | Gestionnaire SIO2 |
-| 2 | SIO2D.IRX | Pilote SIO2 |
-| 3 | DBCMAN.IRX | Gestionnaire de manettes libdbc (SID 0x80001300) |
-| 4, 5 | DS2O.IRX (la même entrée 0x419288, chargée deux fois) | Manette DualShock 2 |
-| 6 | MCMAN.IRX | Carte mémoire |
-| 7 | MCSERV.IRX | Serveur RPC de carte mémoire (SID 0x80000400) |
-| 8 | LIBSD.IRX | Son (SPU2) |
+| 1 | `cdrom0:\IOP\SIO2MAN.IRX;1` (VA 0x419230) | SIO2 manager |
+| 2 | SIO2D.IRX | SIO2 driver |
+| 3 | DBCMAN.IRX | libdbc controller manager (SID 0x80001300) |
+| 4, 5 | DS2O.IRX (the same entry 0x419288, loaded twice) | DualShock 2 controller |
+| 6 | MCMAN.IRX | Memory card |
+| 7 | MCSERV.IRX | Memory card RPC server (SID 0x80000400) |
+| 8 | LIBSD.IRX | Sound (SPU2) |
 | 9 | RWA.IRX | RenderWare Audio |
-| 10 | B4ROUTE.IRX | Routage audio de Criterion |
-| 11 | GTFSCDVD.IRX | Système de fichiers GTFS de Criterion |
+| 10 | B4ROUTE.IRX | Criterion audio routing |
+| 11 | GTFSCDVD.IRX | Criterion GTFS file system |
 
-Non chargés : PADMAN.IRX et MC2_S1.IRX (présents sur le disque, aucune référence). MTAPMAN n’est pas sur le disque, mais `0x395A30` cherche un module « multitap_manager » par son nom.
+Not loaded: PADMAN.IRX and MC2_S1.IRX (on the disc, no reference). MTAPMAN is not on the disc, but `0x395A30` looks up a "multitap_manager" module by name.
 
-Ensuite : `0x1E2278(0x561D18, 1, …, 0x419368, 3, 0x20)` initialise le client GTFS, qui lie le SID 0x475453 (« GTS ») à 0x1E23C8. Puis `0x2159F0` → `0x1E60E0` initialise les manettes.
+Then: `0x1E2278(0x561D18, 1, …, 0x419368, 3, 0x20)` initialises the GTFS client, which binds SID 0x475453 ("GTS") at 0x1E23C8. Then `0x2159F0` → `0x1E60E0` initialises the controllers.
 
-Dans le runtime, un module `cdrom0:` est d’abord chargé physiquement dans l’interpréteur R3000 ; le service HLE du même nom (DBCMAN, MCSERV, LIBSD) n’est utilisé que si ce chargement échoue. L’IOP émulé n’a pas de modèle matériel SIO2 : SIO2MAN, DBCMAN, DS2O et MCMAN chargés physiquement ne verront donc probablement ni manette ni carte mémoire (déduit, à vérifier au premier lancement qui atteint cette étape).
+In the runtime, a `cdrom0:` module is first loaded physically into the R3000 interpreter; the HLE service of the same name (DBCMAN, MCSERV, LIBSD) is only used if that load fails. The emulated IOP has no SIO2 device model: the physically loaded SIO2MAN, DBCMAN, DS2O and MCMAN will therefore probably see neither controller nor memory card (deduced, to check at the first run that reaches this step).
 
-## 5. Couverture des imports des IRX par le noyau IOP virtuel
+## 5. IRX import coverage by the virtual IOP kernel
 
-Classement statique des tables d’import des IRX du disque par rapport aux bibliothèques intégrées de `ps2xIOP/src/emulator`. Seuls les manques sont listés.
+Static classification of the import tables of the disc's IRX against the built-in libraries of `ps2xIOP/src/emulator`. Only the gaps are listed.
 
-| Module | Import manquant | Effet avant correction | État |
+| Module | Missing import | Effect before the fix | State |
 |---|---|---|---|
-| MCMAN, MC2_S1 | cdvdman:24 sceCdReadClock | avertissement, v0 = 0 | **Implémenté** (heure JST en BCD) |
-| RWA | thbase:43 GetSystemTimeLow | retour silencieux, v0 inchangé | **Implémenté** |
-| SIO2D, MCMAN | secrman:6 SecrAuthCard | avertissement, v0 = 0 (échec d’authentification) | Laissé tel quel : sans modèle SIO2, aucune carte ne peut répondre |
-| RWA | ioman:4–8 open/close/read/write/lseek | avertissement, v0 = 0 | Ouvert. Un appel à 0x7F90 ouvre avec le mode 0x602 (écriture, création, troncature) : sortie de débogage probable |
-| RWA, GTFSCDVD | sifcmd:8, 10, 11 (tables de gestionnaires de commandes) | v0 = 0, aucun gestionnaire enregistré : les commandes de l’EE n’arrivaient jamais | **Implémenté** |
-| GTFSCDVD, DBCMAN, PADMAN | sifman:32 sceSifSetDmaIntr | v0 = 0, ni transfert ni rappel : le thread de lecture GTFS dort indéfiniment | **Implémenté** |
+| MCMAN, MC2_S1 | cdvdman:24 sceCdReadClock | warning, v0 = 0 | **Implemented** (JST time in BCD) |
+| RWA | thbase:43 GetSystemTimeLow | silent return, v0 unchanged | **Implemented** |
+| SIO2D, MCMAN | secrman:6 SecrAuthCard | warning, v0 = 0 (authentication failure) | Left as is: without a SIO2 model, no card can answer |
+| RWA | ioman:4–8 open/close/read/write/lseek | warning, v0 = 0 | Open. A call at 0x7F90 opens with mode 0x602 (write, create, truncate): probably debug output |
+| RWA, GTFSCDVD | sifcmd:8, 10, 11 (command handler tables) | v0 = 0, no handler registered: EE commands never arrived | **Implemented** |
+| GTFSCDVD, DBCMAN, PADMAN | sifman:32 sceSifSetDmaIntr | v0 = 0, neither transfer nor callback: the GTFS read thread sleeps forever | **Implemented** |
 
-Les ordinaux inconnus des bibliothèques intégrées sans repli (thbase, thsemap, thevent, sifcmd, sifman, sysclib) retournaient silencieusement. Ils produisent maintenant un avertissement `[IOP] unhandled built-in import`, une fois par import.
+Unknown ordinals of the built-in libraries without fallback (thbase, thsemap, thevent, sifcmd, sifman, sysclib) used to return silently. They now produce a `[IOP] unhandled built-in import` warning, once per import.
 
-## 6. Lancements bornés
+## 6. Bounded runs
 
-Commande : `python tools/project.py run --headless --seconds 20 --status-ms 1000`. Code 124 = délai atteint, 3 = fonction absente.
+Command: `python tools/project.py run --headless --seconds 20 --status-ms 1000`. Code 124 = time limit reached, 3 = missing function.
 
-| # | Liaisons | Résultat | Cause |
+| # | Bindings | Result | Cause |
 |---|---|---|---|
-| 1 | aucune | 124 ; PC fixe 0x3B0178, RA 0x2156D4 ; IOP : 0 instruction | sceSifInitRpc invité attend la réponse de l’IOP par SIF matériel, non émulé. |
-| 2 | libsif (6) | 124 ; PC fixe 0x377E28, RA 0x377D74 | sceCdInit invité réessaie le bind du SID 0x80000592 : aucun serveur CDVDFSV. |
-| 3 | + loadfile, iopheap, libcdvd (15) | 3 ; JALR de 0x1E3910 vers 0x1E5020 | 0x1E5020 n’est atteint que par pointeur (a0 = 0x535BC4, dont le premier mot vaut 0x4027E0) : absent de la carte Ghidra, entre FUN_001E4EE8 (fin 0x1E501C) et FUN_001E5030. |
-| — | correction | `tools/augment_function_map.py` : +2 191 points d’entrée (1 684 dans des trous, 507 dans des fonctions), 10 rejetés. Régénération : 51 161 fichiers C++, 0 instruction non traitée, 4 420 avertissements, 0 erreur ; `ptr_001e5020_0x1e5020.cpp` existe. Recompilation complète réussie (10 min 22 s). | |
-| 4 | + fileio, libcdvd internes (21), ROMVER PAL | Linux (cloud, sans ISO), 124 ; JALR vers 0 à 0x32C054 | `RwEngineInit` (0x32CBF0) échoue : `EndOfHeap` vaut 0x1F00000, sous la base du tas 0x1F9BB00. Tout `sbrk` (0x3AD6B0) échoue, RenderWare écrit par un pointeur nul et sa table de fonctions (0x1F578E4) reste vide. |
-| 5 | + `SetupHeap(-1)` terminé à la pile du thread ; mémoire du runtime sous l’image | 124 ; boucle à 0x372BC8 | `RwEngineInit` réussit et les 11 IRX se chargent. L’EE attend la réponse 0x12 de RWA.IRX : les commandes SIF de l’EE n’atteignaient pas les gestionnaires des IRX. |
-| 6 | + libsif commandes (28), sifcmd:8–11 et sifman:32 côté IOP | 124 ; boucle de démarrage 0x21B5B0 à l’état 4 | RWA répond, GTFS lit `Language/Fonts/dirtyEra.bin` (RPC 1, 3, 5, DMA puis commande 4). L’état 3 demande `Data/GlobalE.txd` (808 Ko), absent du paquet cloud de 30 Mo : seul un lancement avec l’ISO peut aller plus loin. Une image GIF par boucle. |
-| 7 | + ISO réelle (Windows) | 124 ; machine d’état 0x207D08 à l’état 9 (0x29DA28 attend l’ouverture du flux `sound_generic.awd`) ; l’écran LOADING ne bouge plus | RWA reçoit et répond aux commandes SIF, mais son moteur est cadencé par les IRQ du SPU2, que l’IOP émulé ne générait pas (§8). |
-| 8 | + SPU2 (§8) | 124 ; EE en boucle à 0x3B1DA0 (appelant 0x3B1D1C) | Tout `sound_generic.awd` est transféré (commandes 0x32/0x33). Puis 0x396A78 appelle 0x3B1EA8 (sceSifSearchModuleByName) : 0x3B1CE0 réessaie sans fin le bind du SID loadfile 0x80000006, qu’aucun serveur ne sert (loadfile est dans l’IOPRP300.IMG, non exécuté). |
-| 9 | + sceSifSearchModuleByName (29 liaisons), IOP et timers avancés par lots | 124 ; boucle principale (0x208390, sous-état 7), état de démarrage 0x1C, écran LOADING à environ 93 % ; 25 à 50 images par seconde | `0x207D08` a terminé. La scène de chargement attend `TRACKS/EATRAX1.RWS` : blocage actuel (§9). Les lectures `FE/FEMAIN.BIN` et `TRACKS/US/S7_V1/STATIC.DAT` ont abouti. |
-| 10 | + lectures CD au-delà d’un bloc alloué (§9) | 124 ; le chargement se termine (sous-état 5) puis le thread principal dort à 0x3ACF08 (`SleepThread` appelé par 0x1E7328), plus aucune image | 0x1E7328 attend une alarme (`SetAlarm(6, 0x1E7308, thread)`) qui ne se déclenche jamais : le correctif noyau de libkernel a remplacé les appels système d’alarme (§11). |
-| 11 | + appels système remplacés par du code non recompilé servis par le runtime | 124 ; écran noir, EE en boucle à 0x38A2C8 | Les alarmes fonctionnent ; le jeu lance la vidéo d’introduction et son analyseur MPEG-2 attend des données de l’IPU (§12). |
+| 1 | none | 124; PC stuck at 0x3B0178, RA 0x2156D4; IOP: 0 instructions | The guest sceSifInitRpc waits for the IOP's reply over the SIF hardware, which is not emulated. |
+| 2 | libsif (6) | 124; PC stuck at 0x377E28, RA 0x377D74 | The guest sceCdInit retries binding SID 0x80000592: no CDVDFSV server. |
+| 3 | + loadfile, iopheap, libcdvd (15) | 3; JALR from 0x1E3910 to 0x1E5020 | 0x1E5020 is only reached through a pointer (a0 = 0x535BC4, whose first word is 0x4027E0): missing from the Ghidra map, between FUN_001E4EE8 (end 0x1E501C) and FUN_001E5030. |
+| — | fix | `tools/augment_function_map.py`: +2,191 entry points (1,684 in gaps, 507 inside functions), 10 rejected. Regeneration: 51,161 C++ files, 0 unhandled instructions, 4,420 warnings, 0 errors; `ptr_001e5020_0x1e5020.cpp` exists. Full rebuild succeeded (10 min 22 s). | |
+| 4 | + fileio, internal libcdvd (21), PAL ROMVER | Linux (cloud, without ISO), 124; JALR to 0 at 0x32C054 | `RwEngineInit` (0x32CBF0) fails: `EndOfHeap` is 0x1F00000, below the heap base 0x1F9BB00. Every `sbrk` (0x3AD6B0) fails, RenderWare writes through a null pointer and its function table (0x1F578E4) stays empty. |
+| 5 | + `SetupHeap(-1)` ending at the thread's stack; runtime memory below the image | 124; loop at 0x372BC8 | `RwEngineInit` succeeds and the 11 IRX load. The EE waits for reply 0x12 from RWA.IRX: EE SIF commands did not reach the IRX handlers. |
+| 6 | + libsif commands (28), sifcmd:8–11 and sifman:32 on the IOP side | 124; boot loop 0x21B5B0 in state 4 | RWA answers, GTFS reads `Language/Fonts/dirtyEra.bin` (RPC 1, 3, 5, DMA then command 4). State 3 asks for `Data/GlobalE.txd` (808 KB), missing from the 30 MB cloud bundle: only a run with the ISO can go further. One GIF frame per loop. |
+| 7 | + real ISO (Windows) | 124; state machine 0x207D08 in state 9 (0x29DA28 waits for the `sound_generic.awd` stream to open); the LOADING screen stops moving | RWA receives and answers SIF commands, but its engine is clocked by SPU2 IRQs, which the emulated IOP did not generate (§8). |
+| 8 | + SPU2 (§8) | 124; EE looping at 0x3B1DA0 (caller 0x3B1D1C) | All of `sound_generic.awd` is transferred (commands 0x32/0x33). Then 0x396A78 calls 0x3B1EA8 (sceSifSearchModuleByName): 0x3B1CE0 retries forever binding the loadfile SID 0x80000006, which no server serves (loadfile is inside IOPRP300.IMG, not run). |
+| 9 | + sceSifSearchModuleByName (29 bindings), IOP and timers advanced in batches | 124; main loop (0x208390, sub-state 7), boot state 0x1C, LOADING screen at about 93%; 25 to 50 frames per second | `0x207D08` has finished. The loading scene waits for `TRACKS/EATRAX1.RWS`: blocker of the time (§9). The reads of `FE/FEMAIN.BIN` and `TRACKS/US/S7_V1/STATIC.DAT` succeeded. |
+| 10 | + CD reads past an allocated block (§9) | 124; loading finishes (sub-state 5) then the main thread sleeps at 0x3ACF08 (`SleepThread` called by 0x1E7328), no more frames | 0x1E7328 waits for an alarm (`SetAlarm(6, 0x1E7308, thread)`) that never fires: libkernel's kernel patch replaced the alarm system calls (§11). |
+| 11 | + system calls replaced by unrecompiled code served by the runtime | 124; black screen, EE looping at 0x38A2C8 | Alarms work; the game starts the intro video and its MPEG-2 parser waits for data from the IPU (§12). |
 
-Les lancements 4 à 6 ont été faits sous Linux à partir du paquet `tools/cloud_bundle.py`, sans l’ISO (`--disc` seul, image virtuelle). La machine à états de démarrage est `0x207D08`, état à 0x51B920 : 1 = modules IOP, 2 = police, 3 et 4 = `Data/Global%c.txd`, puis la suite.
+Runs 4 to 6 were made on Linux from the `tools/cloud_bundle.py` bundle, without the ISO (`--disc` only, virtual image). The boot state machine is `0x207D08`, state at 0x51B920: 1 = IOP modules, 2 = font, 3 and 4 = `Data/Global%c.txd`, then the rest.
 
-Pendant les lancements 1 et 2, le compteur VBlank avance de 60 par seconde : le jeu n’a pas encore appelé SetGsCrt, qui fait passer le runtime à 50 Hz en PAL.
+During runs 1 and 2, the VBlank counter advances by 60 per second: the game has not called SetGsCrt yet, which switches the runtime to 50 Hz in PAL.
 
-## 7. Blocages suivants
+## 7. Next blockers
 
-1. Lecture de `rom0:ROMVER` : **réglé** (liaisons fileio, profil ROM0 de 16 octets).
-2. Chargement physique des 11 IRX : **réglé** (imports du §5).
-3. Client GTFS (SID « GTS ») : **réglé** sur l’ISO réelle ; le jeu lit la police, `FE/FEMAIN.BIN` et `TRACKS/US/S7_V1/STATIC.DAT` (lancement 9).
-4. Lecture de `TRACKS/EATRAX0.RWS` / `EATRAX1.RWS` : **réglé** (§9).
-5. Alarmes EE remplacées par le correctif noyau de libkernel : **réglé** (§11).
-6. Vidéo d’introduction (IPU) : **ouvert**, voir §12.
-7. Manettes et carte mémoire : absence de modèle SIO2 (§4), **ouvert** ; cela bloquera dès que le jeu attendra une entrée.
+1. Reading `rom0:ROMVER`: **solved** (fileio bindings, 16-byte ROM0 profile).
+2. Physical loading of the 11 IRX: **solved** (imports of §5).
+3. GTFS client (SID "GTS"): **solved** on the real ISO; the game reads the font, `FE/FEMAIN.BIN` and `TRACKS/US/S7_V1/STATIC.DAT` (run 9).
+4. Reading `TRACKS/EATRAX0.RWS` / `EATRAX1.RWS`: **solved** (§9).
+5. EE alarms replaced by libkernel's kernel patch: **solved** (§11).
+6. Intro video (IPU): **solved** in runs 12 to 14 (§12–13).
+7. Controllers and memory card: no SIO2 device model (§4, §14), **open**; the memory card check on the PROFILE screen is the current blocker.
 
-## 8. SPU2 et audio RenderWare (RWA)
+## 8. SPU2 and RenderWare audio (RWA)
 
-**Modèle SPU2** (`ps2xIOP/src/emulator/core/iop_spu2.cpp`, accès 16 bits depuis `iop_memory.cpp`).
+**SPU2 model** (`ps2xIOP/src/emulator/core/iop_spu2.cpp`, 16-bit accesses from `iop_memory.cpp`).
 
-- Registres à 0x1F900000 : voix de 0x10 octets (VOLL, VOLR, PITCH, ADSR1, ADSR2, ENVX, VOLX), adresses de voix SSA/LSAX/NAX, registres de cœur à +0x400 par cœur (PMON, NON, VMIXL/R, MMIX, ATTR, IRQA, KON, KOFF, TSA, DATA, ADMAS, ENDX, STATX), volumes maîtres à 0x760 + 0x28 par cœur, SPDIF_IRQINFO à 0x7C2.
-- ATTR : 0x8000 active le cœur, 0x40 les IRQ, les bits 5:4 choisissent le transfert (1 PIO en écriture, 2 DMA en écriture, 3 DMA en lecture). STATX vaut 0 au repos, 0x400 pendant un transfert et 0x80 une fois terminé tant que le mode de transfert reste actif. libsd (exécuté physiquement) attend `(STATX & 0x7FF) == 0` : un STATX forcé à 0x80 au repos bloquait `sceSdInit`.
-- DMA SPU : canal 4 (cœur 0, CHCR 0x1F8010C8, IRQ 0x24) et canal 8 (cœur 1, CHCR 0x1F801508, IRQ 0x28) ; CHCR 0x01000201 = démarrage RAM → SPU, BCR = (blocs << 16) | 16 mots. Une IRQ d’adresse (IRQA atteinte par une voix ou un transfert) lève l’IRQ IOP 9 et SPDIF_IRQINFO.
-- Horloge : à chaque échantillon (48 kHz), un cœur activé écrit les tampons de sortie du mélangeur en RAM SPU2 (voix 1, voix 3, mélange gauche et droite, 0x200 demi-mots chacun ; pour le cœur 0, les demi-mots 0x400 à 0x5FF reçoivent la voix 1) et teste IRQA sur les deux cœurs. RWA place IRQA dans l’un de ces tampons (demi-mots 0x400 puis 0x500) pour recevoir une IRQ tous les 256 échantillons : c’est l’horloge de son moteur, sans laquelle l’ouverture d’un flux ne se termine jamais.
-- Limites : pas de réverbération, de bruit, de modulation de hauteur, d’ADMA ni de balayages de volume ; interpolation linéaire ; aucune sortie vers une carte son de l’hôte.
+- Registers at 0x1F900000: 0x10-byte voices (VOLL, VOLR, PITCH, ADSR1, ADSR2, ENVX, VOLX), voice addresses SSA/LSAX/NAX, core registers at +0x400 per core (PMON, NON, VMIXL/R, MMIX, ATTR, IRQA, KON, KOFF, TSA, DATA, ADMAS, ENDX, STATX), master volumes at 0x760 + 0x28 per core, SPDIF_IRQINFO at 0x7C2.
+- ATTR: 0x8000 enables the core, 0x40 the IRQs, bits 5:4 select the transfer (1 PIO write, 2 DMA write, 3 DMA read). STATX is 0 when idle, 0x400 during a transfer and 0x80 once finished as long as the transfer mode stays active. libsd (run physically) waits for `(STATX & 0x7FF) == 0`: a STATX forced to 0x80 when idle blocked `sceSdInit`.
+- SPU DMA: channel 4 (core 0, CHCR 0x1F8010C8, IRQ 0x24) and channel 8 (core 1, CHCR 0x1F801508, IRQ 0x28); CHCR 0x01000201 = start RAM → SPU, BCR = (blocks << 16) | 16 words. An address IRQ (IRQA reached by a voice or a transfer) raises IOP IRQ 9 and SPDIF_IRQINFO.
+- Clock: at every sample (48 kHz), an enabled core writes the mixer output buffers to SPU2 RAM (voice 1, voice 3, left and right mix, 0x200 halfwords each; for core 0, halfwords 0x400 to 0x5FF receive voice 1) and tests IRQA on both cores. RWA places IRQA in one of these buffers (halfwords 0x400 then 0x500) to receive an IRQ every 256 samples: that is its engine's clock, without which opening a stream never finishes.
+- Limits: no reverb, noise, pitch modulation, ADMA or volume sweeps; linear interpolation; no output to the host's sound card.
 
-**Protocole RWA** (commandes SIF, cf. aussi SDK_FUNCTIONS.md).
+**RWA protocol** (SIF commands, see also SDK_FUNCTIONS.md).
 
-- EE → IOP : commande 0, type dans le mot 4 du paquet (0x49, 1, 2, 0x11, 0x13, 0x15, 0x4E, 0x30, 0x32, 5, 0x14 au démarrage). IOP → EE : commande 1, avec son propre type de réponse (observé : 1 → 9, 2 → 0xA, 0x11 → 0x1A avec l’adresse IOP 0x12C030, 0x13 → 0x1B avec 0xC25B0 et 0x100000, 0x15 → 0x1C avec 0x5A850, 0x30 → 0x31, 0x32 → 0x33, 0x4E → 0x4F, 5 → 0xD, 0x14 → 0x14).
-- 0x32 : requête de tranche de flux ; le descripteur de 0x70 octets part vers l’IOP 0x12C030. La réponse 0x33 porte la fonction de fin 0x3721C0, qui efface l’indicateur « en attente » (0x10) du descripteur et appelle le rappel de l’emplacement de flux. 0x372110 attend ce bit.
-- EE : gestionnaire de la commande 1 à 0x3719D8 (file de 8 entrées à 0x1F64740, `iSignalSema` du sémaphore stocké en 0x432D78), thread 2 (entrée 0x362F50). IOP : gestionnaire de la commande 0 à RWA+0x3D70 (file de 8 entrées et SignalSema), thread T11 (RWA+0x4044, 0x38B0), transferts SPU par 0x4568 puis 0xA44C (liste à 0xC300 + 8 × indice), pompes de canal T12 et T13, threads d’ISR de priorité 9.
-- Régime établi : à chaque image, commande 0x14 (0x680 octets vers l’IOP 0x5A850, avec un compteur croissant) et réponse 0x14.
+- EE → IOP: command 0, type in word 4 of the packet (0x49, 1, 2, 0x11, 0x13, 0x15, 0x4E, 0x30, 0x32, 5, 0x14 at boot). IOP → EE: command 1, with its own reply type (observed: 1 → 9, 2 → 0xA, 0x11 → 0x1A with IOP address 0x12C030, 0x13 → 0x1B with 0xC25B0 and 0x100000, 0x15 → 0x1C with 0x5A850, 0x30 → 0x31, 0x32 → 0x33, 0x4E → 0x4F, 5 → 0xD, 0x14 → 0x14).
+- 0x32: stream slice request; the 0x70-byte descriptor goes to IOP 0x12C030. Reply 0x33 carries the completion function 0x3721C0, which clears the "pending" flag (0x10) of the descriptor and calls the stream slot's callback. 0x372110 waits for that bit.
+- EE: command 1 handler at 0x3719D8 (8-entry queue at 0x1F64740, `iSignalSema` of the semaphore stored at 0x432D78), thread 2 (entry 0x362F50). IOP: command 0 handler at RWA+0x3D70 (8-entry queue and SignalSema), thread T11 (RWA+0x4044, 0x38B0), SPU transfers through 0x4568 then 0xA44C (list at 0xC300 + 8 × index), channel pumps T12 and T13, ISR threads of priority 9.
+- Steady state: every frame, command 0x14 (0x680 bytes to IOP 0x5A850, with an increasing counter) and reply 0x14.
 
-## 9. Lecture CD refusée (lancement 9, réglé au lancement 10)
+## 9. Refused CD read (run 9, solved in run 10)
 
-La machine d’état de 0x207D08 est terminée (état 0x1C à 0x51B920) et `main` (0x21B3F8) boucle sur 0x208390, dont le sous-état à 0x51B950 reste à 7 : tant que 0x208E50 ne renvoie rien, la scène de chargement (objet 0x4C1B38, état 8 à +0x1C ; sous-objet 0x1CEDB00, état 7) attend la requête de fichier `tracks/eatrax1.rws` (objet 0x1CF55C0, état de poignée 2 à +0x24C).
+The 0x207D08 state machine has finished (state 0x1C at 0x51B920) and `main` (0x21B3F8) loops on 0x208390, whose sub-state at 0x51B950 stays at 7: as long as 0x208E50 returns nothing, the loading scene (object 0x4C1B38, state 8 at +0x1C; sub-object 0x1CEDB00, state 7) waits for the file request `tracks/eatrax1.rws` (object 0x1CF55C0, handle state 2 at +0x24C).
 
-Observé :
+Observed:
 
-- `BDR_TRACE_CDVD=1` : environ 560 `sceCdRead` par seconde, toujours `lsn=2007487` (début de `TRACKS/EATRAX1.RWS`), 4 secteurs, vers l’IOP 0x12C210 (tampon de RWA).
-- `BDR_IOP_PROFILE=1` : près de 100 % des instructions IOP sont dans GTFSCDVD.IRX, 0x1110–0x1150 et les stubs cdvdman 0x2168 (`sceCdRead`) et 0x2180/0x2188 : c’est la boucle interne de 0x10CC, `do { sceCdDiskReady(1) ; … ; sceCdRead(…) } while (retour == 0)`. `sceCdRead` renvoie donc 0 à chaque fois et la boucle ne laisse pas le temps aux autres threads IOP, dont la requête RWA 0x32 reste sans réponse 0x33.
+- `BDR_TRACE_CDVD=1`: about 560 `sceCdRead` per second, always `lsn=2007487` (start of `TRACKS/EATRAX1.RWS`), 4 sectors, to IOP 0x12C210 (RWA's buffer).
+- `BDR_IOP_PROFILE=1`: nearly 100% of IOP instructions are in GTFSCDVD.IRX, 0x1110–0x1150, and the cdvdman stubs 0x2168 (`sceCdRead`) and 0x2180/0x2188: this is the inner loop of 0x10CC, `do { sceCdDiskReady(1); …; sceCdRead(…) } while (result == 0)`. `sceCdRead` therefore returns 0 every time and the loop leaves no time to the other IOP threads, so RWA request 0x32 never gets its 0x33 reply.
 
-Cause, vérifiée en journalisant le refus : le jeu lit 4 secteurs (0x2000 octets) au début d’un bloc de 0x1840 octets alloué à 0x12C210 ; les 0x7C0 derniers octets tombent dans de la mémoire libre (premier octet libre 0x12DA50). `readSectors` (`iop_cdvd.cpp`, upstream) refusait toute lecture dont la destination n’était pas entièrement allouée ou écrite (`IopMemory::ownsRamRange`) et renvoyait 0, que GTFSCDVD réessayait sans fin. Le DMA CD de la console écrit les secteurs entiers là où on le lui demande : `readSectors` ne vérifie plus que les bornes de la RAM IOP et signale le débordement (au plus 4 fois). La même lecture vise `EATRAX0.RWS` (LSN 1911758) ou `EATRAX1.RWS` selon le morceau tiré au hasard.
+Cause, verified by logging the refusal: the game reads 4 sectors (0x2000 bytes) at the start of a 0x1840-byte block allocated at 0x12C210; the last 0x7C0 bytes land in free memory (first free byte 0x12DA50). `readSectors` (`iop_cdvd.cpp`, upstream) refused any read whose destination was not entirely allocated or written (`IopMemory::ownsRamRange`) and returned 0, which GTFSCDVD retried forever. The console's CD DMA writes whole sectors wherever it is told: `readSectors` now only checks the IOP RAM bounds and reports the overflow (at most 4 times). The same read targets `EATRAX0.RWS` (LSN 1911758) or `EATRAX1.RWS` depending on the randomly chosen track.
 
-## 10. Outils d’observation
+## 10. Observation tools
 
-Variables d’environnement, à poser avant `python tools/project.py run …` (toutes désactivées par défaut) :
+Environment variables, to set before `python tools/project.py run …` (all off by default):
 
-| Variable | Effet |
+| Variable | Effect |
 |---|---|
-| `BDR_STATUS_DETAIL=1` | à chaque ligne `[status]` : threads EE (entrée, pc, ra, priorité, attente), sémaphores, drapeaux, threads et objets du noyau IOP, journal de ses opérations |
-| `BDR_STATUS_WATCH=0xA,0xB+N,@0xC+OFF` | mots de la mémoire invitée ajoutés à l’état : un mot, N mots, ou le mot situé à OFF du pointeur stocké en 0xC |
-| `BDR_TRACE_SIF=1` | commandes SIF dans les deux sens (1 200 premières, 80 pour les commandes 4 et 5 de GTFS) |
-| `BDR_TRACE_CDVD=1` | chaque `sceCdRead` (LBA, secteurs, destination) ; le répertoire ISO9660 de l’ISO permet de retrouver le fichier |
-| `BDR_IOP_PROFILE=1` | où l’IOP passe ses instructions (par tranches de 16 octets, module + offset) |
-| `BDR_TRACE_IOPCALLS`, `BDR_TRACE_IOPHW`, `PS2X_IOP_TRACE_SPU`, `BDR_TRACE_GS` | appels de fonctions IOP choisies, écritures matérielles IOP, SPU2, GS |
-| `BDR_TRACE_KERNEL=1` | `SetSyscall` (numéro, gestionnaire, code recompilé ou non), `SetAlarm`, `CancelAlarm` et expiration des alarmes |
-| `BDR_PROFILE=1` | échantillonneur du thread invité (EE, IOP et GS y tournent) ; affiche les fonctions les plus fréquentes à la fin du lancement. Windows seulement ; il faut le PDB, produit par `/DEBUG` (`cmake/Burnout.cmake`) |
+| `BDR_STATUS_DETAIL=1` | on every `[status]` line: EE threads (entry, pc, ra, priority, wait), semaphores, flags, IOP kernel threads and objects, log of its operations |
+| `BDR_STATUS_WATCH=0xA,0xB+N,@0xC+OFF` | guest memory words added to the status: one word, N words, or the word at OFF from the pointer stored at 0xC |
+| `BDR_TRACE_SIF=1` | SIF commands both ways (first 1,200, 80 for GTFS commands 4 and 5) |
+| `BDR_TRACE_CDVD=1` | every `sceCdRead` (LBA, sectors, destination); the ISO's ISO9660 directory gives back the file |
+| `BDR_IOP_PROFILE=1` | where the IOP spends its instructions (16-byte slices, module + offset) |
+| `BDR_TRACE_IOPCALLS`, `BDR_TRACE_IOPHW`, `PS2X_IOP_TRACE_SPU`, `BDR_TRACE_GS` | calls of selected IOP functions, IOP hardware writes, SPU2, GS |
+| `BDR_TRACE_KERNEL=1` | `SetSyscall` (number, handler, recompiled code or not), `SetAlarm`, `CancelAlarm` and alarm expiry |
+| `BDR_TRACE_IPU=1` | IPU commands and DMA starts (§13) |
+| `BDR_PROFILE=1` | sampler of the guest thread (EE, IOP and GS run on it); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
 
-Avec ces outils, le profil a montré que le jeu tournait à 7 % du temps réel parce que l’IOP et les timers étaient avancés tous les 8 cycles EE ; ils le sont maintenant par lots de 2048 cycles (CHANGES.md).
+With these tools, the profile showed the game ran at 7% of real time because the IOP and the timers were advanced every 8 EE cycles; they now are in batches of 2048 cycles (CHANGES.md).
 
-## 11. Correctif noyau de libkernel (lancement 10)
+## 11. libkernel's kernel patch (run 10)
 
-Au démarrage, libkernel installe deux correctifs du noyau EE, comme sur console (trace `BDR_TRACE_KERNEL=1`) :
+At boot, libkernel installs two patches of the EE kernel, as on the console (trace `BDR_TRACE_KERNEL=1`):
 
-- 0x3B2AC0 puis 0x3B2E78 (alarmes) : `SetSyscall(0x83, 0x3B2A68)` (recherche d’adresse) et `SetSyscall(0x5A, …)` (copie), copie de code en mémoire noyau, `SetSyscall(0x5B, 0x80076000)`, puis pour 0xFC, 0xFE, 0xFD, 0xFF, 0x12C et 0x8 : `SetSyscall(n, syscall 0x5B(n))`.
-- 0x3B24F0 (drapeaux d’événement) : `SetSyscall(0x5A, 0x3B2498)`, copie de 0x330 octets de 0x3E2038 vers 0x80075000, `SetSyscall(0x5B, 0x80075000)`, `SetSyscall(0x54, 0x3B2840)`, puis 0x55 à 0x59.
+- 0x3B2AC0 then 0x3B2E78 (alarms): `SetSyscall(0x83, 0x3B2A68)` (address lookup) and `SetSyscall(0x5A, …)` (copy), copy of code into kernel memory, `SetSyscall(0x5B, 0x80076000)`, then for 0xFC, 0xFE, 0xFD, 0xFF, 0x12C and 0x8: `SetSyscall(n, syscall 0x5B(n))`.
+- 0x3B24F0 (event flags): `SetSyscall(0x5A, 0x3B2498)`, copy of 0x330 bytes from 0x3E2038 to 0x80075000, `SetSyscall(0x5B, 0x80075000)`, `SetSyscall(0x54, 0x3B2840)`, then 0x55 to 0x59.
 
-Le code copié en mémoire noyau n’est pas recompilé : le runtime ne peut pas l’exécuter. Avant, un appel système dont le gestionnaire remplacé n’était pas du code recompilé renvoyait −1 ; `syscall 0x5B` renvoyait donc −1, et `SetAlarm`, `iSetAlarm`, `ReleaseAlarm`, `iReleaseAlarm` ainsi que les drapeaux d’événement 0x55–0x59 échouaient tous. `sleep(6)` (0x1E7328 : `SetAlarm(6, 0x1E7308, thread)` puis `SleepThread`) ne se réveillait jamais. Désormais, un tel appel est servi par l’implémentation du runtime (`dispatchSyscallOverride`, `Syscalls/System.cpp`). `SetSyscall` écrit toujours l’entrée dans la table noyau visible par le jeu, que le correctif utilise aussi pour écrire des mots du noyau par des index signés. Test : « a syscall override that is not recompiled code falls back to the builtin » (`ps2x_tests`).
+The code copied into kernel memory is not recompiled: the runtime cannot run it. Before, a system call whose replaced handler was not recompiled code returned −1; `syscall 0x5B` therefore returned −1, and `SetAlarm`, `iSetAlarm`, `ReleaseAlarm`, `iReleaseAlarm` as well as event flags 0x55–0x59 all failed. `sleep(6)` (0x1E7328: `SetAlarm(6, 0x1E7308, thread)` then `SleepThread`) never woke up. Such a call is now served by the runtime's implementation (`dispatchSyscallOverride`, `Syscalls/System.cpp`). `SetSyscall` still writes the entry into the kernel table visible to the game, which the patch also uses to write kernel words through signed indexes. Test: "a syscall override that is not recompiled code falls back to the builtin" (`ps2x_tests`).
 
-## 12. Vidéo d'introduction (lancement 11)
+## 12. Intro video (run 11)
 
-Après le chargement, l’écran devient noir et le thread principal tourne dans 0x38A2C8 : l’analyseur de flux MPEG-2 de la bibliothèque vidéo du jeu (codes de début 0x1B3 séquence, 0x1B8 GOP, 0x100 image, 0x1B7 fin) cherche un code de début (`0x388030(…, 0x18)` jusqu’à 1, puis `0x3880C0(…, 8)`), en lisant les bits du décodeur IPU. Les compteurs DMA et GIF ne bougent plus. Il faut vérifier comment le flux arrive à l’IPU (DMA canal 4 vers l’IPU, commandes BCLR/FDEC/IDEC/BDEC) et ce que l’émulation IPU du runtime renvoie.
+After loading, the screen turns black and the main thread spins in 0x38A2C8: the MPEG-2 stream parser of the game's video library (start codes 0x1B3 sequence, 0x1B8 GOP, 0x100 picture, 0x1B7 end) looks for a start code (`0x388030(…, 0x18)` until 1, then `0x3880C0(…, 8)`), reading bits from the IPU decoder. The DMA and GIF counters stop moving. The runtime had no IPU emulation: its registers were only stored, and DMA channels 3 and 4 were not processed.
 
-## 13. IPU et branchements signés (lancements 12 et 13)
+## 13. IPU and signed branches (runs 12 and 13)
 
-Un modèle IPU est maintenant raccordé aux registres et FIFO de `PS2Memory`, ainsi qu'aux DMA 3/4. Les tests vérifient notamment la reprise d'une commande après apport de données, BDEC vers RAW16, la conversion CSC et les chaînes source. BDEC attend la sortie DMA, puis détecte le code de début suivant après les octets de bourrage. Les échantillons intra sont saturés à 0–255 ; les blocs inter conservent leurs résidus signés. IDEC reste non implémentée. Aucun code vidéo invité n'est remplacé ou ignoré.
+An IPU model is now wired to the registers and FIFOs of `PS2Memory`, and to DMA channels 3/4. The tests check among others resuming a command after more data arrives, BDEC to RAW16, CSC conversion and source chains. BDEC waits for the output DMA, then detects the next start code after the stuffing bytes. Intra samples are saturated to 0–255; inter blocks keep their signed residuals. IDEC is still not implemented. No guest video code is replaced or skipped.
 
-Lancement 12 (`run12-codex-ipu.log`, 60 s, code 124) : l'écran de chargement se termine, puis l'écran reste noir. Le PC est désormais dans `0x387DC8` (attente de CMD), notamment `0x387EF4`, et le jeu redémarre continuellement le DMA d'entrée. En fin d'essai : 739 491 démarrages DMA et 426 paquets GIF, sans fonction manquante.
+Run 12 (`run12-codex-ipu.log`, 60 s, code 124): the loading screen finishes, then the screen stays black. The PC is now in `0x387DC8` (CMD wait), notably `0x387EF4`, and the game keeps restarting the input DMA. At the end: 739,491 DMA starts and 426 GIF packets, no missing function.
 
-Lancement 13 (`run13-codex-ipu-trace.log`, 24 s, `BDR_TRACE_IPU=1`) : le flux arrive bien. Trois FDEC de 8 bits donnent successivement `0x0001B328`, `0x01B32801`, puis `0xB32801E0`. Sur la dernière, BUSY est effacé (`CTRL=0x00800008`) et le FIFO contient 8 qwords, avec QWC d'entrée `0xFF7`. Le jeu reste pourtant dans l'attente : les `BGEZL` à `0x387E08` et `0x387EF8` sont traduits avec `GPR_S32`. Cela teste le bit 31 des données, au lieu du bit 63 qui porte BUSY dans le registre CMD lu par `LD`.
+Run 13 (`run13-codex-ipu-trace.log`, 24 s, `BDR_TRACE_IPU=1`): the stream does arrive. Three 8-bit FDECs give `0x0001B328`, `0x01B32801`, then `0xB32801E0`. On the last one, BUSY is cleared (`CTRL=0x00800008`) and the FIFO holds 8 qwords, with input QWC `0xFF7`. Yet the game keeps waiting: the `BGEZL` at `0x387E08` and `0x387EF8` are translated with `GPR_S32`. That tests bit 31 of the data, instead of bit 63, which holds BUSY in the CMD register read by `LD`.
 
-Le recompileur (`control_flow_emitter.cpp`) utilise maintenant `GPR_S64` pour BLEZ/BGTZ/BLTZ/BGEZ et toutes leurs variantes likely/link. Les douze variantes sont couvertes par un test ; les 452 tests runtime/recompileur passent sous MSVC. La comparaison sur le registre 64 bits est aussi celle de l'[interpréteur R5900 de PCSX2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Interpreter.cpp). Il faut régénérer les fichiers C++ et recompiler le jeu pour appliquer cette correction.
+The recompiler (`control_flow_emitter.cpp`) now uses `GPR_S64` for BLEZ/BGTZ/BLTZ/BGEZ and all their likely/link variants. The twelve variants are covered by a test; the 452 runtime/recompiler tests pass with MSVC. The 64-bit register comparison is also what [PCSX2's R5900 interpreter](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Interpreter.cpp) does. The C++ files must be regenerated and the game rebuilt to apply this fix.
 
-`BDR_TRACE_IPU=1` trace les 160 premières commandes et démarrages DMA, puis un sur 10 000 : commande, DATA, CTRL, BP, TOP et registres DMA. Désactivée par défaut, la trace reste dans les journaux locaux ignorés par Git.
+`BDR_TRACE_IPU=1` traces the first 160 commands and DMA starts, then one in 10,000: command, DATA, CTRL, BP, TOP and DMA registers. Off by default, the trace stays in the local logs ignored by Git.
 
-## 14. Écran PROFILE et carte mémoire (lancements 14 à 18)
+## 14. PROFILE screen and memory card (runs 14 to 18)
 
-Après régénération et recompilation du correctif 64 bits, le lancement 14 (`run14-codex-branch64.log`, 60 s, code 124) franchit l'ancien blocage vidéo. La trace montre plus de 440 000 commandes IPU, dont BDEC ; le jeu affiche l'écran **PROFILE**, avec le message de vérification de carte mémoire. Les captures sont dans `local/diagnostics/run14-codex-branch64/`. Ce constat ne valide pas la fidélité complète des vidéos et du son.
+After regenerating and rebuilding with the 64-bit fix, run 14 (`run14-codex-branch64.log`, 60 s, code 124) gets past the former video blocker. The trace shows more than 440,000 IPU commands, BDEC included; the game shows the **PROFILE** screen, with the memory card check message. Captures are in `local/diagnostics/run14-codex-branch64/`. This does not validate the full fidelity of videos and sound.
 
-Lancement 15 (`run15-codex-profile-card.log`, 24 s) : l'EE attend dans `sceSifCallRpc` (0x3B0848, appelant 0x3B594C). Le thread SIO2MAN attend le drapeau 0x2000, posé par son gestionnaire d'IRQ 17 à SIO2MAN+0x584. Aucune émulation SIO2 ne produisait cette interruption. MCMAN effectue des transferts par SIO2MAN, avec des délais et sémaphores.
+Run 15 (`run15-codex-profile-card.log`, 24 s): the EE waits in `sceSifCallRpc` (0x3B0848, caller 0x3B594C). The SIO2MAN thread waits for flag 0x2000, set by its IRQ 17 handler at SIO2MAN+0x584. No SIO2 emulation produced this interrupt. MCMAN makes transfers through SIO2MAN, with delays and semaphores.
 
-Un transport PIO SIO2 pour ports déconnectés a été ajouté : octets `0xFF`, RECV1 indiquant l'absence de périphérique, IRQ 17 à CTRL START et acquittement INTR. Le comportement de référence est documenté par [Sio2 de PCSX2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SIO/Sio2.cpp) et [ses états de ports](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SIO/SioTypes.h). Lancement 16 (`run16-codex-sio2.log`, 25 s) : SIO2MAN reçoit bien l'interruption et revient à son attente de commande ; la vérification reste bloquée. Les cartes et manettes ne sont pas simulées comme présentes.
+A SIO2 PIO transport for disconnected ports was added: `0xFF` bytes, RECV1 reporting no device, IRQ 17 on CTRL START and INTR acknowledgement. The reference behaviour is documented by [PCSX2's Sio2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SIO/Sio2.cpp) and [its port states](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SIO/SioTypes.h). Run 16 (`run16-codex-sio2.log`, 25 s): SIO2MAN does receive the interrupt and goes back to waiting for a command; the check is still stuck. Memory cards and controllers are not reported as present.
 
-La fonction RPC physique s'exécutait par `callFunction` hors d'un thread IOP (T0). Ses attentes ne suspendaient donc pas le serveur. Elle s'exécute maintenant dans un thread temporaire, à pile réutilisable, pendant que l'ordonnanceur fait avancer les autres threads et périphériques. Lancement 17 (`run17-codex-rpc-thread.log`) : cette correction révèle que MCMAN attend son alarme de 100 µs avant de reprendre WaitSema. `thbase:35` SetAlarm retournait jusque-là sans enregistrer de rappel ; le RPC atteint sa limite et produit une erreur explicite.
+The physical RPC function ran through `callFunction` outside any IOP thread (T0). Its waits therefore did not suspend the server. It now runs in a temporary thread, with a reusable stack, while the scheduler advances the other threads and devices. Run 17 (`run17-codex-rpc-thread.log`): this fix shows that MCMAN waits for its 100 µs alarm before resuming WaitSema. `thbase:35` SetAlarm returned without registering a callback; the RPC hits its limit and produces an explicit error.
 
-Les alarmes IOP 35–38 sont maintenant prises en charge par le distributeur d'imports de l'émulateur (identités et ABI dans [thbase.h de PS2SDK](https://github.com/ps2dev/ps2sdk/blob/master/iop/system/threadman/include/thbase.h)). Un module synthétique vérifie DelayThread puis SetAlarm/SleepThread/iWakeupThread et 128 appels RPC successifs, avec une vraie reprise dans le même thread et réutilisation des piles.
+IOP alarms 35–38 are now handled by the emulator's import dispatcher (identities and ABI in [PS2SDK's thbase.h](https://github.com/ps2dev/ps2sdk/blob/master/iop/system/threadman/include/thbase.h)). A synthetic module checks DelayThread then SetAlarm/SleepThread/iWakeupThread and 128 successive RPC calls, with a real resume in the same thread and stack reuse.
 
-Lancement 18 (`run18-codex-iop-alarm.log`, 35 s, code 124) : aucune erreur d'exécution et aucune fonction manquante ; l'écran PROFILE reste sur la vérification de carte mémoire. Le thread de commande SIO2MAN revient à l'attente 0x4155, les serveurs RPC passent leurs attentes de drapeaux, et l'EE reste dans 0x3B0848 pendant le rappel libmc 0x3B57C8. Il reste à vérifier la réponse GetInfo de MCSERV (SID 0x80000400, fonction 1), les données transférées vers l'EE et la fin du rappel libmc, avant d'attribuer cette attente au seul périphérique absent.
+Run 18 (`run18-codex-iop-alarm.log`, 35 s, code 124): no runtime error and no missing function; the PROFILE screen stays on the memory card check. SIO2MAN's command thread goes back to waiting on 0x4155, the RPC servers get through their flag waits, and the EE stays in 0x3B0848 during the libmc callback 0x3B57C8. Still to check: MCSERV's GetInfo reply (SID 0x80000400, function 1), the data transferred to the EE and the end of the libmc callback, before blaming this wait on the missing device alone.
 
-Reprise ciblée :
+Targeted resume:
 
 ```powershell
 $env:BDR_STATUS_DETAIL = '1'
@@ -202,5 +203,4 @@ $env:BDR_STATUS_WATCH = '0x1F776C0+4,0x1F76600+8,0x3E36D0+3,0x1F76128+3'
 python tools/project.py run --headless --seconds 35 --status-ms 5000 --log run19-libmc.log --tail 120
 ```
 
-Limites restantes : SIO2 DMA et dmacman, carte mémoire persistante, protocole DualShock 2 alimenté par les entrées du PC, menu et courses. Le transport PIO actuel représente uniquement des ports déconnectés ; aucun résultat de jeu n'est forcé.
-
+Remaining limits: SIO2 DMA and dmacman, persistent memory card, DualShock 2 protocol fed by PC input, menu and races. The current PIO transport only represents disconnected ports; no game result is forced.

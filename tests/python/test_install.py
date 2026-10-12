@@ -244,9 +244,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(install.find_game(build), game)
 
     def test_final_message_matches_the_platform(self):
-        self.assertIn("Jouer.bat", "\n".join(install.final_message(True)))
+        self.assertIn("Play.bat", "\n".join(install.final_message(True)))
         linux = "\n".join(install.final_message(False))
-        self.assertNotIn("Jouer.bat", linux)
+        self.assertNotIn("Play.bat", linux)
         self.assertIn("python3 tools/project.py run", linux)
 
     def test_errors_are_reported_without_traceback(self):
@@ -256,7 +256,7 @@ class InstallTests(unittest.TestCase):
             stderr = io.StringIO()
             with mock.patch.object(install, "setup", side_effect=failure), contextlib.redirect_stderr(stderr):
                 self.assertEqual(install.main([]), 1)
-            self.assertIn("ERREUR :", stderr.getvalue())
+            self.assertIn("ERROR:", stderr.getvalue())
 
     def test_build_tree_from_another_checkout_is_detected(self):
         build = self.root / "build"

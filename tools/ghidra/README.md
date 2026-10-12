@@ -1,48 +1,48 @@
-# Analyse Ghidra de Burnout Dominator PAL
+# Ghidra analysis of Burnout Dominator PAL
 
-Ces scripts utilisent le projet sauvegardé `local/analysis/ghidra/project/BurnoutDominatorPAL.gpr`. Ils ouvrent `SLES_546.27` en lecture seule, sans réimportation ni nouvelle analyse. Le processeur est `r5900:LE:32:default` et le compilateur `default`.
+These scripts use the saved project `local/analysis/ghidra/project/BurnoutDominatorPAL.gpr`. They open `SLES_546.27` read-only, without re-importing or re-analysing it. The processor is `r5900:LE:32:default` and the compiler `default`.
 
-Les fichiers `local/decompiled/functions/*.pseudocode.c` contiennent du **pseudocode de décompilation Ghidra**, avec des types et noms inférés. Ce pseudocode n'est ni le source original récupéré ni du C directement compilable. La couverture des exports ne prouve pas que le jeu est recompilé, jouable ou correctement représenté par toutes les expressions du décompilateur.
+The files `local/decompiled/functions/*.pseudocode.c` contain **Ghidra decompiler pseudocode**, with inferred types and names. This pseudocode is neither recovered original source nor directly compilable C. Export coverage does not prove that the game is recompiled, playable or correctly represented by every decompiler expression.
 
-## Réexporter le pseudocode
+## Re-exporting the pseudocode
 
-Utiliser Ghidra 12.1.4, l'extension `ghidra-emotionengine-reloaded` 2.1.38 compilée pour cette version, et un JDK 21 ou supérieur. Le premier passage a été effectué avec Java 22.0.1. Les liens et empreintes des archives vérifiées sont dans `docs/toolchain.json`.
+Use Ghidra 12.1.4, the `ghidra-emotionengine-reloaded` 2.1.38 extension built for that version, and JDK 21 or later. The first pass was made with Java 22.0.1. Links and hashes of the verified archives are in `docs/toolchain.json`.
 
-Depuis le dépôt :
-
-```powershell
-& ./tools/ghidra/export-pseudocode.ps1 -GhidraInstall 'C:\chemin\ghidra_12.1.4_PUBLIC'
-```
-
-Le script utilise quatre instances indépendantes du décompilateur, un délai de 10 secondes par fonction et un budget global de 900 secondes. Le projet reste inchangé. Les paramètres Java placent les préférences, caches et fichiers temporaires sous `local/analysis/ghidra/export-state`.
-
-Pour retenter seulement les fonctions dont le premier passage a expiré :
+From the repository:
 
 ```powershell
-& ./tools/ghidra/export-pseudocode.ps1 -GhidraInstall 'C:\chemin\ghidra_12.1.4_PUBLIC' -RetryTimeouts
+& ./tools/ghidra/export-pseudocode.ps1 -GhidraInstall 'C:\path\to\ghidra_12.1.4_PUBLIC'
 ```
 
-La reprise applique un délai de 60 secondes par fonction. Elle conserve `manifest.first-pass.json`, `manifest.first-pass.jsonl`, les comptes et durées du premier passage, et ajoute les tentatives au manifeste fusionné. Une reprise déjà enregistrée n'est pas relancée implicitement.
+The script uses four independent decompiler instances, a 10-second timeout per function and a global budget of 900 seconds. The project is left unchanged. The Java options put preferences, caches and temporary files under `local/analysis/ghidra/export-state`.
 
-`manifest.json` et `manifest.jsonl` décrivent chaque fonction, son adresse, sa fin exclusive, ses plages de corps, son résultat, ses avertissements et ses tentatives. Les fichiers individuels sont préfixés par l'adresse. Un échec conserve un fichier de statut et son entrée au manifeste. `all_pseudocode_exported` est vrai uniquement lorsque chaque fonction a produit du pseudocode ; consulter aussi les avertissements.
+To retry only the functions whose first pass timed out:
 
-La commande retourne une erreur si Ghidra échoue ou ne produit pas de manifeste, et le code 2 si un export individuel reste incomplet. Les journaux et tableaux d'arguments exacts sont conservés dans `local/decompiled`.
+```powershell
+& ./tools/ghidra/export-pseudocode.ps1 -GhidraInstall 'C:\path\to\ghidra_12.1.4_PUBLIC' -RetryTimeouts
+```
 
-## Scripts d'analyse auxiliaires
+The retry uses a 60-second timeout per function. It keeps `manifest.first-pass.json`, `manifest.first-pass.jsonl`, the counts and durations of the first pass, and adds the attempts to the merged manifest. A retry already recorded is not run again implicitly.
 
-- `ExportBurnoutPALAnalysis.java` : export testé des vraies fonctions Ghidra dans `.text`, distinctes des labels de reprise ; vérifie l'identité de l'ELF.
-- `BurnoutPALAnalysisSetup.java` : préparation d'une future importation. **Non exécuté dans l'analyse sauvegardée livrée.** Il vérifie l'empreinte de l'ELF et retire le droit d'exécution des sections autres que `.text` dans le projet Ghidra. Il ne modifie pas le binaire original.
+`manifest.json` and `manifest.jsonl` describe each function, its address, its exclusive end, its body ranges, its result, its warnings and its attempts. Individual files are prefixed with the address. A failure keeps a status file and its manifest entry. `all_pseudocode_exported` is true only when every function produced pseudocode; check the warnings too.
 
-Le lieur PS2 marque `.data` exécutable dans cet ELF. Les exports limitent donc les fonctions EE à `[0x00100000, 0x003BEB28)` et conservent l'entrée `0x00100008`. Les overlays VU sont des données d'une autre unité de calcul ; le pseudocode EE ne les remplace pas.
+The command returns an error if Ghidra fails or produces no manifest, and code 2 if an individual export stays incomplete. Logs and the exact argument arrays are kept in `local/decompiled`.
 
-## Résultat conservé
+## Auxiliary analysis scripts
 
-Les **8 860 fonctions EE réelles** ont toutes produit du pseudocode. Le passage initial a obtenu 8 858 résultats en 28,519 secondes et deux expirations. La reprise ciblée a obtenu les deux résultats restants en 32,747 secondes, avec un délai de 60 secondes par fonction. Les fichiers et comptes initiaux restent consultables.
+- `ExportBurnoutPALAnalysis.java`: tested export of the real Ghidra functions in `.text`, distinct from resume labels; checks the ELF identity.
+- `BurnoutPALAnalysisSetup.java`: preparation for a future import. **Not run in the shipped saved analysis.** It checks the ELF hash and removes the execute permission from sections other than `.text` in the Ghidra project. It does not modify the original binary.
 
-**455 fichiers comportent des commentaires `WARNING:` de Ghidra**, conservés dans les fichiers et le manifeste. Ces avertissements portent notamment sur des blocs considérés inaccessibles ou des symboles globaux qui se chevauchent. Un statut `success` signifie que Ghidra a retourné du pseudocode ; il ne valide pas l'équivalence avec le comportement du binaire.
+The PS2 linker marks `.data` executable in this ELF. The exports therefore limit EE functions to `[0x00100000, 0x003BEB28)` and keep the entry `0x00100008`. VU overlays are data for another processing unit; EE pseudocode does not replace them.
 
-## API de parallélisme utilisée
+## Kept result
 
-Le premier passage suit la mise en commun officielle d'instances `DecompInterface` par `DecompilerCallback`, avec `ParallelDecompiler` et un pool limité à quatre travailleurs. La reprise utilise une seule instance et traite uniquement les expirations.
+All **8,860 real EE functions** produced pseudocode. The initial pass got 8,858 results in 28.519 seconds and two timeouts. The targeted retry got the two remaining results in 32.747 seconds, with a 60-second timeout per function. The initial files and counts remain available.
 
-[ParallelDecompiler officiel](https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/Decompiler/src/main/java/ghidra/app/decompiler/parallel/ParallelDecompiler.java), [DecompilerCallback officiel](https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/Decompiler/src/main/java/ghidra/app/decompiler/parallel/DecompilerCallback.java).
+**455 files contain Ghidra `WARNING:` comments**, kept in the files and the manifest. These warnings concern among others blocks considered unreachable or overlapping global symbols. A `success` status means Ghidra returned pseudocode; it does not validate equivalence with the binary's behaviour.
+
+## Parallelism API used
+
+The first pass follows the official pooling of `DecompInterface` instances through `DecompilerCallback`, with `ParallelDecompiler` and a pool limited to four workers. The retry uses a single instance and only handles the timeouts.
+
+[Official ParallelDecompiler](https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/Decompiler/src/main/java/ghidra/app/decompiler/parallel/ParallelDecompiler.java), [official DecompilerCallback](https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/Decompiler/src/main/java/ghidra/app/decompiler/parallel/DecompilerCallback.java).

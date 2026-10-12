@@ -1,6 +1,6 @@
 # Burnout Dominator Reversed
 
-Static recompilation of Burnout Dominator PS2 (PAL, SLES_546.27, SHA256 locked in `project.json`) to native code with PS2Recomp. Windows first, Linux/macOS next. The owner writes in French: answer in French; user-facing docs (`README.md`, `docs/*.md`) are French; code, comments and commit messages are English.
+Static recompilation of Burnout Dominator PS2 (PAL, SLES_546.27, SHA256 locked in `project.json`) to native code with PS2Recomp. Windows first, Linux/macOS next. The owner writes in French: answer in French. The repository is public and entirely in English: README, docs, runner and installer messages, code, comments and commit messages. Contributor rules for humans are in `CONTRIBUTING.md`; keep them in line with the rules below.
 
 ## Layout
 
