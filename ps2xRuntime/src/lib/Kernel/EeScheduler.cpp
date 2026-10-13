@@ -92,6 +92,8 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_rdram = rdram;
     m_readyQueues = {};
     m_threads.clear();
+    m_cachedThreadId = 0;
+    m_cachedThread = nullptr;
     m_semaphores.clear();
     m_eventFlags.clear();
     m_alarms.clear();
@@ -271,7 +273,7 @@ void EeScheduler::run()
             continue;
         }
 
-        if (!m_runtime.hasFunction(context.pc))
+        if (!hasGeneratedFunction(context.pc))
         {
             if (!running->invocations.empty())
             {
@@ -357,6 +359,17 @@ void EeScheduler::postEvent(EeEvent event)
         m_checkpointPending.store(true, std::memory_order_release);
     }
     m_eventCv.notify_one();
+}
+
+bool EeScheduler::hasGeneratedFunction(uint32_t address) noexcept
+{
+    // Same test as PS2Runtime::hasFunction, inlined into the dispatch loop.
+    if ((address & 3u) != 0u || address < g_ps2RecompiledFunctionTableBase || address >= g_ps2RecompiledFunctionTableEnd)
+    {
+        return false;
+    }
+    const uint32_t slot = (address - g_ps2RecompiledFunctionTableBase) >> 2u;
+    return slot < g_ps2RecompiledFunctionTableSlotCount && g_ps2RecompiledFunctionTable[slot] != nullptr;
 }
 
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
@@ -483,6 +496,8 @@ int EeScheduler::deleteThread(int id, uint32_t &ownedStack)
         ownedStack = it->second.stack;
     }
     m_threads.erase(it);
+    m_cachedThreadId = 0;
+    m_cachedThread = nullptr;
     releaseInvocationStacks(id);
     publishSnapshot();
     return KE_OK;
@@ -548,6 +563,8 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
     if (deleteThreadRecord && id != kMainThreadId)
     {
         m_threads.erase(id);
+        m_cachedThreadId = 0;
+        m_cachedThread = nullptr;
         releaseInvocationStacks(id);
     }
     if (ownedStack != 0u)
@@ -1499,7 +1516,14 @@ const EeEventFlag *EeScheduler::eventFlag(int id) const
 
 GuestThread *EeScheduler::currentThread()
 {
-    return thread(m_currentThreadId);
+    if (m_currentThreadId != 0 && m_currentThreadId == m_cachedThreadId)
+    {
+        return m_cachedThread;
+    }
+    GuestThread *found = thread(m_currentThreadId);
+    m_cachedThreadId = found ? m_currentThreadId : 0;
+    m_cachedThread = found;
+    return found;
 }
 
 const GuestThread *EeScheduler::currentThread() const

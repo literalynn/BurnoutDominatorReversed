@@ -2,6 +2,13 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Performance (October 13, 2026)
+
+- `ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp` and `gs_cpu_backend.h`: deferred, multi-threaded CPU rasterization. `Submit` queues primitives; worker threads (`BDR_GS_THREADS`, default half the cores, at most 8; 0 or 1 keeps the former immediate drawing) draw them in interleaved 8-row bands, so each pixel is written by one thread in submission order. Every operation that reads or writes VRAM or the CLUT (VRAM access, transfers, CLUT load, clear, TEXFLUSH, FINISH, presentation, snapshots, reset) waits for the queue first. A primitive that samples a VRAM range written by a queued primitive also waits (render to texture without TEXFLUSH). Each worker has its own texture page cache, invalidated where the former single cache was.
+- Same file: triangles are scanned only over the part of each row where the three edge functions can pass (widened by 1e-3 in weight and two pixels); the per-pixel edge test is unchanged.
+- `ps2xTest/src/ps2_gs_tests.cpp`: a scene of blended Gouraud triangles with depth test and a render-to-texture sprite sampled without TEXFLUSH must give byte-identical VRAM with 4 workers and with immediate drawing. `main.cpp` keeps the other GS tests, which read raw VRAM right after a draw, on immediate drawing. A 20,000-triangle scene gives the same VRAM hash with and without the row spans. ThreadSanitizer: 453/453 tests, no report.
+- `ee_scheduler.h`, `EeScheduler.cpp`: the running thread is cached instead of looked up in the thread map after every guest dispatch (about 8% of the EE thread in a cloud profile); the cache is cleared on every erase. The dispatch loop tests the generated function table inline, and `dispatchGuestBranch` looks a target up once instead of three times.
+
 ## DualShock 2 on SIO2 (October 13, 2026)
 
 - `ps2xIOP/src/emulator/core/iop_sio2_pad.h/.cpp` (new): DualShock 2 controller protocol. Digital, analog (0x73) and pressure (0x79) modes, configuration mode (0x43) with status and constants (0x45, 0x46, 0x47, 0x4C), mode switch and lock (0x44), motor mapping (0x4D), response mask (0x4F), poll (0x42) with buttons, sticks, the 12 pressure bytes and the two motor bytes.

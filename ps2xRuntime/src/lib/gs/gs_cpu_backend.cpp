@@ -9,6 +9,8 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -445,9 +447,15 @@ namespace
     }
 }
 
+namespace
+{
+    uint32_t rasterThreadCount();
+}
+
 GSCpuBackend::GSCpuBackend()
 {
     using namespace GSMem;
+    m_threadCount = rasterThreadCount();
     static std::once_flag lookupTablesOnce;
     std::call_once(lookupTablesOnce, []()
                    { InitLookupTables(); });
@@ -516,12 +524,209 @@ GSCpuBackend::GSCpuBackend()
     Reset();
 }
 
+namespace
+{
+    // Rows a raster worker owns: interleaved bands of 8 rows. The thread that
+    // submits (or a backend without workers) owns every row.
+    struct RowBand
+    {
+        uint32_t index = 0u;
+        uint32_t count = 1u;
+    };
+    thread_local RowBand t_rowBand{};
+    thread_local GSMem::TexturePageCache *t_textureCache = nullptr;
+    constexpr uint32_t kRowBandShift = 3u;
+    constexpr size_t kLaunchPrimitives = 128u;
+    constexpr size_t kMaxPendingPrimitives = 16384u;
+    constexpr uint32_t kGsPageBytes = 8192u;
+
+    inline bool ownsRow(int y) noexcept
+    {
+        return t_rowBand.count == 1u ||
+               ((static_cast<uint32_t>(y) >> kRowBandShift) % t_rowBand.count) == t_rowBand.index;
+    }
+
+    // BDR_GS_THREADS=N rasterizes on N worker threads; 0 or 1 draws every
+    // primitive immediately on the submitting thread, as before.
+    uint32_t rasterThreadCount()
+    {
+        if (const char *value = std::getenv("BDR_GS_THREADS"))
+        {
+            const long requested = std::strtol(value, nullptr, 10);
+            return static_cast<uint32_t>(std::clamp<long>(requested, 0, 32));
+        }
+        const uint32_t cores = std::max(1u, std::thread::hardware_concurrency());
+        return std::clamp(cores / 2u, 1u, 8u);
+    }
+
+    using ByteRange = std::pair<uint32_t, uint32_t>;
+
+    // A buffer of `pagesWide` pages per row of pages, `rows` pixel rows high,
+    // starting at `start`: the pages it can touch, counted with 32-row pages
+    // (the smallest page height) and one extra page for a block offset.
+    void addPageRange(std::vector<ByteRange> &out, uint32_t start, uint32_t pagesWide, uint32_t rows)
+    {
+        const uint64_t pages = static_cast<uint64_t>(std::max(pagesWide, 1u)) * ((static_cast<uint64_t>(rows) + 31u) / 32u) + 1u;
+        const uint64_t length = std::min<uint64_t>(pages * kGsPageBytes, GSMem::MEMORY_SIZE);
+        const uint64_t begin = start % GSMem::MEMORY_SIZE;
+        const uint64_t end = begin + length;
+        if (end <= GSMem::MEMORY_SIZE)
+        {
+            out.emplace_back(static_cast<uint32_t>(begin), static_cast<uint32_t>(end));
+            return;
+        }
+        out.emplace_back(static_cast<uint32_t>(begin), static_cast<uint32_t>(GSMem::MEMORY_SIZE));
+        out.emplace_back(0u, static_cast<uint32_t>(end - GSMem::MEMORY_SIZE));
+    }
+
+    void addWrittenRanges(std::vector<ByteRange> &out, const GSDrawState &state)
+    {
+        const auto &ctx = state.context;
+        const uint32_t rows = static_cast<uint32_t>(ctx.scissor.y1) + 1u;
+        std::vector<ByteRange> ranges;
+        addPageRange(ranges, ctx.frame.fbp * kGsPageBytes, ctx.frame.fbw, rows);
+        addPageRange(ranges, ctx.zbuf.zbp * kGsPageBytes, ctx.frame.fbw, rows);
+        for (const ByteRange &range : ranges)
+        {
+            if (std::find(out.begin(), out.end(), range) == out.end())
+                out.push_back(range);
+        }
+    }
+
+    bool readsWrittenRange(const std::vector<ByteRange> &written, const GSDrawState &state)
+    {
+        if (!state.prim.tme || written.empty())
+            return false;
+        const auto &tex = state.context.tex0;
+        std::vector<ByteRange> reads;
+        addPageRange(reads, tex.tbp0 * 256u, tex.tbw, 1u << std::min<uint32_t>(tex.th, 10u));
+        for (const ByteRange &read : reads)
+            for (const ByteRange &write : written)
+                if (read.first < write.second && write.first < read.second)
+                    return true;
+        return false;
+    }
+}
+
+struct GSCpuBackend::RasterWorkers
+{
+    std::vector<std::thread> threads;
+    std::vector<std::unique_ptr<GSMem::TexturePageCache>> caches;
+    std::vector<GSPrimitiveBatch> job;
+    std::mutex mutex;
+    std::condition_variable start;
+    std::condition_variable done;
+    uint64_t generation = 0u;
+    uint32_t remaining = 0u;
+    bool stop = false;
+};
+
+GSCpuBackend::~GSCpuBackend()
+{
+    if (!m_workers)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(m_workers->mutex);
+        m_workers->stop = true;
+    }
+    m_workers->start.notify_all();
+    for (std::thread &thread : m_workers->threads)
+        thread.join();
+}
+
+void GSCpuBackend::QueuePrimitive(const GSPrimitiveBatch &batch)
+{
+    if (m_threadCount <= 1u)
+    {
+        RasterizePrimitive(batch);
+        return;
+    }
+    if (!m_workers)
+    {
+        const uint32_t workerCount = m_threadCount;
+        m_workers = std::make_unique<RasterWorkers>();
+        RasterWorkers &workers = *m_workers;
+        for (uint32_t index = 0u; index < workerCount; ++index)
+            workers.caches.push_back(std::make_unique<GSMem::TexturePageCache>());
+        for (uint32_t index = 0u; index < workerCount; ++index)
+        {
+            workers.threads.emplace_back([this, &workers, index, workerCount]()
+                                         {
+                t_rowBand = RowBand{index, workerCount};
+                t_textureCache = workers.caches[index].get();
+                uint64_t seen = 0u;
+                for (;;)
+                {
+                    {
+                        std::unique_lock<std::mutex> lock(workers.mutex);
+                        workers.start.wait(lock, [&]() { return workers.stop || workers.generation != seen; });
+                        if (workers.stop)
+                            return;
+                        seen = workers.generation;
+                    }
+                    for (const GSPrimitiveBatch &queued : workers.job)
+                        RasterizePrimitive(queued);
+                    std::lock_guard<std::mutex> lock(workers.mutex);
+                    if (--workers.remaining == 0u)
+                        workers.done.notify_all();
+                } });
+        }
+    }
+
+    if (readsWrittenRange(m_pendingWrites, batch.state))
+        DrainUnlocked();
+    m_pending.push_back(batch);
+    addWrittenRanges(m_pendingWrites, batch.state);
+
+    bool idle = false;
+    {
+        std::lock_guard<std::mutex> lock(m_workers->mutex);
+        idle = m_workers->remaining == 0u;
+    }
+    if (idle && m_pending.size() >= kLaunchPrimitives)
+        LaunchPendingUnlocked();
+    else if (m_pending.size() >= kMaxPendingPrimitives)
+        DrainUnlocked();
+}
+
+// Caller holds m_mutex and the workers are idle.
+void GSCpuBackend::LaunchPendingUnlocked() const
+{
+    RasterWorkers &workers = *m_workers;
+    std::lock_guard<std::mutex> lock(workers.mutex);
+    workers.job.swap(m_pending);
+    m_pending.clear();
+    ++workers.generation;
+    workers.remaining = static_cast<uint32_t>(workers.threads.size());
+    workers.start.notify_all();
+}
+
+void GSCpuBackend::DrainUnlocked() const
+{
+    if (!m_workers)
+        return;
+    RasterWorkers &workers = *m_workers;
+    auto wait = [&workers]()
+    {
+        std::unique_lock<std::mutex> lock(workers.mutex);
+        workers.done.wait(lock, [&workers]() { return workers.remaining == 0u; });
+    };
+    wait();
+    if (!m_pending.empty())
+    {
+        LaunchPendingUnlocked();
+        wait();
+    }
+    m_pendingWrites.clear();
+}
+
 void GSCpuBackend::Initialize(uint8_t *vram, uint32_t vramSize)
 {
     if (vram && vramSize < GSMem::MEMORY_SIZE)
         throw std::invalid_argument("GS CPU backend requires at least 4 MiB of VRAM");
 
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     m_vram = vram;
     m_vramSize = vramSize;
     ResetUnlocked();
@@ -530,6 +735,7 @@ void GSCpuBackend::Initialize(uint8_t *vram, uint32_t vramSize)
 void GSCpuBackend::Reset()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     ResetUnlocked();
 }
 
@@ -538,6 +744,9 @@ void GSCpuBackend::ResetUnlocked()
     m_clut.fill(0u);
     m_clutCbp.fill(0u);
     m_texturePageCache.Invalidate();
+    if (m_workers)
+        for (const auto &cache : m_workers->caches)
+            cache->Invalidate();
     m_transfer = {};
     m_transfer.direction = 3u;
     m_transferState = {};
@@ -551,7 +760,8 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_vram || batch.vertexCount == 0u)
         return;
-    DrawPrimitive(batch);
+    LogPrimitive(batch);
+    QueuePrimitive(batch);
 }
 
 void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
@@ -588,6 +798,7 @@ void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
         return;
     }
 
+    DrainUnlocked();
     LoadClutUnlocked(tex0, texclut);
 }
 
@@ -641,23 +852,30 @@ void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &t
 
 void GSCpuBackend::Flush()
 {
-    // CPU backend is immediate. GPU backends may submit command buffers here.
+    std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
 }
 
 void GSCpuBackend::TextureFlush()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     m_texturePageCache.Invalidate();
+    if (m_workers)
+        for (const auto &cache : m_workers->caches)
+            cache->Invalidate();
 }
 
 void GSCpuBackend::Sync(GSSyncReason)
 {
-    // CPU backend is immediate. GPU backends may wait on fences/readbacks here.
+    std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
 }
 
 uint32_t GSCpuBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     return ReadVramUnlocked(psm, base, bw, x, y);
 }
 
@@ -673,12 +891,13 @@ uint32_t GSCpuBackend::ReadTextureVramUnlocked(uint32_t psm, uint32_t base, uint
     if (!m_vram)
         return 0u;
 
-    return GSMem::ReadTexture(m_texturePageCache, m_vram, psm, base, bw, x, y);
+    return GSMem::ReadTexture(t_textureCache ? *t_textureCache : m_texturePageCache, m_vram, psm, base, bw, x, y);
 }
 
 void GSCpuBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     WriteVramUnlocked(psm, base, bw, x, y, value);
 }
 
@@ -692,6 +911,7 @@ void GSCpuBackend::WriteVramUnlocked(uint32_t psm, uint32_t base, uint32_t bw, u
 void GSCpuBackend::SnapshotVram(std::vector<uint8_t> &out) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     if (!m_vram || m_vramSize == 0u)
     {
         out.clear();
@@ -712,6 +932,12 @@ GSTransferSnapshot GSCpuBackend::GetTransferSnapshot() const
 }
 
 void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
+{
+    LogPrimitive(batch);
+    RasterizePrimitive(batch);
+}
+
+void GSCpuBackend::LogPrimitive(const GSPrimitiveBatch &batch)
 {
     const GSDrawState &state = batch.state;
     const auto &ctx = state.context;
@@ -865,7 +1091,11 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
                       << std::dec << std::endl;
         }
     });
+}
 
+void GSCpuBackend::RasterizePrimitive(const GSPrimitiveBatch &batch)
+{
+    const GSDrawState &state = batch.state;
     switch (state.prim.type)
     {
     case GS_PRIM_SPRITE:
@@ -898,6 +1128,8 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
 {
     const auto &ctx = state.context;
     if (x < ctx.scissor.x0 || x > ctx.scissor.x1 || y < ctx.scissor.y0 || y > ctx.scissor.y1)
+        return;
+    if (!ownsRow(y))
         return;
 
     if (state.prim.fge)
@@ -1284,6 +1516,8 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
 
         for (int y = drawY0; y <= drawY1; ++y)
         {
+            if (!ownsRow(y))
+                continue;
             float ty = (static_cast<float>(y - unclippedY0) + 0.5f) / spriteH;
             float texVf = v0f + (v1f - v0f) * ty;
 
@@ -1318,8 +1552,12 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
     else
     {
         for (int y = drawY0; y <= drawY1; ++y)
+        {
+            if (!ownsRow(y))
+                continue;
             for (int x = drawX0; x <= drawX1; ++x)
                 WritePixel(state, x, y, z1, r, g, b, a, v1.fog);
+        }
     }
 }
 
@@ -1359,10 +1597,43 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
     const float invAbsDenom = 1.0f / std::fabs(denom);
     constexpr float kEdgeEpsilon = 1.0e-4f;
 
+    // Along a row each weight is linear in px: w = slope * px + offset. The
+    // span where all three can pass the edge test is widened by 1e-3 in weight
+    // (far above float rounding) and two pixels; the exact per-pixel test
+    // below still decides coverage, so the output is unchanged.
+    const float slope0 = (fy1 - fy2) * winding * invAbsDenom;
+    const float slope1 = (fy2 - fy0) * winding * invAbsDenom;
+    const float slope2 = -(slope0 + slope1);
+
     for (int y = minY; y <= maxY; ++y)
     {
+        if (!ownsRow(y))
+            continue;
         float py = static_cast<float>(y) + 0.5f;
-        for (int x = minX; x <= maxX; ++x)
+        const float offset0 = (((fy1 - fy2) * (-fx2) + (fx2 - fx1) * (py - fy2)) * winding) * invAbsDenom;
+        const float offset1 = (((fy2 - fy0) * (-fx2) + (fx0 - fx2) * (py - fy2)) * winding) * invAbsDenom;
+        const float offset2 = 1.0f - offset0 - offset1;
+        float spanLo = static_cast<float>(minX);
+        float spanHi = static_cast<float>(maxX);
+        auto limit = [&](float slope, float offset)
+        {
+            // slope * (x + 0.5) + offset >= -kEdgeEpsilon
+            if (slope == 0.0f)
+                return;
+            const float bound = (-kEdgeEpsilon - 1.0e-3f - offset) / slope - 0.5f;
+            if (slope > 0.0f)
+                spanLo = std::max(spanLo, bound - 2.0f);
+            else
+                spanHi = std::min(spanHi, bound + 2.0f);
+        };
+        limit(slope0, offset0);
+        limit(slope1, offset1);
+        limit(slope2, offset2);
+        if (!(spanLo <= spanHi))
+            continue;
+        const int spanX0 = std::max(minX, static_cast<int>(std::floor(spanLo)));
+        const int spanX1 = std::min(maxX, static_cast<int>(std::ceil(spanHi)));
+        for (int x = spanX0; x <= spanX1; ++x)
         {
             float px = static_cast<float>(x) + 0.5f;
 
@@ -1514,6 +1785,7 @@ void GSCpuBackend::DrawLine(const GSPrimitiveBatch &batch)
 void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     m_transfer = command;
     m_transferState.x = command.trxpos.dsax;
     m_transferState.y = command.trxpos.dsay;
@@ -1531,6 +1803,7 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     if (!data || sizeBytes == 0u || !m_vram || m_transferState.direction != 0u)
         return;
     if (m_transfer.trxreg.rrw == 0u || m_transfer.trxreg.rrh == 0u || m_transferState.totalPixels == 0u)
@@ -1760,6 +2033,7 @@ uint32_t GSCpuBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
 bool GSCpuBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    DrainUnlocked();
     if (!m_vram || context.frame.fbw == 0u)
         return false;
 

@@ -15,7 +15,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -410,10 +412,102 @@ namespace
     }
 }
 
+namespace
+{
+    void setGsThreads(const char *value)
+    {
+#ifdef _WIN32
+        _putenv_s("BDR_GS_THREADS", value);
+#else
+        setenv("BDR_GS_THREADS", value, 1);
+#endif
+    }
+
+    // Gouraud triangles with depth test and blending, a sprite drawn into a
+    // second buffer and that buffer sampled right away without TEXFLUSH.
+    std::vector<uint8_t> renderRasterScene(const char *threads)
+    {
+        const char *previous = std::getenv("BDR_GS_THREADS");
+        const std::string restore = previous ? previous : "1";
+        setGsThreads(threads);
+        std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+        {
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+            setGsThreads(restore.c_str());
+
+            constexpr uint64_t kScreen = (0ull << 0) | (255ull << 16) | (0ull << 32) | (223ull << 48);
+            gs.writeRegister(GS_REG_FRAME_1, (0ull << 0) | (4ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
+            gs.writeRegister(GS_REG_ZBUF_1, 100ull);
+            gs.writeRegister(GS_REG_SCISSOR_1, kScreen);
+            gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
+            gs.writeRegister(GS_REG_TEST_1, 0x50000ull); // ZTE, GEQUAL
+            gs.writeRegister(GS_REG_ALPHA_1, 0x44ull);   // (Cs - Cd) * As + Cd
+
+            uint32_t seed = 12345u;
+            auto next = [&seed](uint32_t range)
+            {
+                seed = seed * 1103515245u + 12345u;
+                return (seed >> 8) % range;
+            };
+            for (int triangle = 0; triangle < 300; ++triangle)
+            {
+                const uint64_t blend = (triangle % 3 == 0) ? (1ull << 6) : 0ull;
+                gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_TRIANGLE) | (1ull << 3) | blend);
+                for (int vertex = 0; vertex < 3; ++vertex)
+                {
+                    gs.writeRegister(GS_REG_RGBAQ, next(0xFFFFFFFFu) | (1ull << 31));
+                    const uint64_t x = next(256u) << 4;
+                    const uint64_t y = next(224u) << 4;
+                    const uint64_t z = next(0x10000u);
+                    gs.writeRegister(GS_REG_XYZ2, x | (y << 16) | (z << 32));
+                }
+            }
+
+            // Draw a 64x64 sprite into page 150, then sample it from context 1.
+            gs.writeRegister(GS_REG_FRAME_2, (150ull << 0) | (1ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
+            gs.writeRegister(GS_REG_ZBUF_2, (1ull << 32));
+            gs.writeRegister(GS_REG_SCISSOR_2, (63ull << 16) | (63ull << 48));
+            gs.writeRegister(GS_REG_XYOFFSET_2, 0ull);
+            gs.writeRegister(GS_REG_TEST_2, 0x30000ull);
+            gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 9));
+            gs.writeRegister(GS_REG_RGBAQ, 0x8033CC66ull);
+            gs.writeRegister(GS_REG_XYZ2, 0ull);
+            gs.writeRegister(GS_REG_XYZ2, (64ull << 4) | ((64ull << 4) << 16));
+
+            gs.writeRegister(GS_REG_TEX0_1, (150ull * 32ull) | (1ull << 14) | (static_cast<uint64_t>(GS_PSM_CT32) << 20) |
+                                                (6ull << 26) | (6ull << 30) | (1ull << 34) | (1ull << 35));
+            for (int sprite = 0; sprite < 20; ++sprite)
+            {
+                gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 4) | (1ull << 8));
+                const uint64_t x = next(192u);
+                const uint64_t y = next(160u);
+                gs.writeRegister(GS_REG_UV, 0ull);
+                gs.writeRegister(GS_REG_XYZ2, (x << 4) | ((y << 4) << 16) | (0xFFFFull << 32));
+                gs.writeRegister(GS_REG_UV, (64ull << 4) | ((64ull << 4) << 16));
+                gs.writeRegister(GS_REG_XYZ2, ((x + 64u) << 4) | (((y + 64u) << 4) << 16) | (0xFFFFull << 32));
+            }
+            gs.writeRegister(GS_REG_FINISH, 0ull);
+        }
+        return vram;
+    }
+}
+
 void register_ps2_gs_tests()
 {
     MiniTest::Case("PS2GS", [](TestCase &tc)
     {
+        tc.Run("GS raster workers draw the same VRAM as immediate rasterization", [](TestCase &t)
+        {
+            const std::vector<uint8_t> immediate = renderRasterScene("1");
+            const std::vector<uint8_t> threaded = renderRasterScene("4");
+            size_t written = 0u;
+            for (const uint8_t byte : immediate)
+                written += byte != 0u ? 1u : 0u;
+            t.IsTrue(written > 100000u, "the scene must cover a large part of the frame");
+            t.IsTrue(immediate == threaded, "four raster workers must produce byte-identical VRAM");
+        });
+
         tc.Run("GS CSR/IMR support coherent 64-bit and 32-bit access", [](TestCase &t)
         {
             PS2Memory mem;

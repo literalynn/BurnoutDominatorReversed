@@ -403,6 +403,7 @@ private:
     void updateNextDeadline();
     [[nodiscard]] bool hasReadyAtOrAbovePriority(int priority) const;
     void renewTimeSlice();
+    [[nodiscard]] static bool hasGeneratedFunction(uint32_t address) noexcept;
     void copyMainContextToRuntime();
     void publishDebugContext(const R5900Context &context);
     void publishIdleDebugContext();
@@ -430,6 +431,11 @@ private:
     uint32_t m_enabledIntcMask = 0xFFFFFFFFu;
     uint32_t m_enabledDmacMask = 0xFFFFFFFFu;
     int m_currentThreadId = 0;
+    // Executor-only cache of m_threads[m_currentThreadId]: the run loop looks the
+    // running thread up after every guest dispatch. Map nodes keep their
+    // address until erased; every erase clears the cache.
+    int m_cachedThreadId = 0;
+    GuestThread *m_cachedThread = nullptr;
     bool m_rescheduleRequested = false;
     bool m_timeSliceExpired = false;
     bool m_insideInterrupt = false;

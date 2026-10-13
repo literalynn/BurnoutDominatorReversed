@@ -23,6 +23,16 @@ void reset_ps2_test_function_table();
 
 int main()
 {
+    // Most GS tests read raw VRAM right after a draw: keep the backend
+    // immediate unless a test or the caller asks for raster workers.
+    if (!std::getenv("BDR_GS_THREADS"))
+    {
+#ifdef _WIN32
+        _putenv_s("BDR_GS_THREADS", "1");
+#else
+        setenv("BDR_GS_THREADS", "1", 0);
+#endif
+    }
     MiniTest::BeforeEach(reset_ps2_test_function_table);
 
     register_code_generator_tests();

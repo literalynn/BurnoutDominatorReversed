@@ -1397,9 +1397,11 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         return false;
     }
 
+    uint32_t slot = 0u;
+    RecompiledFunction targetFn = generatedFunctionTableSlot(targetPc, slot) ? g_ps2RecompiledFunctionTable[slot] : nullptr;
     if (!isCall)
     {
-        if (!hasFunction(targetPc))
+        if (targetFn == nullptr)
         {
             reportMissingFunction(rdram, ctx, targetPc, sourcePc, kind, debugName);
         }
@@ -1408,7 +1410,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         return false;
     }
 
-    if (!hasFunction(targetPc))
+    if (targetFn == nullptr)
     {
         reportMissingFunction(rdram, ctx, targetPc, sourcePc, kind, debugName);
 
@@ -1430,7 +1432,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         return false;
     }
 
-    RecompiledFunction targetFn = lookupFunction(targetPc);
+    pushDispatchPc(targetPc);
     const uint32_t entryPc = ctx->pc;
     targetFn(rdram, ctx, this);
 

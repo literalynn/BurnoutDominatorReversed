@@ -152,9 +152,10 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_TRACE_IOPCALLS`, `BDR_TRACE_IOPHW`, `PS2X_IOP_TRACE_SPU`, `BDR_TRACE_GS` | calls of selected IOP functions, IOP hardware writes, SPU2, GS |
 | `BDR_TRACE_KERNEL=1` | `SetSyscall` (number, handler, recompiled code or not), `SetAlarm`, `CancelAlarm` and alarm expiry |
 | `BDR_TRACE_IPU=1` | IPU commands and DMA starts (§13) |
+| `BDR_GS_THREADS=N` | GS rasterization threads (default: half the cores, at most 8); `1` draws immediately on the game thread, for comparisons |
 | `BDR_TRACE_SIO2=1` | SIO2 commands (port, bytes sent and received); identical consecutive pad polls are skipped (§14) |
 | `BDR_PAD_SCRIPT=cross@1300-1310,start@2000-2004` | holds controller buttons on port 1 between two VSync ticks (headless runs) |
-| `BDR_PROFILE=1` | sampler of the guest thread (EE, IOP and GS run on it); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
+| `BDR_PROFILE=1` | sampler of the guest thread (EE and IOP run on it; GS rasterization too with `BDR_GS_THREADS=1`); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
 
 With these tools, the profile showed the game ran at 7% of real time because the IOP and the timers were advanced every 8 EE cycles; they now are in batches of 2048 cycles (CHANGES.md).
 
