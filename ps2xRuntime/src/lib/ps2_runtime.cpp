@@ -6,6 +6,7 @@
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/ps2_wait_stats.h"
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
 #include "Kernel/Stubs/GS.h"
@@ -2552,8 +2553,38 @@ void PS2Runtime::printRunStatus(std::ostream &out)
          << " iop[instr=" << iop.emulatorInstructions
          << " mods=" << iop.emulatorLoadedModules
          << " thr=" << iop.emulatorThreads
-         << " rpc=" << iop.emulatorRpcServers << "]"
-         << " threads:";
+         << " rpc=" << iop.emulatorRpcServers << "]";
+    {
+        // Game-thread wait time by cause and VSync rate since the previous status line.
+        static bool havePrevious = false;
+        static auto previousTime = std::chrono::steady_clock::now();
+        static std::array<uint64_t, static_cast<size_t>(ps2_wait_stats::Wait::Count)> previousWaits{};
+        static uint64_t previousVsync = 0u;
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsedNs = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(now - previousTime).count());
+        const uint64_t vsync = m_eeScheduler->currentVSyncTick();
+        if (!havePrevious)
+        {
+            for (size_t i = 0; i < previousWaits.size(); ++i)
+                previousWaits[i] = ps2_wait_stats::g_waitNs[i].load(std::memory_order_relaxed);
+            havePrevious = true;
+        }
+        else if (elapsedNs > 0.0)
+        {
+            static constexpr const char *kNames[] = {"idle", "pace", "gs", "gslock"};
+            line << " wait[";
+            for (size_t i = 0; i < previousWaits.size(); ++i)
+            {
+                const uint64_t total = ps2_wait_stats::g_waitNs[i].load(std::memory_order_relaxed);
+                line << (i ? " " : "") << kNames[i] << '=' << static_cast<int>(100.0 * static_cast<double>(total - previousWaits[i]) / elapsedNs) << '%';
+                previousWaits[i] = total;
+            }
+            line << "] vsync/s=" << static_cast<int>(static_cast<double>(vsync - previousVsync) * 1.0e9 / elapsedNs);
+        }
+        previousTime = now;
+        previousVsync = vsync;
+    }
+    line << " threads:";
     for (const EeThreadSnapshot &thread : ee.threads)
     {
         line << ' ' << thread.id << ':' << threadStatusName(thread.status)

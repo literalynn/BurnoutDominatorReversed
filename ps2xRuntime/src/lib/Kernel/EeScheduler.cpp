@@ -1,6 +1,7 @@
 #include "runtime/ee_scheduler.h"
 
 #include "ps2_log.h"
+#include "runtime/ps2_wait_stats.h"
 #include "ps2_runtime_macros.h"
 
 #include <algorithm>
@@ -162,6 +163,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
 void EeScheduler::run()
 {
     assertExecutor();
+    ps2_wait_stats::t_gameThread = true;
     m_running.store(true, std::memory_order_release);
 
     while (!m_stopRequested.load(std::memory_order_acquire))
@@ -372,9 +374,28 @@ bool EeScheduler::hasGeneratedFunction(uint32_t address) noexcept
     return slot < g_ps2RecompiledFunctionTableSlotCount && g_ps2RecompiledFunctionTable[slot] != nullptr;
 }
 
+namespace
+{
+    // BDR_EE_CYCLE_SCALE=P charges P% of the cycles the generated code reports
+    // at its checkpoints (default 100). The recompiler charges a fixed 32
+    // cycles per backward branch whatever the loop length, so this is an
+    // experiment knob for EE timing, like an emulator's EE cycle rate.
+    uint32_t eeCycleScalePercent()
+    {
+        static const uint32_t percent = []
+        {
+            const char *value = std::getenv("BDR_EE_CYCLE_SCALE");
+            const long parsed = value ? std::strtol(value, nullptr, 10) : 100;
+            return static_cast<uint32_t>(std::clamp<long>(parsed, 1, 1000));
+        }();
+        return percent;
+    }
+}
+
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 {
-    accountCycles(cycles);
+    const uint32_t percent = eeCycleScalePercent();
+    accountCycles(percent == 100u ? cycles : std::max<uint32_t>(1u, static_cast<uint32_t>((static_cast<uint64_t>(cycles) * percent) / 100u)));
 
     if (m_checkpointPending.load(std::memory_order_acquire) ||
         m_stopRequested.load(std::memory_order_acquire))
@@ -1905,6 +1926,7 @@ void EeScheduler::processDueDeadlines()
 
             if (now < pacingDeadline)
             {
+                ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::EePacing);
                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                      { return !m_events.empty() ||
                                               m_stopRequested.load(std::memory_order_acquire); });
@@ -2112,6 +2134,7 @@ void EeScheduler::waitForEvent()
     }
     const uint64_t timerCycles = m_runtime.memory().cyclesUntilNextEeTimerInterrupt();
     const bool hasTimerDeadline = timerCycles != std::numeric_limits<uint64_t>::max();
+    ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::EeIdle);
     if (m_deadlines.empty() && !hasTimerDeadline)
     {
         m_eventCv.wait(lock, [this]()

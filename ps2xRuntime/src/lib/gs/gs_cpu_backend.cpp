@@ -6,6 +6,7 @@
 #include "runtime/gs/ps2_gs_psmt8.h"
 #include "runtime/gs/ps2_gs_memory.h"
 #include "ps2_log.h"
+#include "runtime/ps2_wait_stats.h"
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -450,6 +451,19 @@ namespace
 namespace
 {
     uint32_t rasterThreadCount();
+
+    // Counts the time the game thread waits for a backend held elsewhere
+    // (presentation snapshots).
+    std::unique_lock<std::mutex> lockBackend(std::mutex &mutex)
+    {
+        std::unique_lock<std::mutex> lock(mutex, std::try_to_lock);
+        if (!lock.owns_lock())
+        {
+            ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::GsLock);
+            lock.lock();
+        }
+        return lock;
+    }
 }
 
 GSCpuBackend::GSCpuBackend()
@@ -708,6 +722,7 @@ void GSCpuBackend::DrainUnlocked() const
     RasterWorkers &workers = *m_workers;
     auto wait = [&workers]()
     {
+        ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::GsDrain);
         std::unique_lock<std::mutex> lock(workers.mutex);
         workers.done.wait(lock, [&workers]() { return workers.remaining == 0u; });
     };
@@ -725,7 +740,7 @@ void GSCpuBackend::Initialize(uint8_t *vram, uint32_t vramSize)
     if (vram && vramSize < GSMem::MEMORY_SIZE)
         throw std::invalid_argument("GS CPU backend requires at least 4 MiB of VRAM");
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     m_vram = vram;
     m_vramSize = vramSize;
@@ -734,7 +749,7 @@ void GSCpuBackend::Initialize(uint8_t *vram, uint32_t vramSize)
 
 void GSCpuBackend::Reset()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     ResetUnlocked();
 }
@@ -757,7 +772,7 @@ void GSCpuBackend::ResetUnlocked()
 
 void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     if (!m_vram || batch.vertexCount == 0u)
         return;
     LogPrimitive(batch);
@@ -766,7 +781,7 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
 
 void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     if (!m_vram || (!isFourBitIndexedPsm(tex0.psm) && !isEightBitIndexedPsm(tex0.psm)))
         return;
 
@@ -852,13 +867,13 @@ void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &t
 
 void GSCpuBackend::Flush()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
 }
 
 void GSCpuBackend::TextureFlush()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     m_texturePageCache.Invalidate();
     if (m_workers)
@@ -868,13 +883,13 @@ void GSCpuBackend::TextureFlush()
 
 void GSCpuBackend::Sync(GSSyncReason)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
 }
 
 uint32_t GSCpuBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     return ReadVramUnlocked(psm, base, bw, x, y);
 }
@@ -896,7 +911,7 @@ uint32_t GSCpuBackend::ReadTextureVramUnlocked(uint32_t psm, uint32_t base, uint
 
 void GSCpuBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     WriteVramUnlocked(psm, base, bw, x, y, value);
 }
@@ -910,7 +925,7 @@ void GSCpuBackend::WriteVramUnlocked(uint32_t psm, uint32_t base, uint32_t bw, u
 
 void GSCpuBackend::SnapshotVram(std::vector<uint8_t> &out) const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     if (!m_vram || m_vramSize == 0u)
     {
@@ -923,7 +938,7 @@ void GSCpuBackend::SnapshotVram(std::vector<uint8_t> &out) const
 
 GSTransferSnapshot GSCpuBackend::GetTransferSnapshot() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     GSTransferSnapshot result = m_transferState;
     result.localToHostPendingBytes = m_localToHostReadPos < m_localToHostBuffer.size()
                                          ? m_localToHostBuffer.size() - m_localToHostReadPos
@@ -1784,7 +1799,7 @@ void GSCpuBackend::DrawLine(const GSPrimitiveBatch &batch)
 
 void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     m_transfer = command;
     m_transferState.x = command.trxpos.dsax;
@@ -1802,7 +1817,7 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 
 void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     if (!data || sizeBytes == 0u || !m_vram || m_transferState.direction != 0u)
         return;
@@ -2020,7 +2035,7 @@ void GSCpuBackend::PerformLocalToHostTransfer()
 
 uint32_t GSCpuBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     if (!dst || maxBytes == 0u || m_localToHostReadPos >= m_localToHostBuffer.size())
         return 0u;
     const size_t count = std::min<size_t>(maxBytes, m_localToHostBuffer.size() - m_localToHostReadPos);
@@ -2032,7 +2047,7 @@ uint32_t GSCpuBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
 
 bool GSCpuBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto lock = lockBackend(m_mutex);
     DrainUnlocked();
     if (!m_vram || context.frame.fbw == 0u)
         return false;

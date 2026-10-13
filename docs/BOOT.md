@@ -152,6 +152,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_TRACE_IOPCALLS`, `BDR_TRACE_IOPHW`, `PS2X_IOP_TRACE_SPU`, `BDR_TRACE_GS` | calls of selected IOP functions, IOP hardware writes, SPU2, GS |
 | `BDR_TRACE_KERNEL=1` | `SetSyscall` (number, handler, recompiled code or not), `SetAlarm`, `CancelAlarm` and alarm expiry |
 | `BDR_TRACE_IPU=1` | IPU commands and DMA starts (§13) |
+| `BDR_EE_CYCLE_SCALE=P` | charges P% of the EE cycles reported by the generated code (default 100). The recompiler charges 32 cycles per backward branch and 8 per call, whatever the work done; this knob tests whether that count slows the game |
 | `BDR_GS_THREADS=N` | GS rasterization threads (default: half the cores, at most 8); `1` draws immediately on the game thread, for comparisons |
 | `BDR_TRACE_SIO2=1` | SIO2 commands (port, bytes sent and received); identical consecutive pad polls are skipped (§14) |
 | `BDR_PAD_SCRIPT=cross@1300-1310,start@2000-2004` | holds controller buttons on port 1 between two VSync ticks (headless runs) |
