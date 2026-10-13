@@ -13,7 +13,9 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cloud_bundle import ENTRY_OVERHEAD, RESERVE_BYTES, BundleError, build_bundle  # noqa: E402
+from cloud_bundle import (ENTRY_OVERHEAD, RESERVE_BYTES, BundleError, build_bundle, read_sector_log,  # noqa: E402
+                          sector_runs)
+from sparse_iso import build_sparse_image  # noqa: E402
 from test_binary_tools import make_elf, make_iso, record  # noqa: E402
 
 
@@ -89,6 +91,34 @@ class CloudBundleTests(unittest.TestCase):
         result = build_bundle(self.iso, output, needed - 100, self.work, self.lock, boot_files=["ASSET.DAT"])
         self.assertEqual(result["extra_disc_files"], [])
         self.assertEqual(result["disc_files_not_included"], 1)
+
+    def test_sector_runs_keep_read_order_and_each_sector_once(self):
+        self.assertEqual(sector_runs([(10, 4), (12, 4), (2, 1), (3, 2), (100, 5)], 102),
+                         [(10, 6), (2, 3), (100, 2)])
+        log = self.root / "run.log"
+        log.write_text("[ps2xIOP] [iop-cd] read #1 lsn=26 sectors=1 dest=0x1000 total=1\n"
+                       "noise\n[ps2xIOP] [iop-cd] read #2 lsn=0 sectors=0 dest=0x0 total=1\n", encoding="utf-8")
+        self.assertEqual(read_sector_log([log]), [(26, 1)])
+
+    def test_traced_sectors_rebuild_a_sparse_image(self):
+        output = self.root / "sectors.zip"
+        original = self.iso.read_bytes()
+        # Sector 26 holds IOPRP300.IMG, already bundled as a file; 27 is free space.
+        result = build_bundle(self.iso, output, 29 * 1024 * 1024, self.work, self.lock,
+                              boot_files=[], sector_reads=[(27, 1), (26, 2)])
+        # The synthetic image is small enough for the system area run (0-31) to cover it.
+        self.assertTrue(any(lsn <= 27 < lsn + count for lsn, count in result["sector_runs"]))
+        self.assertEqual(result["sectors_not_included"], 0)
+        unpacked = self.root / "unpacked"
+        with zipfile.ZipFile(output) as archive:
+            archive.extractall(unpacked)
+        image = self.root / "sparse.iso"
+        rebuilt = build_sparse_image(unpacked, image)
+        data = image.read_bytes()
+        self.assertEqual(len(data), len(original))
+        self.assertIn("ASSET.DAT", rebuilt["files"])
+        for lsn in [0, 16, 17, 25, 26, 27]:  # system area, descriptors, IOP/ directory, traced sectors
+            self.assertEqual(data[lsn * 2048:(lsn + 1) * 2048], original[lsn * 2048:(lsn + 1) * 2048], lsn)
 
     def test_rejects_another_disc_and_reports_missing_map(self):
         with self.assertRaises(BundleError):

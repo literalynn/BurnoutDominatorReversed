@@ -9,11 +9,18 @@ unpacks into a work directory (BDR_WORK_DIR):
   local/analysis/ghidra/functions.ee.csv                            Ghidra map from the work directory
   local/logs/run*.log, recompile.log, augment-function-map.log      previous runs, if present
   generated/generation.json                                         previous generation record
+  local/disc-sectors/<lsn>.bin                                      with --sectors-log: the disc sectors a traced run
+                                                                    read (BDR_TRACE_CDVD=1), in read order, plus the
+                                                                    ISO9660 descriptors and directories
   local/disc/<boot files>                                           files read during the LOADING screen (BOOT_FILES)
   local/disc/<other files>                                          smallest disc files first, while they fit
   bundle.json                                                       manifest
 
-Usage: python tools/cloud_bundle.py --iso <original ISO> [--output <zip>] [--limit-mb 29]
+Usage: python tools/cloud_bundle.py --iso <original ISO> [--output <zip>] [--limit-mb 29] [--sectors-log <run log>]
+
+tools/sparse_iso.py rebuilds, in the cloud, a sparse image of the original
+size from those sectors and the bundled files, to run the game up to the
+first sector that was not recorded.
 """
 from __future__ import annotations
 
@@ -22,6 +29,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -50,6 +58,55 @@ class BundleError(RuntimeError):
     pass
 
 
+SECTOR_SIZE = 2048
+SECTOR_READ = re.compile(r"\[iop-cd\] read #\d+ lsn=(\d+) sectors=(\d+)")
+
+
+def read_sector_log(paths: list[Path]) -> list[tuple[int, int]]:
+    """(lsn, count) of every sceCdRead traced with BDR_TRACE_CDVD=1, in read order."""
+    reads = []
+    for path in paths:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = SECTOR_READ.search(line)
+            if match and int(match.group(2)) > 0:
+                reads.append((int(match.group(1)), int(match.group(2))))
+    return reads
+
+
+def sector_runs(reads: list[tuple[int, int]], volume_sectors: int) -> list[tuple[int, int]]:
+    """Contiguous runs of the sectors read, first-read first, each sector once."""
+    seen: set[int] = set()
+    runs: list[tuple[int, int]] = []
+    for lsn, count in reads:
+        start = None
+        for sector in range(lsn, min(lsn + count, volume_sectors)):
+            if sector in seen:
+                if start is not None:
+                    runs.append((start, sector - start))
+                    start = None
+                continue
+            seen.add(sector)
+            if start is None:
+                start = sector
+        if start is not None:
+            runs.append((start, min(lsn + count, volume_sectors) - start))
+    merged: list[tuple[int, int]] = []
+    for lsn, count in runs:
+        if merged and merged[-1][0] + merged[-1][1] == lsn:
+            merged[-1] = (merged[-1][0], merged[-1][1] + count)
+        else:
+            merged.append((lsn, count))
+    return merged
+
+
+def metadata_runs(disc: ISO9660) -> list[tuple[int, int]]:
+    """System area, volume descriptors and every directory extent."""
+    runs = [(0, 32)]
+    for entry in [disc.root] + [e for e in disc.entries if e.is_directory]:
+        runs.append((entry.lba, max(1, -(-entry.size // SECTOR_SIZE))))
+    return runs
+
+
 def default_output() -> Path:
     desktop = Path.home() / "Desktop"
     return (desktop if desktop.is_dir() else Path.cwd()) / "bdr-cloud.zip"
@@ -64,7 +121,7 @@ def git_commit() -> str | None:
 
 
 def build_bundle(iso: Path, output: Path, limit_bytes: int, work: Path, lock: dict,
-                 boot_files: list[str] = BOOT_FILES) -> dict:
+                 boot_files: list[str] = BOOT_FILES, sector_reads: list[tuple[int, int]] | None = None) -> dict:
     if not iso.is_file():
         raise BundleError(f"ISO not found: {iso}")
     warnings: list[str] = []
@@ -111,6 +168,18 @@ def build_bundle(iso: Path, output: Path, limit_bytes: int, work: Path, lock: di
                     archive.close()
                     output.unlink()
                     raise BundleError(f"required files alone exceed {limit_bytes // (1024 * 1024)} MB")
+                packed_runs, sectors_left = [], 0
+                if sector_reads:
+                    volume_sectors = disc.size // SECTOR_SIZE
+                    runs = sector_runs(metadata_runs(disc) + list(sector_reads), volume_sectors)
+                    for index, (lsn, count) in enumerate(runs):
+                        # Worst case: the sectors do not compress. Later reads matter less: stop here.
+                        if archive.fp.tell() + count * SECTOR_SIZE + ENTRY_OVERHEAD + RESERVE_BYTES > limit_bytes:
+                            sectors_left = sum(c for _, c in runs[index:])
+                            break
+                        disc.file.seek(lsn * SECTOR_SIZE)
+                        archive.writestr(f"local/disc-sectors/{lsn}.bin", disc.file.read(count * SECTOR_SIZE))
+                        packed_runs.append([lsn, count])
                 first = {name.casefold(): rank for rank, name in enumerate(boot_files)}
                 candidates = sorted((e for e in disc.entries
                                      if not e.is_directory and e.path.casefold() not in included),
@@ -132,6 +201,7 @@ def build_bundle(iso: Path, output: Path, limit_bytes: int, work: Path, lock: di
                     "files": [p.relative_to(stage).as_posix() for p in staged],
                     "required_zip_bytes": required_bytes,
                     "extra_disc_files": extra, "disc_files_not_included": skipped,
+                    "sector_runs": packed_runs, "sectors_not_included": sectors_left,
                     "warnings": warnings,
                 }
                 archive.writestr("bundle.json", json.dumps(manifest, indent=2) + "\n")
@@ -148,6 +218,8 @@ def main() -> int:
     parser.add_argument("--iso", type=Path, help="Original ISO (defaults to the one recorded by extract)")
     parser.add_argument("--output", type=Path, default=default_output())
     parser.add_argument("--limit-mb", type=float, default=29.0)
+    parser.add_argument("--sectors-log", type=Path, action="append", default=[],
+                        help="Run log written with BDR_TRACE_CDVD=1: pack the disc sectors it read")
     args = parser.parse_args()
     iso = args.iso
     paths = project.LOCAL / "paths.json"
@@ -157,8 +229,12 @@ def main() -> int:
         print("ERROR: pass --iso <path to the original ISO>", file=sys.stderr)
         return 1
     try:
+        reads = read_sector_log(args.sectors_log)
+        if args.sectors_log and not reads:
+            print("ERROR: no '[iop-cd] read' line in the log: run the game with BDR_TRACE_CDVD=1", file=sys.stderr)
+            return 1
         result = build_bundle(iso.resolve(), args.output.resolve(), int(args.limit_mb * 1024 * 1024),
-                              project.WORK, project.LOCK)
+                              project.WORK, project.LOCK, sector_reads=reads)
     except (BundleError, OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -166,6 +242,10 @@ def main() -> int:
         print("WARNING:", warning)
     print(f"{len(result['files'])} required files, {len(result['extra_disc_files'])} extra disc files "
           f"({result['disc_files_not_included']} too large to fit)")
+    if args.sectors_log:
+        packed = sum(count for _, count in result["sector_runs"])
+        print(f"{packed} disc sectors ({packed * SECTOR_SIZE / (1024 * 1024):.1f} MB) packed, "
+              f"{result['sectors_not_included']} left out")
     print(f"Zip: {args.output.resolve()} ({result['zip_size'] / (1024 * 1024):.1f} MB)")
     return 0
 
