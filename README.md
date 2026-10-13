@@ -8,7 +8,9 @@ A static recompilation of **Burnout Dominator** for PlayStation 2 (European rele
 
 ## Status
 
-**Work in progress — not playable yet.** The game builds and boots: it goes through the LOADING screen and the intro video, then stops at the memory card check on the PROFILE screen. Menus, races, controllers and saves do not work yet.
+**Work in progress — not playable yet.** The game builds and boots: it goes through the LOADING screen, the intro video and the memory card check, up to the 50 Hz / 60 Hz choice. A DualShock 2 is now emulated on controller port 1 (first PC gamepad, or the keyboard); menus, races and saves are not verified yet.
+
+Keyboard, when no gamepad is connected: arrows or WASD = D-pad, X or Space = Cross, C or Esc = Circle, Z = Square, V = Triangle, Q/E = L1/R1, left/right Shift = L2/R2, Enter = Start, Tab = Select.
 
 A successful build is not proof of a faithful port. Verified results, run history and current blockers are in [docs/STATUS.md](docs/STATUS.md) and [docs/BOOT.md](docs/BOOT.md).
 

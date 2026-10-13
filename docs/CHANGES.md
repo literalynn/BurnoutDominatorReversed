@@ -2,6 +2,14 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## DualShock 2 on SIO2 (October 13, 2026)
+
+- `ps2xIOP/src/emulator/core/iop_sio2_pad.h/.cpp` (new): DualShock 2 controller protocol. Digital, analog (0x73) and pressure (0x79) modes, configuration mode (0x43) with status and constants (0x45, 0x46, 0x47, 0x4C), mode switch and lock (0x44), motor mapping (0x4D), response mask (0x4F), poll (0x42) with buttons, sticks, the 12 pressure bytes and the two motor bytes.
+- `iop_memory.h/.cpp`: the SIO2 PIO transport answers pad packets (first byte 0x01) on ports the controller source reports, and keeps 0xFF for any other device. RECV1 flags only the ports without a device (0x1100 with the pad alone on port 1). Optional trace hook per command.
+- `ps2xIOP/include/ps2x/iop/iop_host.h`: `ControllerPadState` and `IopHost::readControllerPad` (default: no controller, the former behaviour). `iop_emulator.cpp` connects it to the memory and logs commands with `BDR_TRACE_SIO2=1`.
+- `ps2xRuntime/src/lib/ps2_iop_host.h/.cpp`: port 1 reads the runtime's pad backend (first gamepad, otherwise the keyboard). `BDR_PAD_SCRIPT="button@first-end,..."` holds buttons between VSync ticks for headless runs.
+- `ps2xIOP/tests/iop_import_tests.cpp`: configuration sequence, pressure poll, motors and RECV1 with port 2 empty.
+
 ## IPU and video (October 7, 2026)
 
 - `ps2xRuntime/include/runtime/ps2_ipu.h`, `src/lib/ps2_ipu.cpp`: IPU hardware model started by Claude, integrated into the runtime. MPEG bit reading, VLC tables, BDEC (dequantisation and IDCT to RAW16), SETIQ/SETVQ/SETTH, CSC and PACK. A command waits for missing data and then resumes, without faking success. IDEC is still not implemented and reports an error diagnostic.

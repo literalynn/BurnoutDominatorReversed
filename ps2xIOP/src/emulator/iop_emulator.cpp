@@ -18,6 +18,7 @@
 #include "iop_emulator_const.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <map>
@@ -118,6 +119,16 @@ namespace ps2x::iop::detail
             reset();
             // The SPU2 asserts IOP interrupt 9 when a voice or a transfer reaches its IRQ address.
             memory.setSio2IrqCallback([this] { pendingDmaInterrupts[17] = totalCycles + 64u; });
+            memory.setControllerSource([this](uint32_t port, ControllerPadState &state)
+                                       { return host.readControllerPad(port, state); });
+            static const bool traceSio2 = []
+            {
+                const char *env = std::getenv("BDR_TRACE_SIO2");
+                return env && env[0] != '\0' && env[0] != '0';
+            }();
+            if (traceSio2)
+                memory.setSio2TraceHook([this](uint32_t port, const std::vector<uint8_t> &sent, const std::vector<uint8_t> &received)
+                                        { traceSio2Command(port, sent, received); });
             memory.spu().raiseIrq = [this]
             {
                 pendingDmaInterrupts[kSpu2Irq] = totalCycles;
@@ -228,6 +239,26 @@ namespace ps2x::iop::detail
             }
             out << "[iop-hw] cyc=" << totalCycles << " pc=" << where << " 0x" << std::hex << phys
                 << " = 0x" << value;
+            log(LogLevel::Info, out.str());
+        }
+
+        // BDR_TRACE_SIO2=1: SIO2 commands; repeated identical pad polls are skipped.
+        void traceSio2Command(uint32_t port, const std::vector<uint8_t> &sent, const std::vector<uint8_t> &received)
+        {
+            const bool poll = sent.size() > 1u && sent[0] == 0x01u && sent[1] == 0x42u;
+            std::vector<uint8_t> &last = lastSio2Poll[port & 1u];
+            if ((poll && received == last) || traceSio2Lines >= 4000u)
+                return;
+            if (poll)
+                last = received;
+            ++traceSio2Lines;
+            std::ostringstream out;
+            out << "[sio2] port=" << port << " sent=" << std::hex;
+            for (const uint8_t byte : sent)
+                out << ' ' << (byte < 0x10u ? "0" : "") << static_cast<uint32_t>(byte);
+            out << " got=";
+            for (const uint8_t byte : received)
+                out << ' ' << (byte < 0x10u ? "0" : "") << static_cast<uint32_t>(byte);
             log(LogLevel::Info, out.str());
         }
 
@@ -991,6 +1022,8 @@ namespace ps2x::iop::detail
         static constexpr int kSpu0DmaIrq = 0x24;
         static constexpr int kSpu1DmaIrq = 0x28;
         uint32_t traceHardwareWrites = 0u;
+        uint32_t traceSio2Lines = 0u;
+        std::array<std::vector<uint8_t>, 2> lastSio2Poll{};
         // BDR_TRACE_IOPCALLS=0xADDR,...: log each time the IOP executes one of these absolute
         // addresses (function entry points), with a0-a3, the first stack argument and ra.
         std::set<uint32_t> tracedPcs = []

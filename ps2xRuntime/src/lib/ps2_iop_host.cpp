@@ -3,16 +3,20 @@
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
 #include "Kernel/Stubs/SIF.h"
+#include "runtime/ee_scheduler.h"
 #include "runtime/ps2_memory.h"
 #include "Kernel/Stubs/MemoryCard.h"
 #include "Kernel/Syscalls/Common.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <utility>
+#include <vector>
 
 #if !defined(_WIN32)
 #include <sys/types.h>
@@ -403,6 +407,89 @@ void PS2IopHostAdapter::closeHostFile(uint64_t handle)
     {
         std::fclose(stream);
     }
+}
+
+namespace
+{
+    // BDR_PAD_SCRIPT="cross@1300-1310,start@2000-2004": hold a button on
+    // controller port 0 from the first to before the last VSync tick, so a
+    // headless run can get past menus. Names follow the DualShock 2 labels.
+    struct ScriptedPress
+    {
+        uint16_t mask = 0u;
+        uint64_t begin = 0u;
+        uint64_t end = 0u;
+    };
+
+    std::vector<ScriptedPress> parsePadScript(const char *text)
+    {
+        static constexpr std::pair<const char *, uint16_t> kButtons[] = {
+            {"select", 0x0001u}, {"l3", 0x0002u}, {"r3", 0x0004u}, {"start", 0x0008u},
+            {"up", 0x0010u}, {"right", 0x0020u}, {"down", 0x0040u}, {"left", 0x0080u},
+            {"l2", 0x0100u}, {"r2", 0x0200u}, {"l1", 0x0400u}, {"r1", 0x0800u},
+            {"triangle", 0x1000u}, {"circle", 0x2000u}, {"cross", 0x4000u}, {"square", 0x8000u},
+        };
+        std::vector<ScriptedPress> presses;
+        std::stringstream entries(text ? text : "");
+        std::string entry;
+        while (std::getline(entries, entry, ','))
+        {
+            const size_t at = entry.find('@');
+            const size_t dash = entry.find('-', at);
+            if (at == std::string::npos || dash == std::string::npos)
+            {
+                std::cerr << "[pad] ignored BDR_PAD_SCRIPT entry '" << entry << "'" << std::endl;
+                continue;
+            }
+            const std::string name = entry.substr(0, at);
+            ScriptedPress press;
+            for (const auto &[label, mask] : kButtons)
+                if (name == label)
+                    press.mask = mask;
+            press.begin = std::strtoull(entry.c_str() + at + 1u, nullptr, 10);
+            press.end = std::strtoull(entry.c_str() + dash + 1u, nullptr, 10);
+            if (press.mask == 0u || press.end <= press.begin)
+            {
+                std::cerr << "[pad] ignored BDR_PAD_SCRIPT entry '" << entry << "'" << std::endl;
+                continue;
+            }
+            presses.push_back(press);
+        }
+        return presses;
+    }
+}
+
+bool PS2IopHostAdapter::readControllerPad(uint32_t port, ps2x::iop::ControllerPadState &state)
+{
+    // One DualShock 2 in port 0, fed by the host gamepad or keyboard.
+    if (port != 0u)
+    {
+        return false;
+    }
+    uint8_t data[32]{};
+    if (!m_runtime.padBackend().readState(0, 0, data, sizeof(data)))
+    {
+        return false;
+    }
+    state.buttons = static_cast<uint16_t>(data[2] | (data[3] << 8u));
+    state.rightX = data[4];
+    state.rightY = data[5];
+    state.leftX = data[6];
+    state.leftY = data[7];
+
+    static const std::vector<ScriptedPress> script = parsePadScript(std::getenv("BDR_PAD_SCRIPT"));
+    if (!script.empty())
+    {
+        const uint64_t tick = m_runtime.eeScheduler().currentVSyncTick();
+        for (const ScriptedPress &press : script)
+        {
+            if (tick >= press.begin && tick < press.end)
+            {
+                state.buttons = static_cast<uint16_t>(state.buttons & ~press.mask);
+            }
+        }
+    }
+    return true;
 }
 
 int32_t PS2IopHostAdapter::memoryCard(const ps2x::iop::MemoryCardRequest &request)

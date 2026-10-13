@@ -1,7 +1,9 @@
 #pragma once
 
+#include "iop_sio2_pad.h"
 #include "iop_spu2.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -81,6 +83,17 @@ namespace ps2x::iop::detail
         [[nodiscard]] std::optional<DmaStart> takeDmaStart() noexcept;
         [[nodiscard]] Spu2 &spu() const noexcept { return m_spu; }
         void setSio2IrqCallback(std::function<void()> callback) { m_sio2Irq = std::move(callback); }
+        // Reads the controller on a SIO2 port; false leaves the port empty.
+        void setControllerSource(std::function<bool(uint32_t, ControllerPadState &)> source)
+        {
+            m_controllerSource = std::move(source);
+        }
+        // Called after each SIO2 command with its port, sent and received bytes.
+        void setSio2TraceHook(std::function<void(uint32_t, const std::vector<uint8_t> &, const std::vector<uint8_t> &)> hook)
+        {
+            m_sio2Trace = std::move(hook);
+        }
+        [[nodiscard]] const DualShock2 &controller(uint32_t port) const noexcept { return m_pads[port & 1u]; }
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
 
         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
@@ -103,12 +116,20 @@ namespace ps2x::iop::detail
         std::function<void(uint32_t, uint32_t)> m_hardwareWriteHook;
         // Reads of the SPU2 data port advance its transfer address, hence mutable.
         mutable Spu2 m_spu;
-        // SIO2 currently has no attached pad/card. Each serial byte receives 0xFF,
-        // while command status and completion IRQ describe the absent device.
+        // SIO2 PIO transport. A DualShock 2 answers pad packets (first byte 0x01)
+        // on ports the controller source reports; any other device (memory
+        // card, multitap) is absent: its bytes read 0xFF and RECV1 flags the port.
         mutable std::deque<uint8_t> m_sio2Output;
         uint32_t m_sio2CommandIndex = 0u;
         uint32_t m_sio2InputCount = 0u;
         uint32_t m_sio2Ports = 0u;
+        uint32_t m_sio2Missing = 0u;
+        bool m_sio2PadPacket = false;
+        std::array<DualShock2, 2> m_pads{};
+        std::function<bool(uint32_t, ControllerPadState &)> m_controllerSource;
+        std::function<void(uint32_t, const std::vector<uint8_t> &, const std::vector<uint8_t> &)> m_sio2Trace;
+        std::vector<uint8_t> m_sio2Sent;
+        std::vector<uint8_t> m_sio2Received;
         std::function<void()> m_sio2Irq;
     };
 }

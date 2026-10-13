@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -126,6 +127,84 @@ namespace
         for (int i = 0; i < 3; ++i)
             memory.write8(0xBF808260u, 0u);
         return expect(memory.read32(0xBF80826Cu) == 0x1D100u, "a new queue forgets the previous port mask");
+    }
+
+    std::vector<uint8_t> sio2Packet(IopMemory &memory, uint32_t port, std::vector<uint8_t> sent)
+    {
+        const auto length = static_cast<uint32_t>(sent.size());
+        memory.write32(0xBF808200u, (length << 18) | (length << 8) | port);
+        for (const uint8_t byte : sent)
+            memory.write8(0xBF808260u, byte);
+        std::vector<uint8_t> received;
+        for (uint32_t i = 0; i < length; ++i)
+            received.push_back(memory.read8(0xBF808264u));
+        return received;
+    }
+
+    bool testSio2DualShock2()
+    {
+        IopMemory memory;
+        ControllerPadState pad{};
+        pad.buttons = 0xBFFFu; // CROSS held
+        pad.leftX = 0x10u;
+        memory.setControllerSource([&](uint32_t port, ControllerPadState &state)
+                                   {
+                                       state = pad;
+                                       return port == 0u;
+                                   });
+        using Bytes = std::vector<uint8_t>;
+        if (!expect(sio2Packet(memory, 0u, {0x01, 0x42, 0, 0, 0}) == Bytes{0xFF, 0x41, 0x5A, 0xFF, 0xBF},
+                    "a DualShock 2 starts in digital mode") ||
+            !expect(memory.read32(0xBF80826Cu) == 0x1100u, "RECV1 reports the controller on port 0"))
+            return false;
+        // Outside configuration, 0x43 also reports the buttons.
+        if (!expect(sio2Packet(memory, 0u, {0x01, 0x43, 0, 1, 0}) == Bytes{0xFF, 0x41, 0x5A, 0xFF, 0xBF},
+                    "entering configuration returns poll data") ||
+            !expect(memory.controller(0u).inConfig(), "0x43 01 enters configuration"))
+            return false;
+        if (!expect(sio2Packet(memory, 0u, {0x01, 0x45, 0, 0, 0, 0, 0, 0, 0}) ==
+                        Bytes{0xFF, 0xF3, 0x5A, 0x03, 0x02, 0x00, 0x02, 0x01, 0x00},
+                    "status reports a DualShock 2 with its LED off"))
+            return false;
+        sio2Packet(memory, 0u, {0x01, 0x44, 0, 1, 3, 0, 0, 0, 0});
+        if (!expect(sio2Packet(memory, 0u, {0x01, 0x4F, 0, 0xFF, 0xFF, 0x03, 0, 0, 0}) ==
+                        Bytes{0xFF, 0xF3, 0x5A, 0, 0, 0, 0, 0, 0x5A},
+                    "response mask command") ||
+            !expect(sio2Packet(memory, 0u, {0x01, 0x46, 0, 1, 0, 0, 0, 0, 0}) ==
+                        Bytes{0xFF, 0xF3, 0x5A, 0, 0, 0x01, 0x01, 0x01, 0x14},
+                    "constant 0x46, second stage"))
+            return false;
+        sio2Packet(memory, 0u, {0x01, 0x43, 0, 0, 0, 0, 0, 0, 0});
+        if (!expect(!memory.controller(0u).inConfig() && memory.controller(0u).mode() == DualShock2::PressureMode,
+                    "the full mask selects pressure mode"))
+            return false;
+        Bytes poll(21, 0u);
+        poll[0] = 0x01;
+        poll[1] = 0x42;
+        poll[3] = 0x40;
+        poll[4] = 0x01;
+        Bytes expected(21, 0u);
+        expected[0] = 0xFF;
+        expected[1] = 0x79;
+        expected[2] = 0x5A;
+        expected[3] = 0xFF;
+        expected[4] = 0xBF;
+        expected[5] = expected[6] = expected[8] = 0x80;
+        expected[7] = 0x10;
+        expected[15] = 0xFF; // CROSS pressure
+        if (!expect(sio2Packet(memory, 0u, poll) == expected, "pressure poll returns sticks and pressures") ||
+            !expect(memory.controller(0u).motors()[0] == 0x40u && memory.controller(0u).motors()[1] == 0x01u,
+                    "poll bytes 3 and 4 drive the motors"))
+            return false;
+        // Port 1 stays empty: it answers 0xFF and RECV1 flags it.
+        memory.write32(0xBF808200u, (3u << 18) | (3u << 8) | 0u);
+        memory.write32(0xBF808204u, (3u << 18) | (3u << 8) | 1u);
+        for (uint8_t byte : {0x01u, 0x42u, 0u, 0x01u, 0x42u, 0u})
+            memory.write8(0xBF808260u, byte);
+        const Bytes both{memory.read8(0xBF808264u), memory.read8(0xBF808264u), memory.read8(0xBF808264u),
+                         memory.read8(0xBF808264u), memory.read8(0xBF808264u), memory.read8(0xBF808264u)};
+        return expect(both == Bytes{0xFF, 0x79, 0x5A, 0xFF, 0xFF, 0xFF}, "port 1 has no controller") &&
+               expect(memory.read32(0xBF80826Cu) == 0x2D200u, "RECV1 flags only port 1 as empty");
     }
 
 
@@ -428,7 +507,7 @@ namespace
 
 int main()
 {
-    if (!testSio2DisconnectedPorts() || !testLoadcoreRebootLibraryMode() || !testCdvdSpecialControl() || !testCdvdSearchFile() ||
+    if (!testSio2DisconnectedPorts() || !testSio2DualShock2() || !testLoadcoreRebootLibraryMode() || !testCdvdSpecialControl() || !testCdvdSearchFile() ||
         !testCdvdReadClock() || !testThreadSystemTimeLow() || !testTimrmanPeriodicCallback())
         return 1;
     std::cout << "ps2xIOP import tests passed\n";

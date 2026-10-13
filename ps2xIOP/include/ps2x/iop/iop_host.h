@@ -53,6 +53,19 @@ namespace ps2x::iop
         std::array<uint32_t, 5> arguments{};
     };
 
+    // A controller as a PS2 pad reports it. Buttons are active-low, in the
+    // order of the two digital bytes of a poll (SELECT = bit 0, L3, R3,
+    // START, UP, RIGHT, DOWN, LEFT, L2, R2, L1, R1, TRIANGLE, CIRCLE,
+    // CROSS, SQUARE = bit 15); sticks range 0x00-0xFF with 0x80 at rest.
+    struct ControllerPadState
+    {
+        uint16_t buttons = 0xFFFFu;
+        uint8_t rightX = 0x80u;
+        uint8_t rightY = 0x80u;
+        uint8_t leftX = 0x80u;
+        uint8_t leftY = 0x80u;
+    };
+
     class IopHost
     {
     public:
@@ -108,6 +121,15 @@ namespace ps2x::iop
         virtual void closeHostFile(uint64_t handle) = 0;
 
         virtual int32_t memoryCard(const MemoryCardRequest &request) = 0;
+
+        // Controller plugged into SIO2 port 0 or 1. Returning false leaves the
+        // port empty, which is what hosts without input support report.
+        virtual bool readControllerPad(uint32_t port, ControllerPadState &state)
+        {
+            (void)port;
+            (void)state;
+            return false;
+        }
 
         virtual bool hasGuestFunction(uint32_t address) const = 0;
         virtual bool invokeGuestFunction(uint64_t callToken,

@@ -108,7 +108,7 @@ During runs 1 and 2, the VBlank counter advances by 60 per second: the game has 
 4. Reading `TRACKS/EATRAX0.RWS` / `EATRAX1.RWS`: **solved** (§9).
 5. EE alarms replaced by libkernel's kernel patch: **solved** (§11).
 6. Intro video (IPU): **solved** in runs 12 to 14 (§12–13).
-7. Controllers and memory card: no SIO2 device model (§4, §14), **open**; the memory card check on the PROFILE screen is the current blocker.
+7. Memory card: **solved** by the libmc binding (§14); the owner's run 20 reaches the 50 Hz / 60 Hz choice. Controllers: DualShock 2 on SIO2 port 1 (§14), to confirm on the owner's machine by pressing CONTINUE.
 
 ## 8. SPU2 and RenderWare audio (RWA)
 
@@ -152,6 +152,8 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_TRACE_IOPCALLS`, `BDR_TRACE_IOPHW`, `PS2X_IOP_TRACE_SPU`, `BDR_TRACE_GS` | calls of selected IOP functions, IOP hardware writes, SPU2, GS |
 | `BDR_TRACE_KERNEL=1` | `SetSyscall` (number, handler, recompiled code or not), `SetAlarm`, `CancelAlarm` and alarm expiry |
 | `BDR_TRACE_IPU=1` | IPU commands and DMA starts (§13) |
+| `BDR_TRACE_SIO2=1` | SIO2 commands (port, bytes sent and received); identical consecutive pad polls are skipped (§14) |
+| `BDR_PAD_SCRIPT=cross@1300-1310,start@2000-2004` | holds controller buttons on port 1 between two VSync ticks (headless runs) |
 | `BDR_PROFILE=1` | sampler of the guest thread (EE, IOP and GS run on it); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
 
 With these tools, the profile showed the game ran at 7% of real time because the IOP and the timers were advanced every 8 EE cycles; they now are in batches of 2048 cycles (CHANGES.md).
@@ -207,4 +209,8 @@ Run 19 (owner, `run19-sectors.log`, 40 s, `BDR_TRACE_CDVD=1`): same wait as run 
 
 All 16 libmc 3020 entry points are now bound to the runtime's memory card (SDK_FUNCTIONS.md), stored in host files under `--save`. Cloud replay with these bindings: `sceMcGetInfo` (port 0: PS2 card, 8,192 free clusters, formatted), `sceMcChdir("..")`, `sceMcGetDir("*")` complete; the PROFILE screen ("Checking memory card (PS2) in MEMORY CARD slot 1") is followed by the next front-end screen. What follows reads sectors that were not recorded (the `TVID/ABG.M2V` background video), so it is not evidence; it has to be confirmed on the machine with the ISO.
 
-Remaining limits: SIO2 DMA and dmacman, persistent memory card, DualShock 2 protocol fed by PC input, menu and races. The current PIO transport only represents disconnected ports; no game result is forced.
+Run 20 (owner, `run20-sectors.log`, 40 s, code 124, commit 64e1009): 45/45 bindings, `sceMcChdir`/`sceMcGetDir` complete, no runtime error; the screen shows the 50 Hz / 60 Hz choice with CONTINUE, which needs a controller. The screenshot shows rendering defects on that screen (yellow horizontal bands, white discs), still to analyse.
+
+DualShock 2 on SIO2 (`ps2xIOP/src/emulator/core/iop_sio2_pad.cpp`): pad packets (first byte 0x01) on port 1 (SIO2 port 0) are answered by a DualShock 2 model following the controller protocol (commands 0x40–0x4F; reference: [PCSX2's PadDualshock2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SIO/Pad/PadDualshock2.cpp)); RECV1 reports port 1 present and port 2 empty. The input comes from the runtime's pad backend (first gamepad, otherwise the keyboard) through `IopHost::readControllerPad`. Cloud replay of run 20 with `BDR_TRACE_SIO2=1`: DS2O polls in digital mode, enters configuration (0x43), reads 0x45/0x46/0x47/0x4C, sets analog and locks it (0x44 01 03), maps the motors (0x4D 00 01), asks for every pressure byte (0x4F FF FF 03), probes 0x40, leaves configuration, then polls 21 bytes per frame in mode 0x79. SIO2MAN sends these packets by PIO; DMA is unused here. The replay then stops on the LOADING screen with the RWA lag already seen in run 19 (unrecorded music sectors), so the 50/60 Hz screen and CONTINUE must be checked on the owner's machine. `BDR_PAD_SCRIPT="cross@1300-1310"` holds a button between two VSync ticks for headless runs.
+
+Remaining limits: SIO2 DMA and dmacman, memory card on SIO2 (bound at libmc level instead), vibration output, menu and races. No game result is forced.

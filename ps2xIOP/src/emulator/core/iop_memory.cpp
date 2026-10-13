@@ -39,7 +39,12 @@ namespace ps2x::iop::detail
         m_dmaStart.reset();
         m_spu.reset();
         m_sio2Output.clear();
-        m_sio2CommandIndex = m_sio2InputCount = m_sio2Ports = 0u;
+        m_sio2CommandIndex = m_sio2InputCount = m_sio2Ports = m_sio2Missing = 0u;
+        m_sio2PadPacket = false;
+        m_sio2Sent.clear();
+        m_sio2Received.clear();
+        for (DualShock2 &pad : m_pads)
+            pad.reset();
         m_hardware[0x1F80826Cu] = 0x1D100u; // RECV1: disconnected
         m_hardware[0x1F808270u] = 0xFu;     // RECV2: idle ports
     }
@@ -305,8 +310,11 @@ namespace ps2x::iop::detail
 
         if (address == 0x1F808200u) // SEND3[0] begins a new serial command queue
         {
-            m_sio2CommandIndex = m_sio2InputCount = m_sio2Ports = 0u;
+            m_sio2CommandIndex = m_sio2InputCount = m_sio2Ports = m_sio2Missing = 0u;
+            m_sio2PadPacket = false;
             m_sio2Output.clear();
+            m_sio2Sent.clear();
+            m_sio2Received.clear();
             m_hardware[0x1F80826Cu] = 0u;
         }
         if (address == 0x1F808260u) // DATA_IN
@@ -317,13 +325,43 @@ namespace ps2x::iop::detail
                 const uint32_t length = (packet >> 8u) & 0x3FFu;
                 if (length != 0u)
                 {
+                    const uint32_t port = packet & 1u;
+                    const auto sent = static_cast<uint8_t>(value);
                     // An undriven serial line is high: no ACK, no device bytes.
-                    m_sio2Output.push_back(0xFFu);
+                    // The address byte itself is never answered by the device.
+                    uint8_t reply = 0xFFu;
+                    if (m_sio2InputCount == 0u)
+                    {
+                        ControllerPadState input{};
+                        m_sio2PadPacket = sent == 0x01u && m_controllerSource && m_controllerSource(port, input);
+                        if (m_sio2PadPacket)
+                            m_pads[port].beginPacket(input);
+                    }
+                    else if (m_sio2PadPacket)
+                    {
+                        reply = m_pads[port].exchange(sent);
+                    }
+                    m_sio2Output.push_back(reply);
+                    if (m_sio2Trace)
+                    {
+                        m_sio2Sent.push_back(sent);
+                        m_sio2Received.push_back(reply);
+                    }
                     if (++m_sio2InputCount == length)
                     {
-                        m_sio2Ports |= 1u << (packet & 1u);
+                        m_sio2Ports |= 1u << port;
+                        if (!m_sio2PadPacket)
+                            m_sio2Missing |= 1u << port;
+                        // RECV1: ports used by the queue, 0xD000 plus a bit per port without a device.
                         const uint32_t openPorts = m_sio2Ports == 3u ? 0x200u : 0x100u;
-                        m_hardware[0x1F80826Cu] = (m_sio2Ports << 16u) | 0xD000u | openPorts;
+                        const uint32_t devices = m_sio2Missing != 0u ? 0xD000u : 0x1000u;
+                        m_hardware[0x1F80826Cu] = (m_sio2Missing << 16u) | devices | openPorts;
+                        if (m_sio2Trace)
+                        {
+                            m_sio2Trace(port, m_sio2Sent, m_sio2Received);
+                            m_sio2Sent.clear();
+                            m_sio2Received.clear();
+                        }
                         m_sio2InputCount = 0u;
                         ++m_sio2CommandIndex;
                     }
