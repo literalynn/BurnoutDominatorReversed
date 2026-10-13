@@ -203,4 +203,8 @@ $env:BDR_STATUS_WATCH = '0x1F776C0+4,0x1F76600+8,0x3E36D0+3,0x1F76128+3'
 python tools/project.py run --headless --seconds 35 --status-ms 5000 --log run19-libmc.log --tail 120
 ```
 
+Run 19 (owner, `run19-sectors.log`, 40 s, `BDR_TRACE_CDVD=1`): same wait as run 18. Its 549 disc reads (6,994 sectors) were packed with `cloud_bundle.py --sectors-log` and replayed in the cloud on a sparse image (`tools/sparse_iso.py`). The replay diverges at read 420: the music position comes from a Mersenne Twister with a fixed seed (0x1105, seeded at 0x1321E0) whose number of draws depends on timing, so another song position (unrecorded, read as zeros) is chosen.
+
+All 16 libmc 3020 entry points are now bound to the runtime's memory card (SDK_FUNCTIONS.md), stored in host files under `--save`. Cloud replay with these bindings: `sceMcGetInfo` (port 0: PS2 card, 8,192 free clusters, formatted), `sceMcChdir("..")`, `sceMcGetDir("*")` complete; the PROFILE screen ("Checking memory card (PS2) in MEMORY CARD slot 1") is followed by the next front-end screen. What follows reads sectors that were not recorded (the `TVID/ABG.M2V` background video), so it is not evidence; it has to be confirmed on the machine with the ISO.
+
 Remaining limits: SIO2 DMA and dmacman, persistent memory card, DualShock 2 protocol fed by PC input, menu and races. The current PIO transport only represents disconnected ports; no game result is forced.

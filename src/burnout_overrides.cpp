@@ -77,6 +77,29 @@ constexpr Binding kBindings[] = {
     {0x00377F88, "sceCdDiskReady"},   // old-protocol DiskReady (SID 0x8000059A)
     {0x003783C0, "sceCdGetDiskType"}, // S-cmd 3 core, without the -1 -> 0 mapping
     {0x00377AD8, "sceCdSyncS"},       // polls sceSifCheckStatRpc on the S-cmd client
+
+    // libmc 3020 (marker 0x3E36C0), client of MCSERV (SID 0x80000400) at 0x1F76100.
+    // Every entry point goes to the runtime's memory card, stored in host files
+    // under --save: MCSERV and MCMAN would need a SIO2 memory card device that
+    // the emulated IOP does not have, and sceMcGetInfo never completed (run 18).
+    // Requests are NOWAIT RPCs with the same packet layout as the SDK; results
+    // come back through sceMcSync, like on the console.
+    {0x003B4E28, "sceMcInit"},        // creates the two libmc semaphores, binds SID 0x80000400, rpc 0xFE
+    {0x003B5050, "sceMcEnd"},         // sceMcSync, then deletes both semaphores
+    {0x003B5700, "sceMcSync"},        // (mode, *cmd, *result), current command at 0x3E36D0
+    {0x003B5820, "sceMcGetInfo"},     // rpc 1 (port, slot, *type, *free, *format)
+    {0x003B50C0, "sceMcOpen"},        // rpc 2 (port, slot, name, mode)
+    {0x003B51E8, "sceMcMkdir"},       // sceMcOpen(port, slot, name, 0x40), command 0xB
+    {0x003B5220, "sceMcClose"},       // rpc 3 (fd)
+    {0x003B52E0, "sceMcSeek"},        // rpc 4 (fd, offset, origin)
+    {0x003B5470, "sceMcRead"},        // rpc 5 (fd, buffer, size)
+    {0x003B5588, "sceMcWrite"},       // rpc 6 (fd, buffer, size)
+    {0x003B5EB0, "sceMcFlush"},       // rpc 0xA (fd)
+    {0x003B5B80, "sceMcChdir"},       // rpc 0xC (port, slot, path, current dir)
+    {0x003B59A0, "sceMcGetDir"},      // rpc 0xD (port, slot, name, mode, max entries, table)
+    {0x003B5F70, "sceMcSetFileInfo"}, // rpc 0xE (port, slot, name, info, flags)
+    {0x003B5D90, "sceMcDelete"},      // rpc 0xF (port, slot, name)
+    {0x003B5CC0, "sceMcFormat"},      // rpc 0x10 (port, slot)
 };
 // clang-format on
 

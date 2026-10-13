@@ -43,6 +43,22 @@ Why bind: the runtime does not emulate the SIF hardware. A guest library that wa
 | 0x3AF8B0 | sceSifGetSreg | `sceSifGetSreg` | Reads word `index` of the 0x1F6F300 table. Only caller: the guest sceSifInitRpc (0x3B0178). |
 | 0x3B2180 | sceSifLoadModule | `sceSifLoadModule` (system call list) | Wrapper of `_SifLoadModule(path, argc, argv, &res, 0)`; loadfile client, SID 0x80000006; data 0x1F725C0–0x1F727E8. |
 | 0x3B1EA8 | sceSifSearchModuleByName | `sceSifSearchModuleByName` | loadfile client (SID 0x80000006), RPC 9: sends `{name}` (copied over 0xFC bytes, last byte forced to 0), reply `{module id}`. It first goes through 0x3B1CE0 (binds the SID then calls initialisation RPC 0xFF) and 0x3B1DE0 (checks the returned version). Only caller: 0x396A78, which formats the message "Error: IOP module missing: %s. You must load this module before initilizing the memcard library." (VA 0x42FDD8) when the result is negative. The runtime returns the id of the loaded IOP module whose internal name (IRX IOPMOD header: `mcman`, `mcserv`, `sio2man`…) is identical, otherwise −1. Without this binding, 0x3B1CE0 retried forever to bind SID 0x80000006, which the emulated IOP does not serve: loadfile is part of IOPRP300.IMG, which it does not run (run 8 in [BOOT.md](BOOT.md)). |
+| 0x3B4E28 | sceMcInit (libmc 3020) | `sceMcInit` | Creates the two libmc semaphores (ids at 0x3E36D4, 0x3E36D8), `sceMcSync(0, 0, 0)` (0x3B5700), `sceSifInitRpc(0)`, binds MCSERV's SID 0x80000400 on client 0x1F76100, then RPC 0xFE. Only caller: 0x396720, after 0x396A78 checked that `sio2man`, `mcman` and `mcserv` are loaded. |
+| 0x3B5050 | sceMcEnd | `sceMcEnd` | `sceMcSync`, then `DeleteSema` of both libmc semaphores. |
+| 0x3B5700 | sceMcSync | `sceMcSync` | `(mode, *cmd, *result)`: PollSema/WaitSema on the semaphore at 0x3E36D4 depending on `mode`, current command at 0x3E36D0. Returns 1 when a command finished, 0 while one runs (mode 1), −1 when none was started; polled every frame by 0x396B20. |
+| 0x3B5820 | sceMcGetInfo | `sceMcGetInfo` | RPC 1, NOWAIT, `(port, slot, *type, *free, *format)`: port and slot at +4/+8 of the packet 0x1F76180, the three pointers saved at 0x1F76128/2C/30 for the end function 0x3B57C8, which copies them from the reply (uncached) and `iSignalSema`s. Run 18: the RPC never completed. |
+| 0x3B50C0 | sceMcOpen | `sceMcOpen` | RPC 2 `(port, slot, name, mode)`, name copied (0x3FF bytes) to the packet at +0x14. |
+| 0x3B51E8 | sceMcMkdir | `sceMcMkdir` | `sceMcOpen(port, slot, name, 0x40)`, then current command 0xB. |
+| 0x3B5220 | sceMcClose | `sceMcClose` | RPC 3 `(fd)`. |
+| 0x3B52E0 | sceMcSeek | `sceMcSeek` | RPC 4 `(fd, offset, origin)`. |
+| 0x3B5470 | sceMcRead | `sceMcRead` | RPC 5 `(fd, buffer, size)`, end function 0x3B53C0 copies the unaligned edges. |
+| 0x3B5588 | sceMcWrite | `sceMcWrite` | RPC 6 `(fd, buffer, size)`. |
+| 0x3B5EB0 | sceMcFlush | `sceMcFlush` | RPC 0xA `(fd)`. |
+| 0x3B5B80 | sceMcChdir | `sceMcChdir` | RPC 0xC `(port, slot, path, current dir)`. |
+| 0x3B59A0 | sceMcGetDir | `sceMcGetDir` | RPC 0xD `(port, slot, name, mode, max entries, table)`, arguments 5 and 6 in `$t0`/`$t1`; end function 0x3B5AF0. |
+| 0x3B5F70 | sceMcSetFileInfo | `sceMcSetFileInfo` | RPC 0xE `(port, slot, name, info, flags)`. |
+| 0x3B5D90 | sceMcDelete | `sceMcDelete` | RPC 0xF `(port, slot, name)`. |
+| 0x3B5CC0 | sceMcFormat | `sceMcFormat` | RPC 0x10 `(port, slot)`. |
 | 0x3B1B48 | sceSifInitIopHeap | `sceSifInitIopHeap` | iopheap client, SID 0x80000003. Called by 0x215798 before loading the modules. |
 | 0x3B1BD0 | sceSifAllocSysMemory | `sceSifAllocSysMemory` | iopheap client, RPC 4, sends `{size, mode, addr}` built from `(mode, size, addr)`: typical call `(0, 0x40700, 0)`. The handler reads the size from a1. Callers: 0x1FB828, 0x29D608, 0x3629A8, 0x3692C0, 0x372160. |
 | 0x3B1C50 | sceSifFreeIopHeap | `sceSifFreeIopHeap` | RPC 2, sends `{addr}`. Callers: 0x29DDC8, 0x369110. |
@@ -83,6 +99,6 @@ The internal variables of libcdvd (0x3D4CD0–0x3D4D20, 0x3D5EC0, 0x3D6300, 0x3D
 ## To identify
 
 - libdbc/libpad2 (markers above): client of the DBCMAN service (SID 0x80001300), physically loaded by the IOP.
-- libmc 3020: MCSERV client (SID 0x80000400).
+- libmtap: second client at 0x1F77700 (0x3B6178–0x3B6430, RPC 1, 2, 3, 5, 6); the multitap manager is not loaded.
 - Criterion's GTFS client: `FUN_001E2278(0x561D18, 1, …, 0x419368, 3, 0x20)` binds SID 0x475453 ("GTS") at 0x1E23C8; RPC 1 (init), 3 (open), 5 (read in blocks of 0xA800 bytes). GTFSCDVD.IRX copies the sectors to the EE through `sceSifSetDmaIntr` (sifman:32), then signals completion with SIF command 4, whose EE handler 0x1E2DF0 does `iSignalSema`. Served by the IRX in the emulated IOP: do not bind it.
 - RenderWare audio client (RWA.IRX / B4ROUTE.IRX), 0x371630 (string "EE  RwaRPCTransfer : ERROR! DMA command queue FULL!" at VA 0x42C9B0): commands sent to the IOP through `sceSifSendCmd(0, …)` to the RWA+0x3D70 handler, registered by `sceSifAddCmdHandler(0, …)` in an 8-entry table (`sceSifSetCmdBuffer`). Replies through command 1 to 0x3719D8; the EE waits for reply 0x12 (flag gp−0x7A9C, loop 0x372BC8). Served by the IRX: do not bind it.
