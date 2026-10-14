@@ -2,6 +2,13 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## GS rasterizer fixes from upstream pull requests (October 14, 2026)
+
+Applied from ran-j/PS2Recomp pull requests #280, #281 and #282 (same project, same license); #281 was merged by hand around the row-band split of our raster workers.
+
+- `ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp`: `TEST.ZTE=0` disables the depth test, as on the GS (#280). Sprites keep fractional endpoints, cover `[ceil(x0), ceil(x1))` like the other primitives, pair UV with their endpoints when the vertices are reversed, take Q from the second vertex and sample through the floating-coordinate path for UV as well as STQ (#281). STQ texel coordinates saturate like the 12.4 hardware path before wrapping (#282).
+- Tests: `ps2xTest/gs_cache/gs_depth_test_tests.cpp`, `gs_sprite_alignment_tests.cpp` and `README.md` (new, from #280/#281), STQ saturation tests in `ps2xTest/src/ps2_gs_tests.cpp` (#282). Eight existing tests drew sprites whose two vertices coincide; a GS draws nothing for those, so they now draw one pixel (`ps2_gs_tests.cpp`, `ps2_runtime_expansion_tests.cpp`).
+
 ## VU1 engine and compiled VU1 programs (October 14, 2026)
 
 - Taken from Sinan Karakaya's PS2Recomp fork for Dragon Quest VIII (`Sinan-Karakaya/PS2Recomp` at 379b9ca, offered upstream as ran-j/PS2Recomp#254, GPLv3 like PS2Recomp): the whole `ps2xRuntime/src/lib/vu/` folder (interpreter rewritten around decoded pairs, compiled regions and counted loops, SSE2/NEON fast paths, program capture, compiled-program dispatch) and `ps2xRuntime/include/runtime/ps2_vu1.h`, whose public interface only gains members. Converted to CRLF like the other upstream files; no other change to the fork's code.
