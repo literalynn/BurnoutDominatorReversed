@@ -543,6 +543,50 @@ void register_ps2_runtime_io_tests()
             t.IsTrue(std::filesystem::exists(hostPath), "sceMcOpen/sceMcWrite should create the host file under mcRoot");
         });
 
+        tc.Run("sceMc refuses a command until sceMcSync reports the previous one", [](TestCase &t)
+        {
+            TestContext test;
+            clearContext(test.ctx);
+            ps2_stubs::sceMcInit(test.rdram.data(), &test.ctx, nullptr);
+
+            const uint32_t fileAddr = GUEST_STRING_AREA_START + 0x600;
+            const uint32_t writeBufAddr = GUEST_BUFFER_AREA_START + 0x700;
+            const std::string payload = "profile data";
+            writeGuestString(test.rdram.data(), fileAddr, "/busy.bin");
+            std::memcpy(test.rdram.data() + writeBufAddr, payload.data(), payload.size());
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 6, fileAddr);
+            setRegU32(test.ctx, 7, PS2_FIO_O_RDWR | PS2_FIO_O_CREAT | PS2_FIO_O_TRUNC);
+            ps2_stubs::sceMcOpen(test.rdram.data(), &test.ctx, nullptr);
+            int32_t cmd = 0;
+            const int32_t fd = syncMc(test.rdram, &cmd);
+            t.IsTrue(fd >= 0, "sceMcOpen should succeed");
+
+            // Burnout's save: sceMcWrite, then sceMcFlush at once, then sceMcSync.
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 4, static_cast<uint32_t>(fd));
+            setRegU32(test.ctx, 5, writeBufAddr);
+            setRegU32(test.ctx, 6, static_cast<uint32_t>(payload.size()));
+            ps2_stubs::sceMcWrite(test.rdram.data(), &test.ctx, nullptr);
+            t.Equals(getRegS32(&test.ctx, 2), 0, "sceMcWrite should start");
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 4, static_cast<uint32_t>(fd));
+            ps2_stubs::sceMcFlush(test.rdram.data(), &test.ctx, nullptr);
+            t.Equals(getRegS32(&test.ctx, 2), -200, "sceMcFlush must be refused while the write is unreported");
+
+            t.Equals(syncMc(test.rdram, &cmd), static_cast<int32_t>(payload.size()),
+                     "sceMcSync should report the bytes written");
+            t.Equals(cmd, 0x06, "sceMcSync should report WRITE, not the refused FLUSH");
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 4, static_cast<uint32_t>(fd));
+            ps2_stubs::sceMcClose(test.rdram.data(), &test.ctx, nullptr);
+            t.Equals(getRegS32(&test.ctx, 2), 0, "a command after sceMcSync should start");
+            t.Equals(syncMc(test.rdram, &cmd), 0, "sceMcClose should succeed");
+        });
+
         tc.Run("sceMcGetDir includes dot entries and file metadata", [](TestCase &t)
         {
             TestContext test;

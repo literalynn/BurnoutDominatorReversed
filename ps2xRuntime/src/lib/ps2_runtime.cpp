@@ -2434,8 +2434,10 @@ namespace
                 m_options.frameDumpInterval.count() > 0 &&
                 now >= m_nextDump)
             {
-                char name[32];
-                std::snprintf(name, sizeof(name), "frame_%05u.png", m_dumpIndex++);
+                // The VSync tick in the name places scripted inputs (BDR_PAD_SCRIPT).
+                char name[48];
+                std::snprintf(name, sizeof(name), "frame_%05u_v%06llu.png", m_dumpIndex++,
+                              static_cast<unsigned long long>(runtime.eeScheduler().currentVSyncTick()));
                 if (runtime.dumpPresentationFrame(m_options.frameDumpDirectory / name))
                 {
                     ++result.framesDumped;

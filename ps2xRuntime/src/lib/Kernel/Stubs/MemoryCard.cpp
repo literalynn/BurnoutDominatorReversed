@@ -367,6 +367,25 @@ namespace ps2_stubs
             g_mcCommandPending = true;
         }
 
+        // libmc 3020 starts a command only if PollSema on its semaphore succeeds
+        // and returns -200 otherwise; the semaphore stays taken while the IOP
+        // runs the previous command. Commands finish at once here, so the
+        // previous one counts as running until sceMcSync has reported it.
+        // Burnout issues sceMcFlush right after sceMcWrite and relies on the
+        // flush being refused: the next sceMcSync must report the write.
+        constexpr int32_t kMcBusy = -200;
+
+        bool rejectWhileCommandPending(R5900Context *ctx)
+        {
+            std::lock_guard<std::mutex> lock(g_mcStateMutex);
+            if (!g_mcCommandPending)
+            {
+                return false;
+            }
+            setReturnS32(ctx, kMcBusy);
+            return true;
+        }
+
         void closeMcFilesLocked()
         {
             for (auto &[fd, openFile] : g_mcFiles)
@@ -516,6 +535,10 @@ namespace ps2_stubs
 
     void sceMcChdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const uint32_t pathAddr = getRegU32(ctx, 6);
@@ -563,6 +586,10 @@ namespace ps2_stubs
 
     void sceMcClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
         int32_t result = kMcResultNoEntry;
         {
@@ -583,6 +610,10 @@ namespace ps2_stubs
 
     void sceMcDelete(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string path = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -650,6 +681,10 @@ namespace ps2_stubs
 
     void sceMcFlush(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
         int32_t result = kMcResultNoEntry;
         {
@@ -666,6 +701,10 @@ namespace ps2_stubs
 
     void sceMcFormat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
 
@@ -696,6 +735,10 @@ namespace ps2_stubs
 
     void sceMcGetDir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string rawPath = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -849,6 +892,10 @@ namespace ps2_stubs
 
     void sceMcGetEntSpace(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         {
             std::lock_guard<std::mutex> lock(g_mcStateMutex);
             setMcCommandResultLocked(kMcCmdGetEntSpace, 1024);
@@ -858,6 +905,10 @@ namespace ps2_stubs
 
     void sceMcGetInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const uint32_t typePtr = getRegU32(ctx, 6);
@@ -938,6 +989,10 @@ namespace ps2_stubs
 
     void sceMcMkdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string path = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -982,6 +1037,10 @@ namespace ps2_stubs
 
     void sceMcOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string path = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -1040,11 +1099,17 @@ namespace ps2_stubs
             }
             setMcCommandResultLocked(kMcCmdOpen, result);
         }
+        RUNTIME_LOG("[MC] Open port=" << port << " '" << path << "' mode=0x" << std::hex << flags << std::dec
+                                      << " -> result=" << result);
         setReturnS32(ctx, 0);
     }
 
     void sceMcRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
         const uint32_t dstAddr = getRegU32(ctx, 5);
         const int32_t size = static_cast<int32_t>(getRegU32(ctx, 6));
@@ -1083,6 +1148,10 @@ namespace ps2_stubs
 
     void sceMcRename(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string oldPath = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -1121,6 +1190,10 @@ namespace ps2_stubs
 
     void sceMcSeek(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t offset = static_cast<int32_t>(getRegU32(ctx, 5));
         const int32_t origin = static_cast<int32_t>(getRegU32(ctx, 6));
@@ -1159,6 +1232,10 @@ namespace ps2_stubs
 
     void sceMcSetFileInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string path = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -1236,6 +1313,10 @@ namespace ps2_stubs
 
     void sceMcUnformat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
 
@@ -1266,6 +1347,10 @@ namespace ps2_stubs
 
     void sceMcWrite(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (rejectWhileCommandPending(ctx))
+        {
+            return;
+        }
         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
         const uint32_t srcAddr = getRegU32(ctx, 5);
         const int32_t size = static_cast<int32_t>(getRegU32(ctx, 6));
