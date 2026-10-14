@@ -228,6 +228,19 @@ def foreign_build_tree(build_dir: Path) -> Path | None:
     return source
 
 
+def default_cmake() -> str:
+    """cmake on PATH, else the CMake the build tree was configured with (the
+    installer uses the copy bundled with Visual Studio, not on PATH)."""
+    if shutil.which("cmake"):
+        return "cmake"
+    cache = WORK / "build" / "CMakeCache.txt"
+    if cache.is_file():
+        for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("CMAKE_COMMAND:INTERNAL="):
+                return line.split("=", 1)[1]
+    return "cmake"
+
+
 def configure(args) -> None:
     foreign = foreign_build_tree(args.build_dir)
     if foreign:
@@ -404,7 +417,7 @@ def main() -> int:
     p.set_defaults(func=audit)
     for name, function in [("configure", configure), ("build", build)]:
         p = sub.add_parser(name)
-        p.add_argument("--cmake", default="cmake")
+        p.add_argument("--cmake", default=default_cmake())
         p.add_argument("--build-dir", default=WORK / "build", type=Path)
         p.add_argument("--game", action="store_true")
         if name == "configure":
