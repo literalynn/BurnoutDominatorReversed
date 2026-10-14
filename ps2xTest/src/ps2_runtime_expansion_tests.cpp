@@ -18,8 +18,10 @@
 #include "Stubs/GS.h"
 #include "Stubs/VU.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <initializer_list>
 #include <cstring>
 #include <exception>
 #include <string>
@@ -327,6 +329,81 @@ void register_ps2_runtime_expansion_tests()
 {
     MiniTest::Case("PS2RuntimeExpansion", [](TestCase &tc)
     {
+        tc.Run("MMI instructions use the 128-bit HI/LO pair and EE element orders", [](TestCase &t)
+        {
+            R5900Context ctx{};
+            const auto setH = [&](int r, std::initializer_list<int16_t> v) { int16_t a[8]; std::copy(v.begin(), v.end(), a); std::memcpy(&ctx.r[r], a, 16); };
+            const auto setW = [&](int r, std::initializer_list<int32_t> v) { int32_t a[4]; std::copy(v.begin(), v.end(), a); std::memcpy(&ctx.r[r], a, 16); };
+            const auto W = [&](int r, int i) { int32_t a[4]; std::memcpy(a, &ctx.r[r], 16); return a[i]; };
+            const auto H = [&](int r, int i) { int16_t a[8]; std::memcpy(a, &ctx.r[r], 16); return a[i]; };
+            const auto D = [&](int r, int i) { int64_t a[2]; std::memcpy(a, &ctx.r[r], 16); return a[i]; };
+            const auto loW = [&](int i) { return static_cast<int32_t>((i < 2 ? ctx.lo : ctx.lo1) >> (32 * (i & 1))); };
+            const auto hiW = [&](int i) { return static_cast<int32_t>((i < 2 ? ctx.hi : ctx.hi1) >> (32 * (i & 1))); };
+
+            setH(1, {1, 2, 3, 4, 5, 6, 7, -8});
+            setH(2, {10, 20, 30, 40, 50, 60, 70, 80});
+            ps2_mmi::pmulth(&ctx, 3, 1, 2, 0);
+            t.IsTrue(loW(0) == 10 && loW(1) == 40 && loW(2) == 250 && loW(3) == 360, "PMULTH LO words");
+            t.IsTrue(hiW(0) == 90 && hiW(1) == 160 && hiW(2) == 490 && hiW(3) == -640, "PMULTH HI words");
+            t.IsTrue(W(3, 0) == 10 && W(3, 1) == 90 && W(3, 2) == 250 && W(3, 3) == 490, "PMULTH rd = LO0 HI0 LO2 HI2");
+            ps2_mmi::pmulth(&ctx, 3, 1, 2, 1);
+            t.IsTrue(loW(0) == 20 && hiW(3) == -1280 && W(3, 1) == 180, "PMADDH accumulates per word");
+
+            setH(1, {1, 2, 3, 4, 5, 6, 7, 8});
+            setH(2, {1, 1, 1, 1, 1, 1, 1, 1});
+            ps2_mmi::phmadh(&ctx, 3, 1, 2, false);
+            t.IsTrue(W(3, 0) == 3 && W(3, 1) == 7 && W(3, 2) == 11 && W(3, 3) == 15, "PHMADH sums pairs");
+            ps2_mmi::pmfhl(&ctx, 4, 0);
+            t.IsTrue(W(4, 0) == 3 && W(4, 1) == 7 && W(4, 2) == 11 && W(4, 3) == 15, "PMFHL.LW");
+            ps2_mmi::pmfhl(&ctx, 4, 1);
+            t.IsTrue(W(4, 0) == 2 && W(4, 1) == 4 && W(4, 2) == 6 && W(4, 3) == 8, "PMFHL.UW");
+
+            setW(5, {70000, -70000, 5, -5});
+            ps2_mmi::pmtlo(&ctx, 5);
+            ps2_mmi::pmthi(&ctx, 5);
+            ps2_mmi::pmfhl(&ctx, 4, 4);
+            t.IsTrue(H(4, 0) == 32767 && H(4, 1) == -32768 && H(4, 2) == 32767 && H(4, 6) == 5 && H(4, 7) == -5, "PMFHL.SH saturates");
+            ps2_mmi::pmfhi(&ctx, 6);
+            t.IsTrue(W(6, 0) == 70000 && W(6, 3) == -5, "PMTHI/PMFHI move 128 bits");
+
+            ctx.lo = ctx.hi = ctx.lo1 = ctx.hi1 = 0;
+            setW(1, {3, 99, -4, 99});
+            setW(2, {5, 99, 6, 99});
+            ps2_mmi::pmultw(&ctx, 3, 1, 2, 1);
+            t.IsTrue(D(3, 0) == 15 && D(3, 1) == -24 && hiW(2) == -1 && loW(2) == -24, "PMADDW uses words 0 and 2");
+
+            setW(1, {7, 0, -9, 0});
+            setW(2, {2, 0, 0, 0});
+            ps2_mmi::pdivw(&ctx, 1, 2);
+            t.IsTrue(loW(0) == 3 && hiW(0) == 1 && loW(2) == 1 && hiW(2) == -9, "PDIVW, including division by zero");
+
+            setW(1, {1, 0, 31, 0});
+            setW(2, {0x40000000, 0, 1, 0});
+            ps2_mmi::pshiftvw(&ctx, 3, 1, 2, 0);
+            t.IsTrue(D(3, 0) == INT32_MIN && D(3, 1) == INT32_MIN, "PSLLVW shifts rt by rs and sign-extends");
+
+            setW(1, {1, 2, 3, 4});
+            t.IsTrue(W(1, 0) == 1, "setup");
+            ctx.r[7] = ps2_mmi::pexew(ctx.r[1]);
+            t.IsTrue(W(7, 0) == 3 && W(7, 1) == 2 && W(7, 2) == 1 && W(7, 3) == 4, "PEXEW");
+            ctx.r[7] = ps2_mmi::prot3w(ctx.r[1]);
+            t.IsTrue(W(7, 0) == 2 && W(7, 1) == 3 && W(7, 2) == 1 && W(7, 3) == 4, "PROT3W");
+            ctx.r[7] = ps2_mmi::pexcw(ctx.r[1]);
+            t.IsTrue(W(7, 0) == 1 && W(7, 1) == 3 && W(7, 2) == 2 && W(7, 3) == 4, "PEXCW");
+            setH(1, {0, 1, 2, 3, 4, 5, 6, 7});
+            setH(2, {10, 11, 12, 13, 14, 15, 16, 17});
+            ctx.r[7] = ps2_mmi::pexeh(ctx.r[1]);
+            t.IsTrue(H(7, 0) == 2 && H(7, 2) == 0 && H(7, 4) == 6 && H(7, 7) == 7, "PEXEH");
+            ctx.r[7] = ps2_mmi::prevh(ctx.r[1]);
+            t.IsTrue(H(7, 0) == 3 && H(7, 3) == 0 && H(7, 4) == 7 && H(7, 7) == 4, "PREVH");
+            ctx.r[7] = ps2_mmi::pexch(ctx.r[1]);
+            t.IsTrue(H(7, 1) == 2 && H(7, 2) == 1 && H(7, 5) == 6 && H(7, 6) == 5, "PEXCH");
+            ctx.r[7] = ps2_mmi::pinth(ctx.r[2], ctx.r[1]);
+            t.IsTrue(H(7, 0) == 0 && H(7, 1) == 14 && H(7, 2) == 1 && H(7, 7) == 17, "PINTH");
+            ctx.r[7] = ps2_mmi::pinteh(ctx.r[2], ctx.r[1]);
+            t.IsTrue(H(7, 0) == 0 && H(7, 1) == 10 && H(7, 2) == 2 && H(7, 7) == 16, "PINTEH");
+        });
+
         tc.Run("differential decoder/codegen gpr-write contract for MULT and DIV families", [](TestCase &t)
         {
             R5900Decoder decoder;

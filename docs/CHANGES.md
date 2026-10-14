@@ -2,6 +2,15 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## MMI semantics (October 15, 2026)
+
+An audit of the MMI translation against the EE Core Instruction Set Manual and PCSX2's interpreter (`pcsx2/MMI.cpp`) found most HI/LO and permutation instructions wrong: the parallel multiplies and divides (PMULTW, PMULTUW, PMADDW, PMSUBW, PMADDUW, PDIVW, PDIVUW, PDIVBW, PMULTH, PMADDH, PMSUBH, PHMADH, PHMSBH) summed every product into one scalar instead of filling the 128-bit HI/LO pair; PMFHI, PMFLO, PMTHI, PMTLO, PMFHL and PMTHL moved 32 or 64 bits instead of 128 (HI1/LO1 are `hi1`/`lo1`); PEXEH, PEXEW, PROT3W, PREVH, PEXCH, PEXCW, PINTH and PINTEH used wrong element orders; PSLLVW, PSRLVW and PSRAVW shifted rs by rt on four lanes instead of words 0 and 2 of rt by rs with 64-bit sign extension; PADDUH and PSUBUH did not saturate; PSLLH, PSRLH and PSRAH used five bits of sa instead of four.
+
+- `ps2xRuntime/include/ps2_mmi.h` (new, included by `ps2_runtime_macros.h`): reference implementations of these instructions on `R5900Context`.
+- `ps2xRecomp/src/lib/mmi_translation_helpers.cpp`, `mmi_translator.cpp`: emit calls to them; the wrong macros (`PS2_PINTH`, `PS2_PEXEW`, `PS2_PMFHL_*`, `_mm_custom_sllv_epi32`...) are removed from `ps2_runtime_macros.h`.
+- Burnout Dominator only uses PABSW, PSLLH and PSRAH of these, so its behaviour changes through the PABSW fix below; the rest matters for other games. Test: `MMI instructions use the 128-bit HI/LO pair and EE element orders`.
+- `EeScheduler.cpp`: `BDR_RDRAM_DUMP=vsync,file` saves EE RAM at that VSync tick.
+
 ## PABSW and PABSH read rt (October 15, 2026)
 
 - `ps2xRecomp/src/lib/mmi_translation_helpers.cpp`: `PABSW rd, rt` and `PABSH rd, rt` took their source from rs, which is always `$zero` in these encodings, so they always returned 0. Burnout Dominator's track streamer (0x305060) uses `pabsw` to tell near track sections (offset −4..4, detailed ring of buffers) from far ones (low-detail pool): every far slot got a detailed buffer at `(index ± 5 or 6) mod 10`, i.e. a section of the wrong part of the track. The lit-geometry renderer then drew unlit meshes (80-vertex batches) with the lit VU1 microcode, whose output buffer holds 76 vertices; the overflow wrote vertex data over the GIF tag template at VU1 qword 1006 and every later kick sent garbage to the GS. Test: the unary MMI case of `code_generator_tests.cpp` now covers PABSW and PABSH.

@@ -170,6 +170,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_PGS_RECORD_FROM=N`, `BDR_PGS_RECORD_VSYNCS=M` | with `BDR_PGS_RECORD`: records only VSync ticks N to N+M, starting with the VRAM of tick N |
 | `BDR_TRACE_DMA_CHAIN=N` | prints the tags (address, id, QWC, ADDR) of up to N DMA chains whose data exceeds 512 KiB |
 | `BDR_TRACE_VIF1=first,count` | every VIF1 command of VSync ticks `first` to `first+count`, with TOPS/ITOPS/BASE/OFST/DBF/CYCLE/MODE |
+| `BDR_RDRAM_DUMP=vsync,file` | EE RAM (32 MiB) at that VSync tick |
 | `BDR_TRACE_VIF1_DATA=1` | with `BDR_TRACE_VIF1`: the first qword of each V4-32 UNPACK of 1 to 5 qwords (microcode parameters) |
 | `BDR_VU_BADKICK_DIR=dir` | VU1 data, code and registers and EE RAM at the first XGKICK whose first GIF tag has only NLOOP/EOP and a non-zero REGS word, or whose PACKED data runs past VU1 qword 1006; VU1 data and registers at the last kick before it |
 | `BDR_PROFILE_STACKS=N` | with `BDR_PROFILE_SECONDS`: prints N call stacks of the profiled thread, 200 ms apart |

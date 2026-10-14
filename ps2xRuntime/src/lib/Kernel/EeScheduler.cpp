@@ -2132,6 +2132,16 @@ void EeScheduler::processEvent(const EeEvent &event)
     case EeEventType::VBlankStart:
         ++m_vsyncTick;
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+        // BDR_RDRAM_DUMP=vsync,file: EE RAM at that VSync tick, for offline inspection.
+        if (static const char *dump = std::getenv("BDR_RDRAM_DUMP"); dump && std::strtoull(dump, nullptr, 10) == m_vsyncTick)
+        {
+            if (const char *path = std::strchr(dump, ','))
+                if (FILE *file = std::fopen(path + 1, "wb"))
+                {
+                    std::fwrite(m_runtime.memory().getRDRAM(), 1, PS2_RAM_SIZE, file);
+                    std::fclose(file);
+                }
+        }
         if ((m_vsyncTick & 1u) != 0u)
         {
             m_runtime.memory().gs().csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
