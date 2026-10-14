@@ -155,7 +155,11 @@ void VU1Interpreter::progressXgkick()
                 static bool done = false;
                 uint64_t tagHi = 0;
                 std::memcpy(&tagHi, m_xgkick.packet.data() + 8u, sizeof(tagHi));
-                const bool bad = (tagLo >> 32) == 0u && tagHi != 0u && nloop != 0u;
+                // Also a PACKED packet whose data runs past qword 1006 of VU1 memory,
+                // where Burnout's microcode keeps its GIF tag template.
+                const uint32_t start = m_xgkick.sourceAddress / 16u;
+                const bool overflows = format == 0u && start < 1006u && start + 1u + nloop * nreg > 1006u;
+                const bool bad = ((tagLo >> 32) == 0u && tagHi != 0u && nloop != 0u) || overflows;
                 const auto dump = [&](const char *name, const uint8_t *bytes, size_t size, const VU1State &state, uint32_t sourceAddress) {
                     const std::string stem = std::string(badKickDir) + "/" + name;
                     if (FILE *file = std::fopen((stem + ".data").c_str(), "wb"))
@@ -180,11 +184,21 @@ void VU1Interpreter::progressXgkick()
                 if (!done && bad)
                 {
                     done = true;
+                    std::error_code ignored;
+                    std::filesystem::create_directories(badKickDir, ignored);
+                    std::printf("[vu1] bad XGKICK (%s) at pc=0x%x vsync=%llu, dumped to %s\n", overflows ? "overflow" : "tag", m_state.pc,
+                                m_activeMemory ? static_cast<unsigned long long>(m_activeMemory->gs().vsyncTick.load()) : 0ull, badKickDir);
                     dump("bad", m_activeVuData, m_activeVuDataSize, m_state, m_xgkick.sourceAddress);
                     if (m_activeMemory && m_activeMemory->getVU1Code())
                         if (FILE *file = std::fopen((std::string(badKickDir) + "/bad.code").c_str(), "wb"))
                         {
                             std::fwrite(m_activeMemory->getVU1Code(), 1, PS2_VU1_CODE_SIZE, file);
+                            std::fclose(file);
+                        }
+                    if (m_activeMemory && m_activeMemory->getRDRAM())
+                        if (FILE *file = std::fopen((std::string(badKickDir) + "/bad.rdram").c_str(), "wb"))
+                        {
+                            std::fwrite(m_activeMemory->getRDRAM(), 1, PS2_RAM_SIZE, file);
                             std::fclose(file);
                         }
                     if (!lastGood.empty())

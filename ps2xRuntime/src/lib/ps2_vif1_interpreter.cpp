@@ -353,6 +353,17 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         static_cast<unsigned long long>(tick), pos - 4u, sizeBytes, cmd, opcode, num, imm,
                         vif1_regs.tops & 0x3FFu, vif1_regs.itops & 0x3FFu, vif1_regs.base & 0x3FFu, vif1_regs.ofst & 0x3FFu,
                         (vif1_regs.stat >> 7) & 1u, vif1_regs.cycle & 0xFFFFu, vif1_regs.mode & 3u);
+        // BDR_TRACE_VIF1_DATA=1: also the first qword of short (1 to 5 qword) V4-32 UNPACKs, the microcode's parameters.
+        static const bool traceData = std::getenv("BDR_TRACE_VIF1_DATA") != nullptr;
+        if (const uint64_t tick = gs_regs.vsyncTick.load(std::memory_order_relaxed);
+            traceData && tick >= traceWindow.first && tick <= traceWindow.second && (opcode & 0x6Fu) == 0x6Cu && num >= 1u && num <= 5u && pos + 16u <= sizeBytes)
+        {
+            uint32_t words[4];
+            std::memcpy(words, data + pos, sizeof(words));
+            std::printf("[vif1-data] v=%llu addr=%03x num=%u %08x %08x %08x %08x\n",
+                        static_cast<unsigned long long>(tick), imm & 0x3FFu, num,
+                        words[0], words[1], words[2], words[3]);
+        }
 
         // Track most-recent command for VIFn_CODE emulation.
         vif1_regs.code = cmd;

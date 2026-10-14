@@ -2,6 +2,12 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## PABSW and PABSH read rt (October 15, 2026)
+
+- `ps2xRecomp/src/lib/mmi_translation_helpers.cpp`: `PABSW rd, rt` and `PABSH rd, rt` took their source from rs, which is always `$zero` in these encodings, so they always returned 0. Burnout Dominator's track streamer (0x305060) uses `pabsw` to tell near track sections (offset −4..4, detailed ring of buffers) from far ones (low-detail pool): every far slot got a detailed buffer at `(index ± 5 or 6) mod 10`, i.e. a section of the wrong part of the track. The lit-geometry renderer then drew unlit meshes (80-vertex batches) with the lit VU1 microcode, whose output buffer holds 76 vertices; the overflow wrote vertex data over the GIF tag template at VU1 qword 1006 and every later kick sent garbage to the GS. Test: the unary MMI case of `code_generator_tests.cpp` now covers PABSW and PABSH.
+- `ps2_runtime_macros.h`: `PS2_PABSW`/`PS2_PABSH` saturate like the EE (|0x80000000| = 0x7FFFFFFF, |0x8000| = 0x7FFF).
+- Debugging: `BDR_VU_BADKICK_DIR` creates its directory, also catches the first PACKED kick whose data runs past qword 1006, prints the VSync and saves EE RAM (`bad.rdram`); `BDR_TRACE_VIF1_DATA=1` adds the first qword of short V4-32 UNPACKs (microcode parameters); `BDR_PGS_RECORD` flushes its file when its window ends.
+
 ## VIF1 UNPACK as on the console (October 14, 2026)
 
 - `ps2_vif1_interpreter.cpp`, following PCSX2 `Vif_Unpack.cpp`: V2 unpacks write x y x y (z and w used to keep old VU memory); V3 unpacks are done like V4, so w is the source element after z; STMOD mode 3 also stores the data in ROW; a filling write (WL > CL) writes the next source vector again without consuming it, instead of ROW. Test: `VIF UNPACK V2 repeats xy, V3 reads w from the next element, mode 3 sets ROW`.

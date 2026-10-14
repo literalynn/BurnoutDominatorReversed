@@ -1273,6 +1273,8 @@ void register_code_generator_tests()
                 {"PEXCH", MMI_MMI3, MMI3_PEXCH},
                 {"PCPYH", MMI_MMI3, MMI3_PCPYH},
                 {"PEXCW", MMI_MMI3, MMI3_PEXCW},
+                {"PABSW", MMI_MMI1, MMI1_PABSW},
+                {"PABSH", MMI_MMI1, MMI1_PABSH},
             };
 
             for (const UnaryMmiCase &item : cases)

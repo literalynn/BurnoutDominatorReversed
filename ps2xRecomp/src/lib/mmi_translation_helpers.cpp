@@ -81,7 +81,7 @@ namespace ps2recomp
         switch (subfunc)
         {
         case MMI1_PABSW:
-            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSW(GPR_VEC(ctx, {})));", rd, rs);
+            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSW(GPR_VEC(ctx, {})));", rd, rt); // PABSW rd, rt
         case MMI1_PCEQW:
             return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PCEQW(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
         case MMI1_PMINW:
@@ -89,7 +89,7 @@ namespace ps2recomp
         case MMI1_PADSBH:
             return translatePADSBH(inst);
         case MMI1_PABSH:
-            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSH(GPR_VEC(ctx, {})));", rd, rs);
+            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSH(GPR_VEC(ctx, {})));", rd, rt); // PABSH rd, rt
         case MMI1_PCEQH:
             return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PCEQH(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
         case MMI1_PMINH:

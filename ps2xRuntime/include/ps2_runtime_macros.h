@@ -486,8 +486,19 @@ inline __m128i ps2_psubsw(__m128i a, __m128i b)
 #define PS2_PCEQB(a, b) _mm_cmpeq_epi8((__m128i)(a), (__m128i)(b))
 
 // Packed Absolute (PABS)
-#define PS2_PABSW(a) _mm_abs_epi32((__m128i)(a))
-#define PS2_PABSH(a) _mm_abs_epi16((__m128i)(a))
+// The EE saturates: |0x80000000| is 0x7FFFFFFF and |0x8000| is 0x7FFF.
+inline __m128i ps2_pabsw(__m128i a)
+{
+    const __m128i v = _mm_abs_epi32(a);
+    return _mm_sub_epi32(v, _mm_srli_epi32(v, 31));
+}
+inline __m128i ps2_pabsh(__m128i a)
+{
+    const __m128i v = _mm_abs_epi16(a);
+    return _mm_sub_epi16(v, _mm_srli_epi16(v, 15));
+}
+#define PS2_PABSW(a) ps2_pabsw((__m128i)(a))
+#define PS2_PABSH(a) ps2_pabsh((__m128i)(a))
 #define PS2_PABSB(a) _mm_abs_epi8((__m128i)(a))
 
 // Packed Pack (PPAC) - Packs larger elements into smaller ones

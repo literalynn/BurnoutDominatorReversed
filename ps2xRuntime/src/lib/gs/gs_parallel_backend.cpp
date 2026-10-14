@@ -234,7 +234,11 @@ namespace
             static bool started = from == 0;
             const uint64_t tick = priv.vsyncTick.load(std::memory_order_relaxed);
             if (tick < from || tick - from > vsyncs)
+            {
+                if (started)
+                    std::fflush(record); // the runner can exit without closing the file
                 return;
+            }
             if (!started)
             {
                 started = true;
