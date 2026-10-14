@@ -39,6 +39,7 @@ def work_root() -> Path:
 WORK = work_root()
 LOCAL = WORK / "local"
 GENERATED = WORK / "generated"
+VU_PROGRAMS = LOCAL / "vu-programs"  # VU1 programs recorded by `run --vu-capture`
 
 
 def sha256(path: Path) -> str:
@@ -245,6 +246,11 @@ def configure(args) -> None:
                "-DPS2X_ENABLE_LTO=" + ("ON" if args.lto else "OFF"),
                "-DPS2X_SHOW_WINDOWS_CONSOLE=ON"]
     command.append("-DBDR_GENERATED_DIR=" + GENERATED.as_posix())
+    # VU1 microprograms recorded by `run --vu-capture` are compiled to C++ with
+    # the runtime (tools/compile_vu_programs.py); without them the VU1
+    # interpreter runs everything. They come from the game and stay local.
+    vu_programs = VU_PROGRAMS if (VU_PROGRAMS / "entries.txt").is_file() else None
+    command.append("-DPS2X_VU_PROGRAM_PROFILES=" + (vu_programs.as_posix() if vu_programs else ""))
     if os.name != "nt" and platform.machine().lower() in ("x86_64", "amd64"):
         # The runtime uses SSE4.1 intrinsics (_mm_extract_epi64...). MSVC accepts
         # them without flags; GCC and Clang need the target feature, as in
@@ -347,9 +353,14 @@ def launch(args) -> None:
     log = LOCAL / "logs" / (args.log or ("smoke.log" if "--headless" in command else "run.log"))
     log.parent.mkdir(parents=True, exist_ok=True)
     print("Running:", subprocess.list2cmdline(command), flush=True)
+    env = None
+    if args.vu_capture:
+        # Records every VU1 program the game starts, for `configure` to compile.
+        VU_PROGRAMS.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ, PS2_VU_PROGRAM_PROFILE=str(VU_PROGRAMS))
     with log.open("w", encoding="utf-8") as f:
         try:
-            result = subprocess.run(command, cwd=WORK, stdout=f, stderr=subprocess.STDOUT,
+            result = subprocess.run(command, cwd=WORK, stdout=f, stderr=subprocess.STDOUT, env=env,
                                     timeout=seconds + 60 if seconds else None)
             code = result.returncode
         except subprocess.TimeoutExpired:
@@ -418,6 +429,9 @@ def main() -> int:
     p.add_argument("--tail", default=40, type=int, help="Log lines printed after the run")
     p.add_argument("--trace-calls", type=hex_list, help="Log calls and returns of these guest functions (0xADDR,...)")
     p.add_argument("--trace-watch", type=hex_list, help="32-bit guest words printed with each trace line (0xADDR,...)")
+    p.add_argument("--vu-capture", action="store_true",
+                   help="Record the VU1 programs the game runs into <work>/local/vu-programs; "
+                        "configure and build then compile them")
     p.set_defaults(func=launch)
     args = parser.parse_args()
     try:

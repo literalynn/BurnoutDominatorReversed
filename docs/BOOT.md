@@ -233,4 +233,6 @@ World Tour (run 55, same script, then Cross every 400 VSyncs from 7800 and every
 
 Profile of that phase (run 56, `BDR_PROFILE=1`): the VU1 interpreter takes about 45% of the game thread (pipeline commit, operand normalisation, pair scheduling, exact FMAC rounding); Burnout draws all its 3D through VU1 microprograms. Skipping the per-cycle pipeline scan until the next result is due gave no measurable gain (still 4 VSync/s) and was dropped: the cost is in executing the microcode itself, which calls for a VU1 recompiler rather than tuning the interpreter. In the car select frame (VSync 14140), textured primitives use PSMT4 (most), PSMT8, PSMT8H and CT32 with 32-bit CSM1 palettes near the top of VRAM; the corrupted menu images are paletted textures, cause not identified yet.
 
+VU1 engine from the Dragon Quest VIII fork (CHANGES.md, run 58, same script): the interpreter alone runs the first 3D scenes at 8–9 VSync/s instead of 4, reaching VSync 16,263 instead of 15,509 in the same 560 s; no crash. `run --vu-capture` recorded 114 VU1 program entries for compilation.
+
 Remaining limits: SIO2 DMA and dmacman, memory card on SIO2 (bound at libmc level instead), vibration output, menu and races. No game result is forced.
