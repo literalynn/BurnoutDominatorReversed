@@ -21,6 +21,8 @@
 #include <mutex>
 #include <set>
 #include <tuple>
+#include <string>
+#include <vector>
 #include <ps2_log.h>
 
 namespace
@@ -141,6 +143,61 @@ void VU1Interpreter::progressXgkick()
             uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
             if (nreg == 0u)
                 nreg = 16u;
+            // BDR_VU_BADKICK_DIR=dir: VU1 data memory and state at the first kick
+            // whose first tag has only NLOOP/EOP (no PRE, PRIM, FLG, NREG) but a
+            // non-zero REGS word, and at the last kick before it.
+            static const char *badKickDir = std::getenv("BDR_VU_BADKICK_DIR");
+            if (badKickDir && m_unit == Unit::VU1 && qwordOffset == 0u)
+            {
+                static std::vector<uint8_t> lastGood;
+                static VU1State lastGoodState{};
+                static uint32_t lastGoodSource = 0;
+                static bool done = false;
+                uint64_t tagHi = 0;
+                std::memcpy(&tagHi, m_xgkick.packet.data() + 8u, sizeof(tagHi));
+                const bool bad = (tagLo >> 32) == 0u && tagHi != 0u && nloop != 0u;
+                const auto dump = [&](const char *name, const uint8_t *bytes, size_t size, const VU1State &state, uint32_t sourceAddress) {
+                    const std::string stem = std::string(badKickDir) + "/" + name;
+                    if (FILE *file = std::fopen((stem + ".data").c_str(), "wb"))
+                    {
+                        std::fwrite(bytes, 1, size, file);
+                        std::fclose(file);
+                    }
+                    if (FILE *file = std::fopen((stem + ".txt").c_str(), "w"))
+                    {
+                        std::fprintf(file, "source=0x%x pc=0x%x top=0x%x itop=0x%x\n", sourceAddress, state.pc, state.top, state.itop);
+                        for (int i = 0; i < 16; ++i)
+                            std::fprintf(file, "vi%d=0x%x\n", i, static_cast<uint32_t>(state.vi[i]) & 0xFFFFu);
+                        for (int i = 0; i < 32; ++i)
+                        {
+                            uint32_t words[4];
+                            std::memcpy(words, state.vf[i], sizeof(words));
+                            std::fprintf(file, "vf%d=%08x %08x %08x %08x\n", i, words[0], words[1], words[2], words[3]);
+                        }
+                        std::fclose(file);
+                    }
+                };
+                if (!done && bad)
+                {
+                    done = true;
+                    dump("bad", m_activeVuData, m_activeVuDataSize, m_state, m_xgkick.sourceAddress);
+                    if (m_activeMemory && m_activeMemory->getVU1Code())
+                        if (FILE *file = std::fopen((std::string(badKickDir) + "/bad.code").c_str(), "wb"))
+                        {
+                            std::fwrite(m_activeMemory->getVU1Code(), 1, PS2_VU1_CODE_SIZE, file);
+                            std::fclose(file);
+                        }
+                    if (!lastGood.empty())
+                        dump("good", lastGood.data(), lastGood.size(), lastGoodState, lastGoodSource);
+                    std::fprintf(stderr, "[vu-badkick] dumped to %s\n", badKickDir);
+                }
+                else if (!done)
+                {
+                    lastGood.assign(m_activeVuData, m_activeVuData + m_activeVuDataSize);
+                    lastGoodState = m_state;
+                    lastGoodSource = m_xgkick.sourceAddress;
+                }
+            }
 
             uint64_t tagBytes = 16u;
             if (format == 0u)
