@@ -8,7 +8,7 @@ A static recompilation of **Burnout Dominator** for PlayStation 2 (European rele
 
 ## Status
 
-**Work in progress — not playable yet.** The game builds and boots: it goes through the LOADING screen, the intro video and the memory card check, up to the 50 Hz / 60 Hz choice. A DualShock 2 is now emulated on controller port 1 (first PC gamepad, or the keyboard); menus, races and saves are not verified yet.
+**Work in progress — not playable yet.** The game boots through the intro, the 50 Hz / 60 Hz choice and the title screen, creates and saves a profile on the emulated memory card, and reaches the World Tour menus with the emulated DualShock 2 (PC gamepad or keyboard). Races are not verified yet, many textures are corrupted in the menus, and it runs at about 30 to 45 frames per second out of 50.
 
 Keyboard, when no gamepad is connected: arrows or WASD = D-pad, X or Space = Cross, C or Esc = Circle, Z = Square, V = Triangle, Q/E = L1/R1, left/right Shift = L2/R2, Enter = Start, Tab = Select.
 

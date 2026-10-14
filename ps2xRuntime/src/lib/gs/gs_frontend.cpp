@@ -1623,6 +1623,27 @@ void GS::vertexKick(bool drawing)
     {
         GSPrimitiveBatch batch = buildDrawBatch(needed);
         updatePreferredDisplaySourceForDraw(batch);
+        // BDR_TRACE_GS_VSYNC=N: every primitive drawn during VSync tick N.
+        static const long long traceTick = []
+        {
+            const char *value = std::getenv("BDR_TRACE_GS_VSYNC");
+            return value ? std::atoll(value) : -1ll;
+        }();
+        if (traceTick >= 0 && m_privRegs &&
+            m_privRegs->vsyncTick.load(std::memory_order_acquire) == static_cast<uint64_t>(traceTick))
+        {
+            const GSDrawState &state = batch.state;
+            const auto &c = state.context;
+            const auto &v0 = batch.vertices[0];
+            std::cout << "[gs-frame] prim=" << static_cast<uint32_t>(state.prim.type) << " tme=" << state.prim.tme
+                      << " fst=" << state.prim.fst << " abe=" << state.prim.abe << " frame=" << c.frame.fbp << ','
+                      << c.frame.fbw << ",psm" << static_cast<uint32_t>(c.frame.psm) << " tex0=tbp" << c.tex0.tbp0 << ",tbw"
+                      << static_cast<uint32_t>(c.tex0.tbw) << ",psm" << static_cast<uint32_t>(c.tex0.psm) << ",tw"
+                      << static_cast<uint32_t>(c.tex0.tw) << ",th" << static_cast<uint32_t>(c.tex0.th) << ",tcc"
+                      << static_cast<uint32_t>(c.tex0.tcc) << ",tfx" << static_cast<uint32_t>(c.tex0.tfx) << ",cbp" << c.tex0.cbp
+                      << ",cpsm" << static_cast<uint32_t>(c.tex0.cpsm) << ",csm" << static_cast<uint32_t>(c.tex0.csm) << ",csa"
+                      << static_cast<uint32_t>(c.tex0.csa) << " xy0=" << v0.x << ',' << v0.y << std::endl;
+        }
         m_backend->Submit(batch);
         recordDrawDebugEventUnlocked(needed);
     }

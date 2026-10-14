@@ -5,6 +5,7 @@ Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json
 ## Memory card saves (October 14, 2026)
 
 - `Kernel/Stubs/MemoryCard.cpp`: a libmc command is refused with -200 while the previous one has not been reported by `sceMcSync`, as libmc 3020 does when `PollSema` on its semaphore fails (0x3B5588: `sceMcWrite` returns 0xFFFFFF38). The runtime completes commands at once, so "running" now lasts until the result is collected. Burnout's save (state 0x47 of 0x3985F8) calls `sceMcWrite` then `sceMcFlush` without syncing (0x396B90 in between is empty): on the console the flush is refused and the next `sceMcSync` reports the write; here the flush used to replace the pending write result, the game saw 0 bytes written against the expected size and showed "Save failed". With the fix, creating a profile writes `view.ico` (65,872 bytes), the data file `BESLES-54627-BD` (43,996) and `icon.sys` (964), and the game shows "Save Successful". `sceMcOpen` now logs its path, mode and result like the other calls. Test: `sceMc refuses a command until sceMcSync reports the previous one` (456/456).
+- `gs_frontend.cpp`: `BDR_TRACE_GS_VSYNC=N` traces every primitive submitted during VSync tick N.
 - `ps2_runtime.cpp`: dumped frames are named `frame_NNNNN_vTTTTTT.png` with the VSync tick, to place `BDR_PAD_SCRIPT` presses.
 
 ## Checkpoint unwinding and interrupt masking (October 14, 2026)

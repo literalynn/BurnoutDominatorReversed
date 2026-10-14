@@ -54,6 +54,8 @@ Details and evidence: [BOOT.md](BOOT.md) and [SDK_FUNCTIONS.md](SDK_FUNCTIONS.md
 
 Runs 12 to 18: the IPU model delivers the MPEG data and the signed branches of the generated code now test the full 64-bit register. Regeneration (51,161 files, no unhandled instruction, no error) and the Windows rebuild succeeded. The game gets past the former video blocker and now shows **PROFILE**. SIO2 PIO transport for disconnected ports, RPC execution in scheduled IOP threads and IOP alarms are implemented and tested. Run 18 stayed on the memory card check (MCSERV's GetInfo RPC never completed). libmc is now bound to the runtime's memory card (45 bindings, saves in host files); run 20 on the owner's machine gets past the check up to the 50 Hz / 60 Hz choice. A DualShock 2 is emulated on SIO2 port 1 and DS2O drives it in pressure mode (cloud trace); pressing CONTINUE is still to be checked with the ISO. The menu and the races are not reached yet. Details: [BOOT.md](BOOT.md) §13–14.
 
+Runs 25 to 55 (October 14): a crash of the front-end scripts (a runtime unwinding bug) and the failed profile save (libmc command ordering) are fixed. With `BDR_DETERMINISTIC=1` and a scripted controller, the game goes through the title screen, creates and saves a profile, plays the menu video, enters World Tour (series, event and car select) and loads the first event up to its briefing screen. Remaining: heavily corrupted textures in the menus and in 3D, and speed: about 30–45 VSync/s in the menus, 4 VSync/s once 3D is drawn. Details: [BOOT.md](BOOT.md) §15.
+
 To resume on the machine that has the ISO (the observation variables are described in BOOT.md §10):
 
 ```powershell
