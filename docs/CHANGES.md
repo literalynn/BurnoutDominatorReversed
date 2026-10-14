@@ -2,6 +2,13 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## GS queue and debugging aids (October 14, 2026)
+
+- `gs_cpu_backend.h/.cpp`: CLUT loads, host-to-local and local-to-local transfers, image uploads, TEXFLUSH, framebuffer clears and single-pixel VRAM writes no longer make the submitting thread wait for the raster workers. They are queued with the primitives as serial operations: when the workers reach one, the last to arrive runs it (`std::barrier` completion) while the others wait, so it sees every earlier operation finished and none of the later ones started. A primitive sampling a range written by a queued primitive now queues such a barrier instead of draining. FINISH no longer waits (the game only learns the GS is done; every host read of VRAM still waits). Local-to-host transfers, VRAM reads, snapshots, presentation and reset still drain. The backend destructor drains the queue, so the caller's VRAM holds everything submitted. `GetTransferSnapshot` reports the last requested transfer while workers run. With 8 workers on the intro video: from 25 to 31 VSync/s, game thread waiting on the GS from 42% to about 15–25% of the time.
+- `ps2xTest/src/ps2_gs_tests.cpp`: a scene that uploads a 32-bit texture, samples it, overwrites it, samples it again, then loads an 8-bit texture and its CLUT twice (TEX0 with CLD = 1) between draws must give byte-identical VRAM with 4 workers and with immediate drawing. 454/454 runtime tests pass.
+- `ps2_ipu.cpp`: the output FIFO is a byte vector with a read index instead of a `std::deque<uint8_t>` filled and emptied one byte at a time.
+- `EeScheduler.cpp`: `BDR_DETERMINISTIC=1` lets VBlank, alarms and timers fire on EE cycles alone instead of also waiting for the host clock; idle time is skipped and runs repeat exactly (the guest cycle count at a given VSync is identical from run to run). Game speed is then unrelated to real time. `BDR_WATCH_WORD=0xADDR[:0xVALUE]` checks a guest word after every dispatched function and prints the last 32 dispatched functions when it changes (or becomes VALUE).
+
 ## Performance (October 13, 2026)
 
 - `ps2xRuntime/include/runtime/ps2_wait_stats.h` (new), `EeScheduler.cpp`, `gs_cpu_backend.cpp`, `ps2_runtime.cpp`: each `[status]` line reports the share of wall time the game thread spent waiting since the previous one, by cause (`idle`: no EE thread ready; `pace`: an event due in EE cycles waits for host time; `gs`: waiting for the GS raster workers; `gslock`: GS backend held by the presentation thread), and the VSync rate. Owner's profile in the menus: 41% of the game thread's samples in a Windows wait, cause unknown until now.

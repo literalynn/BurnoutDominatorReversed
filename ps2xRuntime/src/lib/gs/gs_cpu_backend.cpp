@@ -9,6 +9,7 @@
 #include "runtime/ps2_wait_stats.h"
 #include <atomic>
 #include <algorithm>
+#include <barrier>
 #include <cmath>
 #include <condition_variable>
 #include <thread>
@@ -624,9 +625,36 @@ namespace
 
 struct GSCpuBackend::RasterWorkers
 {
+    using SerialOp = std::pair<size_t, std::function<void()>>; // runs before job[first]
+
+    // The last worker to reach a serial operation runs it, then all go on.
+    struct RunSerial
+    {
+        std::atomic<const std::function<void()> *> *op;
+        void operator()() noexcept
+        {
+            const std::function<void()> *current = op->load(std::memory_order_acquire);
+            if (current && *current)
+            {
+                try
+                {
+                    (*current)();
+                }
+                catch (const std::exception &error)
+                {
+                    std::cerr << "[gs] queued operation failed: " << error.what() << std::endl;
+                }
+            }
+        }
+    };
+
     std::vector<std::thread> threads;
     std::vector<std::unique_ptr<GSMem::TexturePageCache>> caches;
     std::vector<GSPrimitiveBatch> job;
+    std::vector<SerialOp> serial;
+    std::vector<SerialOp> pendingSerial; // submitting thread, under the backend mutex
+    std::atomic<const std::function<void()> *> runningSerial{nullptr};
+    std::unique_ptr<std::barrier<RunSerial>> barrier;
     std::mutex mutex;
     std::condition_variable start;
     std::condition_variable done;
@@ -639,6 +667,8 @@ GSCpuBackend::~GSCpuBackend()
 {
     if (!m_workers)
         return;
+    // Queued work still belongs in the caller's VRAM.
+    DrainUnlocked();
     {
         std::lock_guard<std::mutex> lock(m_workers->mutex);
         m_workers->stop = true;
@@ -660,6 +690,8 @@ void GSCpuBackend::QueuePrimitive(const GSPrimitiveBatch &batch)
         const uint32_t workerCount = m_threadCount;
         m_workers = std::make_unique<RasterWorkers>();
         RasterWorkers &workers = *m_workers;
+        workers.barrier = std::make_unique<std::barrier<RasterWorkers::RunSerial>>(
+            static_cast<std::ptrdiff_t>(workerCount), RasterWorkers::RunSerial{&workers.runningSerial});
         for (uint32_t index = 0u; index < workerCount; ++index)
             workers.caches.push_back(std::make_unique<GSMem::TexturePageCache>());
         for (uint32_t index = 0u; index < workerCount; ++index)
@@ -678,8 +710,22 @@ void GSCpuBackend::QueuePrimitive(const GSPrimitiveBatch &batch)
                             return;
                         seen = workers.generation;
                     }
-                    for (const GSPrimitiveBatch &queued : workers.job)
-                        RasterizePrimitive(queued);
+                    size_t nextSerial = 0u;
+                    auto runSerialBefore = [&](size_t position)
+                    {
+                        while (nextSerial < workers.serial.size() && workers.serial[nextSerial].first == position)
+                        {
+                            workers.runningSerial.store(&workers.serial[nextSerial].second, std::memory_order_release);
+                            workers.barrier->arrive_and_wait();
+                            ++nextSerial;
+                        }
+                    };
+                    for (size_t position = 0u; position < workers.job.size(); ++position)
+                    {
+                        runSerialBefore(position);
+                        RasterizePrimitive(workers.job[position]);
+                    }
+                    runSerialBefore(workers.job.size());
                     std::lock_guard<std::mutex> lock(workers.mutex);
                     if (--workers.remaining == 0u)
                         workers.done.notify_all();
@@ -688,19 +734,40 @@ void GSCpuBackend::QueuePrimitive(const GSPrimitiveBatch &batch)
     }
 
     if (readsWrittenRange(m_pendingWrites, batch.state))
-        DrainUnlocked();
+        QueueSerialUnlocked({}); // a barrier: the texture's writers finish first
     m_pending.push_back(batch);
     addWrittenRanges(m_pendingWrites, batch.state);
+    LaunchIfIdleUnlocked();
+}
 
+void GSCpuBackend::LaunchIfIdleUnlocked() const
+{
+    if (!m_workers)
+        return;
+    const size_t queued = m_pending.size() + m_workers->pendingSerial.size();
     bool idle = false;
     {
         std::lock_guard<std::mutex> lock(m_workers->mutex);
         idle = m_workers->remaining == 0u;
     }
-    if (idle && m_pending.size() >= kLaunchPrimitives)
+    if (idle && queued >= kLaunchPrimitives)
         LaunchPendingUnlocked();
-    else if (m_pending.size() >= kMaxPendingPrimitives)
+    else if (queued >= kMaxPendingPrimitives)
         DrainUnlocked();
+}
+
+void GSCpuBackend::QueueSerialUnlocked(std::function<void()> op)
+{
+    if (!m_workers)
+    {
+        if (op)
+            op();
+        return;
+    }
+    m_workers->pendingSerial.emplace_back(m_pending.size(), std::move(op));
+    // Primitives queued after this point see every earlier write done.
+    m_pendingWrites.clear();
+    LaunchIfIdleUnlocked();
 }
 
 // Caller holds m_mutex and the workers are idle.
@@ -710,6 +777,8 @@ void GSCpuBackend::LaunchPendingUnlocked() const
     std::lock_guard<std::mutex> lock(workers.mutex);
     workers.job.swap(m_pending);
     m_pending.clear();
+    workers.serial.swap(workers.pendingSerial);
+    workers.pendingSerial.clear();
     ++workers.generation;
     workers.remaining = static_cast<uint32_t>(workers.threads.size());
     workers.start.notify_all();
@@ -727,7 +796,7 @@ void GSCpuBackend::DrainUnlocked() const
         workers.done.wait(lock, [&workers]() { return workers.remaining == 0u; });
     };
     wait();
-    if (!m_pending.empty())
+    if (!m_pending.empty() || !workers.pendingSerial.empty())
     {
         LaunchPendingUnlocked();
         wait();
@@ -813,8 +882,13 @@ void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
         return;
     }
 
-    DrainUnlocked();
-    LoadClutUnlocked(tex0, texclut);
+    QueueSerialUnlocked([this, tex0, texclut]()
+                        {
+                            // Same uncached-by-worker read path as on the submitting thread.
+                            GSMem::TexturePageCache *const workerCache = t_textureCache;
+                            t_textureCache = nullptr;
+                            LoadClutUnlocked(tex0, texclut);
+                            t_textureCache = workerCache; });
 }
 
 void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
@@ -867,23 +941,37 @@ void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &t
 
 void GSCpuBackend::Flush()
 {
+    // Starts the queued work; Sync waits for it when the caller reads VRAM.
     const auto lock = lockBackend(m_mutex);
-    DrainUnlocked();
+    if (!m_workers || (m_pending.empty() && m_workers->pendingSerial.empty()))
+        return;
+    bool idle = false;
+    {
+        std::lock_guard<std::mutex> workersLock(m_workers->mutex);
+        idle = m_workers->remaining == 0u;
+    }
+    if (idle)
+        LaunchPendingUnlocked();
 }
 
 void GSCpuBackend::TextureFlush()
 {
     const auto lock = lockBackend(m_mutex);
-    DrainUnlocked();
-    m_texturePageCache.Invalidate();
-    if (m_workers)
-        for (const auto &cache : m_workers->caches)
-            cache->Invalidate();
+    QueueSerialUnlocked([this]()
+                        {
+                            m_texturePageCache.Invalidate();
+                            if (m_workers)
+                                for (const auto &cache : m_workers->caches)
+                                    cache->Invalidate(); });
 }
 
-void GSCpuBackend::Sync(GSSyncReason)
+void GSCpuBackend::Sync(GSSyncReason reason)
 {
     const auto lock = lockBackend(m_mutex);
+    // FINISH only tells the game the GS is done; the queue keeps the order of
+    // what follows, and every VRAM read by the host still waits for it.
+    if (reason == GSSyncReason::Finish)
+        return;
     DrainUnlocked();
 }
 
@@ -912,8 +1000,8 @@ uint32_t GSCpuBackend::ReadTextureVramUnlocked(uint32_t psm, uint32_t base, uint
 void GSCpuBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
 {
     const auto lock = lockBackend(m_mutex);
-    DrainUnlocked();
-    WriteVramUnlocked(psm, base, bw, x, y, value);
+    QueueSerialUnlocked([this, psm, base, bw, x, y, value]()
+                        { WriteVramUnlocked(psm, base, bw, x, y, value); });
 }
 
 void GSCpuBackend::WriteVramUnlocked(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
@@ -939,7 +1027,7 @@ void GSCpuBackend::SnapshotVram(std::vector<uint8_t> &out) const
 GSTransferSnapshot GSCpuBackend::GetTransferSnapshot() const
 {
     const auto lock = lockBackend(m_mutex);
-    GSTransferSnapshot result = m_transferState;
+    GSTransferSnapshot result = m_workers ? m_transferRequested : m_transferState;
     result.localToHostPendingBytes = m_localToHostReadPos < m_localToHostBuffer.size()
                                          ? m_localToHostBuffer.size() - m_localToHostReadPos
                                          : 0u;
@@ -1800,7 +1888,24 @@ void GSCpuBackend::DrawLine(const GSPrimitiveBatch &batch)
 void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 {
     const auto lock = lockBackend(m_mutex);
-    DrainUnlocked();
+    m_transferRequested = {};
+    m_transferRequested.x = command.trxpos.dsax;
+    m_transferRequested.y = command.trxpos.dsay;
+    m_transferRequested.totalPixels = static_cast<uint32_t>(command.trxreg.rrw) * static_cast<uint32_t>(command.trxreg.rrh);
+    m_transferRequested.direction = command.direction;
+    if (command.direction == 1u)
+    {
+        // The host reads the transferred pixels: everything queued must be drawn.
+        DrainUnlocked();
+        BeginTransferUnlocked(command);
+        return;
+    }
+    QueueSerialUnlocked([this, command]()
+                        { BeginTransferUnlocked(command); });
+}
+
+void GSCpuBackend::BeginTransferUnlocked(const GSTransferCommand &command)
+{
     m_transfer = command;
     m_transferState.x = command.trxpos.dsax;
     m_transferState.y = command.trxpos.dsay;
@@ -1818,7 +1923,19 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 {
     const auto lock = lockBackend(m_mutex);
-    DrainUnlocked();
+    if (!data || sizeBytes == 0u)
+        return;
+    if (!m_workers)
+    {
+        UploadImageUnlocked(data, sizeBytes);
+        return;
+    }
+    QueueSerialUnlocked([this, bytes = std::vector<uint8_t>(data, data + sizeBytes)]()
+                        { UploadImageUnlocked(bytes.data(), static_cast<uint32_t>(bytes.size())); });
+}
+
+void GSCpuBackend::UploadImageUnlocked(const uint8_t *data, uint32_t sizeBytes)
+{
     if (!data || sizeBytes == 0u || !m_vram || m_transferState.direction != 0u)
         return;
     if (m_transfer.trxreg.rrw == 0u || m_transfer.trxreg.rrh == 0u || m_transferState.totalPixels == 0u)
@@ -2048,7 +2165,17 @@ uint32_t GSCpuBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
 bool GSCpuBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
 {
     const auto lock = lockBackend(m_mutex);
-    DrainUnlocked();
+    const uint32_t psm = context.frame.psm;
+    if (!m_vram || context.frame.fbw == 0u ||
+        (psm != GS_PSM_CT32 && psm != GS_PSM_CT24 && psm != GS_PSM_CT16 && psm != GS_PSM_CT16S))
+        return false;
+    QueueSerialUnlocked([this, context, rgba]()
+                        { ClearFramebufferUnlocked(context, rgba); });
+    return true;
+}
+
+bool GSCpuBackend::ClearFramebufferUnlocked(const GSContext &context, uint32_t rgba)
+{
     if (!m_vram || context.frame.fbw == 0u)
         return false;
 

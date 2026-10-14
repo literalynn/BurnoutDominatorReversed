@@ -14,6 +14,84 @@
 
 namespace
 {
+    // BDR_WATCH_WORD=0xADDR[:0xVALUE]: after every dispatched guest function,
+    // compare the guest word at ADDR (with VALUE: report when it becomes
+    // VALUE; without: report every change) and print the functions that ran.
+    struct WordWatch
+    {
+        bool enabled = false;
+        bool matchValue = false;
+        uint32_t address = 0u;
+        uint32_t value = 0u;
+        uint32_t last = 0u;
+        uint32_t reports = 0u;
+        uint32_t history[32] = {};
+        uint32_t next = 0u;
+    };
+
+    WordWatch &wordWatch()
+    {
+        static WordWatch watch = []
+        {
+            WordWatch parsed;
+            if (const char *text = std::getenv("BDR_WATCH_WORD"))
+            {
+                char *end = nullptr;
+                parsed.address = static_cast<uint32_t>(std::strtoul(text, &end, 0)) & 0x01FFFFFCu;
+                parsed.enabled = end != text;
+                if (end && *end == ':')
+                {
+                    parsed.value = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 0));
+                    parsed.matchValue = true;
+                }
+            }
+            return parsed;
+        }();
+        return watch;
+    }
+
+    // BDR_DETERMINISTIC=1: deadlines (VBlank, alarms, timers) fire on EE cycles
+    // alone, without waiting for the host clock. Runs repeat exactly and idle
+    // time is skipped; game speed is no longer tied to real time.
+    bool deterministicTiming()
+    {
+        static const bool enabled = []
+        {
+            const char *text = std::getenv("BDR_DETERMINISTIC");
+            return text && *text && *text != '0';
+        }();
+        return enabled;
+    }
+
+    void checkWordWatch(const uint8_t *rdram, uint32_t dispatchedPc, const R5900Context &context)
+    {
+        WordWatch &watch = wordWatch();
+        watch.history[watch.next++ % 32u] = dispatchedPc;
+        uint32_t word = 0u;
+        std::memcpy(&word, rdram + watch.address, sizeof(word));
+        const bool report = watch.matchValue ? (word == watch.value && watch.last != watch.value) : word != watch.last;
+        watch.last = word;
+        if (!report || (watch.matchValue && watch.reports >= 64u))
+        {
+            return;
+        }
+        ++watch.reports;
+        if (!watch.matchValue && watch.reports > 64u)
+        {
+            // Change mode: one short line per change after the first 64 detailed ones.
+            std::cerr << "[watch] [0x" << std::hex << watch.address << "]=0x" << word << " after 0x" << dispatchedPc
+                      << " sp=0x" << getRegU32(&context, 29) << std::dec << std::endl;
+            return;
+        }
+        std::cerr << "[watch] [0x" << std::hex << watch.address << "]=0x" << word << " after 0x" << dispatchedPc
+                  << " pc=0x" << context.pc << " ra=0x" << getRegU32(&context, 31) << " sp=0x" << getRegU32(&context, 29)
+                  << " a0=0x" << getRegU32(&context, 4) << " a1=0x" << getRegU32(&context, 5) << " history=";
+        for (uint32_t i = 0; i < 32u; ++i)
+        {
+            std::cerr << " 0x" << watch.history[(watch.next + i) % 32u];
+        }
+        std::cerr << std::dec << std::endl;
+    }
     constexpr int KE_OK = 0;
     constexpr int KE_ERROR = -1;
     constexpr int KE_ILLEGAL_PRIORITY = -403;
@@ -305,9 +383,14 @@ void EeScheduler::run()
         {
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
+            const uint32_t dispatchedPc = context.pc;
             function(m_rdram, &context, &m_runtime);
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
+            if (wordWatch().enabled)
+            {
+                checkWordWatch(m_rdram, dispatchedPc, context);
+            }
         }
         catch (const EeDispatcherTransfer &)
         {
@@ -1924,7 +2007,7 @@ void EeScheduler::processDueDeadlines()
                 return;
             }
 
-            if (now < pacingDeadline)
+            if (!deterministicTiming() && now < pacingDeadline)
             {
                 ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::EePacing);
                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
@@ -1941,7 +2024,7 @@ void EeScheduler::processDueDeadlines()
             auto firstFuture = std::partition(m_deadlines.begin(), m_deadlines.end(),
                                               [this, pacedNow](const ScheduledEvent &item)
                                               { return item.deadlineCycle <= m_eeCycle &&
-                                                       item.hostDeadline <= pacedNow; });
+                                                       (deterministicTiming() || item.hostDeadline <= pacedNow); });
             due.insert(due.end(),
                        std::make_move_iterator(m_deadlines.begin()),
                        std::make_move_iterator(firstFuture));
@@ -2168,9 +2251,11 @@ void EeScheduler::waitForEvent()
         }
     }
 
-    const bool signaled = m_eventCv.wait_until(lock, hostDeadline, [this]()
-                                               { return !m_events.empty() ||
-                                                        m_stopRequested.load(std::memory_order_acquire); });
+    const bool signaled = deterministicTiming()
+                              ? (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
+                              : m_eventCv.wait_until(lock, hostDeadline, [this]()
+                                                     { return !m_events.empty() ||
+                                                              m_stopRequested.load(std::memory_order_acquire); });
     if (!signaled)
     {
         const uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;

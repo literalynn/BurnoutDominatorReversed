@@ -10,6 +10,42 @@
 
 namespace
 {
+    // Byte FIFO for the IPU output: appended in macroblocks, consumed in qwords.
+    class ByteFifo
+    {
+    public:
+        size_t size() const { return m_bytes.size() - m_head; }
+        bool empty() const { return size() == 0u; }
+        void clear()
+        {
+            m_bytes.clear();
+            m_head = 0u;
+        }
+        void push(const uint8_t *data, size_t count)
+        {
+            if (m_head != 0u && m_head >= m_bytes.size() / 2u)
+            {
+                m_bytes.erase(m_bytes.begin(), m_bytes.begin() + static_cast<std::ptrdiff_t>(m_head));
+                m_head = 0u;
+            }
+            m_bytes.insert(m_bytes.end(), data, data + count);
+        }
+        // Copies min(count, size()) bytes out and zero-fills the rest.
+        void pop(uint8_t *out, size_t count)
+        {
+            const size_t taken = std::min(count, size());
+            std::memcpy(out, m_bytes.data() + m_head, taken);
+            std::memset(out + taken, 0, count - taken);
+            m_head += taken;
+            if (m_head == m_bytes.size())
+                clear();
+        }
+
+    private:
+        std::vector<uint8_t> m_bytes;
+        size_t m_head = 0u;
+    };
+
     using Qword = std::array<uint8_t, 16>;
 
     // ------------------------------------------------------------------ VLC tables
@@ -415,7 +451,7 @@ struct Ps2Ipu::State
     std::vector<Qword> delivered;
 
     // Output FIFO, drained by DMA channel 3 or reads of 0x10007000.
-    std::deque<uint8_t> output;
+    ByteFifo output;
 
     // Decoder state.
     uint8_t intraMatrix[64] = {};    // as loaded by SETIQ (zigzag order)
@@ -575,11 +611,7 @@ struct Ps2Ipu::State
         uint8_t qword[16];
         while (output.size() >= 16u && (qwc & 0xFFFFu) != 0u)
         {
-            for (uint8_t &byte : qword)
-            {
-                byte = output.front();
-                output.pop_front();
-            }
+            output.pop(qword, sizeof(qword));
             bus.writeMemory(madr, qword, 16u);
             madr += 16u;
             qwc = (qwc & ~0xFFFFu) | ((qwc - 1u) & 0xFFFFu);
@@ -1160,11 +1192,11 @@ struct Ps2Ipu::State
             {
                 uint8_t packed[512];
                 packToRgb16(rgba, dither, packed);
-                output.insert(output.end(), std::begin(packed), std::end(packed));
+                output.push(packed, sizeof(packed));
             }
             else
             {
-                output.insert(output.end(), std::begin(rgba), std::end(rgba));
+                output.push(rgba, sizeof(rgba));
             }
             ++macroblocksDone;
             drainOutput();
@@ -1192,7 +1224,7 @@ struct Ps2Ipu::State
             {
                 uint8_t packed[512];
                 packToRgb16(rgba, dither, packed);
-                output.insert(output.end(), std::begin(packed), std::end(packed));
+                output.push(packed, sizeof(packed));
             }
             else
             {
@@ -1217,7 +1249,7 @@ struct Ps2Ipu::State
                     }
                     indices[i >> 1] |= static_cast<uint8_t>(best << ((i & 1) * 4));
                 }
-                output.insert(output.end(), std::begin(indices), std::end(indices));
+                output.push(indices, sizeof(indices));
             }
             ++macroblocksDone;
             drainOutput();
@@ -1260,7 +1292,7 @@ struct Ps2Ipu::State
                         commit();
                     if (result != Result::Done)
                         break;
-                    output.insert(output.end(), macroblock.begin(), macroblock.end());
+                    output.push(macroblock.data(), macroblock.size());
                     blockDecoded = true;
                 }
                 drainOutput();
@@ -1457,16 +1489,7 @@ void Ps2Ipu::write32(uint32_t address, uint32_t value)
 void Ps2Ipu::readOutFifo(uint8_t qword[16])
 {
     State &state = *m_state;
-    for (int i = 0; i < 16; ++i)
-    {
-        if (state.output.empty())
-        {
-            qword[i] = 0u;
-            continue;
-        }
-        qword[i] = state.output.front();
-        state.output.pop_front();
-    }
+    state.output.pop(qword, 16u);
     state.process();
 }
 

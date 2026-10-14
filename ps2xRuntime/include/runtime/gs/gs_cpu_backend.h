@@ -4,6 +4,7 @@
 #include "runtime/gs/gs_texture_page_cache.h"
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -54,6 +55,14 @@ private:
     void QueuePrimitive(const GSPrimitiveBatch &batch);
     void LaunchPendingUnlocked() const;
     void DrainUnlocked() const;
+    // Runs `op` once every operation queued before it has finished and before
+    // any queued after it starts: on one raster worker while the others wait,
+    // or at once without workers. The submitting thread does not wait.
+    void QueueSerialUnlocked(std::function<void()> op);
+    void LaunchIfIdleUnlocked() const;
+    void BeginTransferUnlocked(const GSTransferCommand &command);
+    void UploadImageUnlocked(const uint8_t *data, uint32_t sizeBytes);
+    bool ClearFramebufferUnlocked(const GSContext &context, uint32_t rgba);
     void DrawSprite(const GSPrimitiveBatch &batch);
     void DrawTriangle(const GSPrimitiveBatch &batch);
     void DrawLine(const GSPrimitiveBatch &batch);
@@ -96,6 +105,9 @@ private:
 
     GSTransferCommand m_transfer{};
     GSTransferSnapshot m_transferState{};
+    // m_transferState as of the last BeginTransfer, for the submitting thread:
+    // queued transfers update m_transferState on a raster worker.
+    GSTransferSnapshot m_transferRequested{};
     std::vector<uint8_t> m_localToHostBuffer;
     size_t m_localToHostReadPos = 0;
 };

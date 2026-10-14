@@ -491,6 +491,106 @@ namespace
         }
         return vram;
     }
+
+    // Uploads, CLUT loads and TEXFLUSH between draws that sample what was just
+    // uploaded, then the same upload area overwritten and sampled again.
+    std::vector<uint8_t> renderUploadScene(const char *threads)
+    {
+        const char *previous = std::getenv("BDR_GS_THREADS");
+        const std::string restore = previous ? previous : "1";
+        setGsThreads(threads);
+        std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+        {
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+            setGsThreads(restore.c_str());
+
+            constexpr uint64_t kScreen = (0ull << 0) | (255ull << 16) | (0ull << 32) | (223ull << 48);
+            gs.writeRegister(GS_REG_FRAME_1, (0ull << 0) | (4ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
+            gs.writeRegister(GS_REG_ZBUF_1, 100ull);
+            gs.writeRegister(GS_REG_SCISSOR_1, kScreen);
+            gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
+            gs.writeRegister(GS_REG_TEST_1, 0x30000ull); // ZTE, ALWAYS
+
+            uint32_t seed = 777u;
+            auto next = [&seed](uint32_t range)
+            {
+                seed = seed * 1103515245u + 12345u;
+                return (seed >> 8) % range;
+            };
+            auto upload = [&](uint32_t dbp, uint32_t psm, uint32_t width, uint32_t height, uint32_t pixelBytes, uint32_t salt)
+            {
+                gs.writeRegister(GS_REG_BITBLTBUF, (static_cast<uint64_t>(dbp) << 32) | (1ull << 48) |
+                                                       (static_cast<uint64_t>(psm) << 56));
+                gs.writeRegister(GS_REG_TRXPOS, 0ull);
+                gs.writeRegister(GS_REG_TRXREG, static_cast<uint64_t>(width) | (static_cast<uint64_t>(height) << 32));
+                gs.writeRegister(GS_REG_TRXDIR, 0ull);
+                const uint32_t bytes = width * height * pixelBytes;
+                for (uint32_t offset = 0; offset < bytes; offset += 8u)
+                {
+                    uint64_t word = 0u;
+                    for (uint32_t i = 0; i < 8u; ++i)
+                        word |= static_cast<uint64_t>((offset + i) * 37u + salt) << (i * 8u);
+                    gs.writeRegister(GS_REG_HWREG, word);
+                }
+            };
+            auto triangles = [&](int count)
+            {
+                for (int triangle = 0; triangle < count; ++triangle)
+                {
+                    gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_TRIANGLE) | (1ull << 3));
+                    for (int vertex = 0; vertex < 3; ++vertex)
+                    {
+                        gs.writeRegister(GS_REG_RGBAQ, next(0xFFFFFFFFu) | (1ull << 31));
+                        gs.writeRegister(GS_REG_XYZ2, (next(256u) << 4) | ((next(224u) << 4) << 16) | (1ull << 32));
+                    }
+                }
+            };
+            auto sprites = [&](int count)
+            {
+                for (int sprite = 0; sprite < count; ++sprite)
+                {
+                    gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 4) | (1ull << 8));
+                    const uint64_t x = next(224u);
+                    const uint64_t y = next(192u);
+                    gs.writeRegister(GS_REG_UV, 0ull);
+                    gs.writeRegister(GS_REG_XYZ2, (x << 4) | ((y << 4) << 16) | (2ull << 32));
+                    gs.writeRegister(GS_REG_UV, (16ull << 4) | ((16ull << 4) << 16));
+                    gs.writeRegister(GS_REG_XYZ2, ((x + 32u) << 4) | (((y + 32u) << 4) << 16) | (2ull << 32));
+                }
+            };
+
+            // 32-bit texture uploaded after some draws, sampled, then overwritten and sampled again.
+            triangles(150);
+            upload(3000u, GS_PSM_CT32, 16u, 16u, 4u, 1u);
+            gs.writeRegister(GS_REG_TEXFLUSH, 0ull);
+            gs.writeRegister(GS_REG_TEX0_1, 3000ull | (1ull << 14) | (static_cast<uint64_t>(GS_PSM_CT32) << 20) |
+                                                (4ull << 26) | (4ull << 30) | (1ull << 34) | (1ull << 35));
+            sprites(20);
+            triangles(50);
+            upload(3000u, GS_PSM_CT32, 16u, 16u, 4u, 99u);
+            gs.writeRegister(GS_REG_TEXFLUSH, 0ull);
+            sprites(20);
+
+            // 8-bit texture with a 256-entry CLUT loaded through TEX0 (CLD = 1).
+            upload(3100u, GS_PSM_T8, 16u, 16u, 1u, 5u);
+            upload(3200u, GS_PSM_CT32, 16u, 16u, 4u, 7u);
+            gs.writeRegister(GS_REG_TEXFLUSH, 0ull);
+            gs.writeRegister(GS_REG_TEX0_1, 3100ull | (1ull << 14) | (static_cast<uint64_t>(GS_PSM_T8) << 20) |
+                                                (4ull << 26) | (4ull << 30) | (1ull << 34) | (1ull << 35) |
+                                                (3200ull << 37) | (1ull << 61));
+            sprites(20);
+            triangles(50);
+            upload(3200u, GS_PSM_CT32, 16u, 16u, 4u, 11u);
+            gs.writeRegister(GS_REG_TEXFLUSH, 0ull);
+            gs.writeRegister(GS_REG_TEX0_1, 3100ull | (1ull << 14) | (static_cast<uint64_t>(GS_PSM_T8) << 20) |
+                                                (4ull << 26) | (4ull << 30) | (1ull << 34) | (1ull << 35) |
+                                                (3200ull << 37) | (1ull << 61));
+            sprites(20);
+            gs.writeRegister(GS_REG_FINISH, 0ull);
+        }
+        return vram;
+    }
 }
 
 void register_ps2_gs_tests()
@@ -505,6 +605,17 @@ void register_ps2_gs_tests()
             for (const uint8_t byte : immediate)
                 written += byte != 0u ? 1u : 0u;
             t.IsTrue(written > 100000u, "the scene must cover a large part of the frame");
+            t.IsTrue(immediate == threaded, "four raster workers must produce byte-identical VRAM");
+        });
+
+        tc.Run("GS raster workers keep uploads, CLUT loads and TEXFLUSH in order", [](TestCase &t)
+        {
+            const std::vector<uint8_t> immediate = renderUploadScene("1");
+            const std::vector<uint8_t> threaded = renderUploadScene("4");
+            size_t written = 0u;
+            for (const uint8_t byte : immediate)
+                written += byte != 0u ? 1u : 0u;
+            t.IsTrue(written > 50000u, "the scene must cover a large part of the frame");
             t.IsTrue(immediate == threaded, "four raster workers must produce byte-identical VRAM");
         });
 
