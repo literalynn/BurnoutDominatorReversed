@@ -58,6 +58,46 @@ HANDLE openGameThread() {
     CloseHandle(snapshot);
     return found;
 }
+
+// Prints the call stack of a thread, suspended while it is walked.
+void printStack(HANDLE thread) {
+    HANDLE process = GetCurrentProcess();
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    if (!SymInitialize(process, nullptr, TRUE))
+        return;
+    if (SuspendThread(thread) != static_cast<DWORD>(-1)) {
+        CONTEXT context{};
+        context.ContextFlags = CONTEXT_FULL;
+        if (GetThreadContext(thread, &context)) {
+            STACKFRAME64 frame{};
+            frame.AddrPC.Offset = context.Rip;
+            frame.AddrPC.Mode = AddrModeFlat;
+            frame.AddrFrame.Offset = context.Rbp;
+            frame.AddrFrame.Mode = AddrModeFlat;
+            frame.AddrStack.Offset = context.Rsp;
+            frame.AddrStack.Mode = AddrModeFlat;
+            alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 512];
+            for (int depth = 0; depth < 48 && StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread, &frame, &context, nullptr,
+                                                          SymFunctionTableAccess64, SymGetModuleBase64, nullptr); ++depth) {
+                auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+                symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+                symbol->MaxNameLen = 511;
+                DWORD64 displacement = 0;
+                const bool named = SymFromAddr(process, frame.AddrPC.Offset, &displacement, symbol) != FALSE;
+                IMAGEHLP_LINE64 line{};
+                line.SizeOfStruct = sizeof(line);
+                DWORD lineDisplacement = 0;
+                const bool lined = SymGetLineFromAddr64(process, frame.AddrPC.Offset, &lineDisplacement, &line) != FALSE;
+                std::printf("[stack] %2d %s+0x%llx  %s:%lu\n", depth, named ? symbol->Name : "?",
+                            static_cast<unsigned long long>(displacement), lined ? line.FileName : "?",
+                            lined ? static_cast<unsigned long>(line.LineNumber) : 0ul);
+            }
+        }
+        ResumeThread(thread);
+    }
+    std::fflush(stdout);
+    SymCleanup(process);
+}
 } // namespace
 #endif
 
@@ -76,7 +116,7 @@ Sampler::Sampler() {
     state_ = std::make_unique<State>();
     state_->samples.reserve(kMaxSamples);
     State* state = state_.get();
-    state->worker = std::thread([state] {
+    state->worker = std::thread([this, state] {
         HANDLE target = nullptr;
         while (!state->stop.load(std::memory_order_acquire) && !(target = openGameThread()))
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -90,7 +130,13 @@ Sampler::Sampler() {
         }
         HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                               TIMER_ALL_ACCESS);
-        while (!state->stop.load(std::memory_order_acquire) && state->samples.size() < kMaxSamples) {
+        // BDR_PROFILE_SECONDS=N: sample for N seconds, then print the report and
+        // the thread's call stack from here, even if the thread never returns.
+        const char* seconds = std::getenv("BDR_PROFILE_SECONDS");
+        const auto sampleUntil = seconds ? std::chrono::steady_clock::now() + std::chrono::seconds(std::atoi(seconds))
+                                         : std::chrono::steady_clock::time_point::max();
+        while (!state->stop.load(std::memory_order_acquire) && state->samples.size() < kMaxSamples &&
+               std::chrono::steady_clock::now() < sampleUntil) {
             if (timer) {
                 LARGE_INTEGER due;
                 due.QuadPart = -10000; // 1 ms
@@ -113,6 +159,10 @@ Sampler::Sampler() {
         }
         if (timer)
             CloseHandle(timer);
+        if (seconds) {
+            printStack(target);
+            report();
+        }
         CloseHandle(target);
     });
 #else

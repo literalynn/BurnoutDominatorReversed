@@ -13,6 +13,12 @@ public:
     virtual void Initialize(uint8_t *vram, uint32_t vramSize) = 0;
     virtual void Reset() = 0;
 
+    // A backend that decodes GIF packets and GS registers itself (paraLLEl-GS)
+    // receives them unparsed; the frontend then skips its own decoding.
+    virtual bool UsesRawCommands() const { return false; }
+    virtual void ProcessGIF(uint32_t path, const uint8_t *data, uint32_t sizeBytes) { (void)path, (void)data, (void)sizeBytes; }
+    virtual void WriteRegisterRaw(uint8_t addr, uint64_t value) { (void)addr, (void)value; }
+
     virtual void Submit(const GSPrimitiveBatch &batch) = 0;
     virtual void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut) = 0;
 

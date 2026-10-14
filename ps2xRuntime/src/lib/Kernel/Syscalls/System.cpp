@@ -17,6 +17,13 @@ namespace ps2_syscalls
                 ((static_cast<uint64_t>(frameMode) & 0x1ull) << 1);
 
             gs.smode2 = smode2;
+            // As the BIOS does, SMODE1 gets the colour system (CMOD: 2 = NTSC,
+            // 3 = PAL) and the line clock (LC); paraLLEl-GS scans out from them.
+            // From upstream PS2Recomp pull request #285.
+            const uint64_t cmod = videoMode == 3 ? 3u : videoMode == 2 ? 2u : 0u;
+            const uint64_t lc = (videoMode == 0x51 || videoMode == 0x52) ? 22u :
+                                (videoMode >= 0x1a && videoMode <= 0x4a) ? 15u : 32u;
+            gs.smode1 = (gs.smode1 & ~((127ull << 3) | (3ull << 13))) | (lc << 3) | (cmod << 13);
             runtime->eeScheduler().setPalVideoTiming(videoMode == 3);
 
             // Keep CRT1 enabled after the BIOS syscall selects a display mode.

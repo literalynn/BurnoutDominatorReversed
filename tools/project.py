@@ -258,6 +258,10 @@ def configure(args) -> None:
                # single step; keep it for distribution builds only.
                "-DPS2X_ENABLE_LTO=" + ("ON" if args.lto else "OFF"),
                "-DPS2X_SHOW_WINDOWS_CONSOLE=ON"]
+    # paraLLEl-GS (Vulkan) for the game; the CPU rasterizer stays as the
+    # run-time fallback and for the tests.
+    gs_backend = "PARALLEL_GS" if args.game and args.gs == "parallel" else "CPU"
+    command.append("-DPS2X_GS_BACKEND=" + gs_backend)
     command.append("-DBDR_GENERATED_DIR=" + GENERATED.as_posix())
     # VU1 microprograms recorded by `run --vu-capture` are compiled to C++ with
     # the runtime (tools/compile_vu_programs.py); without them the VU1
@@ -271,7 +275,7 @@ def configure(args) -> None:
         command += ["-DCMAKE_C_FLAGS=-msse4.1", "-DCMAKE_CXX_FLAGS=-msse4.1"]
     # Optional offline dependency cache: <work>/deps-src/<name>-src.
     deps = WORK / "deps-src"
-    for name in ["elfio", "toml11", "fmt", "libdwarf", "rabbitizer", "nlohmann_json", "raylib"]:
+    for name in ["elfio", "toml11", "fmt", "libdwarf", "rabbitizer", "nlohmann_json", "raylib", "parallel_gs"]:
         if (deps / f"{name}-src").is_dir():
             command.append(f"-DFETCHCONTENT_SOURCE_DIR_{name.upper()}={(deps / f'{name}-src').as_posix()}")
     if args.generator:
@@ -425,6 +429,8 @@ def main() -> int:
             p.add_argument("--arch")
             p.add_argument("--no-ffmpeg", action="store_true", help="Diagnostic build only; video becomes stub frames")
             p.add_argument("--lto", action="store_true", help="Whole-program optimization (slow link; distribution builds)")
+            p.add_argument("--gs", choices=["parallel", "cpu"], default="parallel",
+                           help="GS backend of the game: paraLLEl-GS on Vulkan (default) or the CPU rasterizer")
         else:
             p.add_argument("--jobs", default=4, type=int)
         p.set_defaults(func=function)

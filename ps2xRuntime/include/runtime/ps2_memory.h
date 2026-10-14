@@ -318,6 +318,10 @@ public:
     using GifPacketCallback = std::function<void(const uint8_t *, uint32_t)>;
     void setGifPacketCallback(GifPacketCallback cb) { m_gifPacketCallback = std::move(cb); }
     void setGifArbiter(GifArbiter *arbiter) { m_gifArbiter = arbiter; }
+    // True when the GS keeps each GIF path's tag state across packets, as the
+    // hardware does (paraLLEl-GS): VIF1 DIRECT payloads then go to PATH2 as
+    // they are, without re-wrapping an image that continues in a later DIRECT.
+    void setGifPathsKeepTagState(bool keep) { m_gifPathsKeepTagState = keep; }
 
     using Vu1MscalCallback = std::function<void(uint32_t startPC, uint32_t top, uint32_t itop)>;
     void setVu1MscalCallback(Vu1MscalCallback cb) { m_vu1MscalCallback = std::move(cb); }
@@ -411,6 +415,7 @@ public:
     bool m_path3Masked = false;
     uint32_t m_vif1PendingPath2ImageQwc = 0u;
     bool m_vif1PendingPath2DirectHl = false;
+    bool m_gifPathsKeepTagState = false;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
     struct PendingTransfer

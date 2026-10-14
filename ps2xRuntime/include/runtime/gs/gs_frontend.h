@@ -106,7 +106,9 @@ public:
     void reset();
     void setRasterBackend(std::unique_ptr<GSRasterBackend> backend);
 
-    void processGIFPacket(const uint8_t *data, uint32_t sizeBytes);
+    // path: 1 = VU1 XGKICK, 2 = VIF1, 3 = GIF DMA; a raw backend keeps one GIF tag state per path.
+    void processGIFPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t path = 3);
+    bool usesRawCommands() const;
     bool processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes);
     void uploadImageNative(uint64_t bitbltbuf,
                            uint64_t trxpos,

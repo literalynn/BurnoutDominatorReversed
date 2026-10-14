@@ -4,6 +4,9 @@
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
 #include "runtime/gs/gs_frontend.h"
+#ifdef PS2X_GS_PARALLEL
+#include "runtime/gs/gs_parallel_backend.h"
+#endif
 #include "runtime/ee_scheduler.h"
 #include "runtime/gs/ps2_gs_memory.h"
 #include "runtime/gs/ps2_gs_psmct32.h"
@@ -1262,6 +1265,268 @@ void register_ps2_gs_tests()
             t.Equals(dstPixel, static_cast<uint32_t>(kSourceColor),
                      "CT32 primitives should land in the same local-memory layout that later CT32 texture sampling expects");
         });
+
+#ifdef PS2X_GS_PARALLEL
+        // BDR_PGS_REPLAY=file (recorded with BDR_PGS_RECORD): feeds the same GS
+        // input to the CPU rasterizer and to paraLLEl-GS and reports, at each
+        // presentation, the 8 KiB pages whose contents differ. A debugging aid;
+        // without the variable it does nothing.
+        tc.Run("paraLLEl-GS replay matches the CPU rasterizer", [](TestCase &t)
+        {
+            const char *path = std::getenv("BDR_PGS_REPLAY");
+            if (!path)
+                return;
+            FILE *file = std::fopen(path, "rb");
+            t.IsTrue(file != nullptr, "replay file opens");
+            if (!file)
+                return;
+            GSRegisters cpuRegs{}, gpuRegs{};
+            std::vector<uint8_t> cpuVram(PS2_GS_VRAM_SIZE, 0u), gpuVram;
+            GS cpu;
+            std::unique_ptr<GSRasterBackend> gpu = CreateParallelGSBackend(gpuRegs);
+            bool cpuReady = false;
+            uint32_t presents = 0, reported = 0;
+            const uint32_t limit = std::getenv("BDR_PGS_REPLAY_PRESENTS") ? std::atoi(std::getenv("BDR_PGS_REPLAY_PRESENTS")) : 100000u;
+            std::vector<uint8_t> data, initialVram;
+            uint64_t records = 0;
+            for (;;)
+            {
+                char kind = 0;
+                uint32_t id = 0, size = 0;
+                if (std::fread(&kind, 1, 1, file) != 1 || std::fread(&id, 4, 1, file) != 1 || std::fread(&size, 4, 1, file) != 1)
+                    break;
+                data.resize(size);
+                if (size && std::fread(data.data(), 1, size, file) != size)
+                    break;
+                ++records;
+                switch (kind)
+                {
+                case 'I':
+                    initialVram = data;
+                    std::memcpy(cpuVram.data(), data.data(), std::min<size_t>(size, cpuVram.size()));
+                    cpu.init(cpuVram.data(), static_cast<uint32_t>(cpuVram.size()), &cpuRegs);
+                    cpuReady = true;
+                    gpu->Initialize(data.data(), size);
+                    break;
+                case 'G':
+                    cpu.processGIFPacket(data.data(), size, id);
+                    gpu->ProcessGIF(id, data.data(), size);
+                    break;
+                case 'R':
+                {
+                    uint64_t value = 0;
+                    std::memcpy(&value, data.data(), 8);
+                    cpu.writeRegister(static_cast<uint8_t>(id), value);
+                    gpu->WriteRegisterRaw(static_cast<uint8_t>(id), value);
+                    break;
+                }
+                case 'U':
+                    gpu->UploadImage(data.data(), size);
+                    break;
+                case 'P':
+                {
+                    ++presents;
+                    if (!cpuReady)
+                        break;
+                    gpu->Flush();
+                    gpu->SnapshotVram(gpuVram);
+                    std::string pages;
+                    uint32_t differing = 0;
+                    for (uint32_t page = 0; page < 512u; ++page)
+                    {
+                        uint32_t bytes = 0;
+                        for (uint32_t i = page * 8192u; i < (page + 1u) * 8192u; ++i)
+                            bytes += cpuVram[i] != gpuVram[i] ? 1u : 0u;
+                        if (bytes > 64u)
+                        {
+                            ++differing;
+                            if (differing <= 12u)
+                                pages += " " + std::to_string(page) + ":" + std::to_string(bytes);
+                        }
+                    }
+                    if (const char *dir = std::getenv("BDR_PGS_REPLAY_DUMP"); dir && presents <= 16u)
+                    {
+                        // The DISPFB1 buffer of both VRAM images, side by side (CPU left).
+                        GSPresentationRequest request{};
+                        std::memcpy(&request, data.data(), std::min<size_t>(size, sizeof(request)));
+                        const uint32_t fbp = uint32_t(request.dispfb1 & 0x1ffu), fbw = uint32_t((request.dispfb1 >> 9) & 0x3fu);
+                        const uint32_t psm = uint32_t((request.dispfb1 >> 15) & 0x1fu);
+                        const auto reader = psm == GS_PSM_CT16S ? GSMem::ReadCT16S : psm == GS_PSM_CT16 ? GSMem::ReadCT16 : GSMem::ReadCT32;
+                        char name[512];
+                        std::snprintf(name, sizeof(name), "%s/replay_%03u.ppm", dir, presents);
+                        if (FILE *out = std::fopen(name, "wb"))
+                        {
+                            std::fprintf(out, "P6\n1280 512\n255\n");
+                            for (uint32_t y = 0; y < 512u; ++y)
+                                for (int side = 0; side < 2; ++side)
+                                    for (uint32_t x = 0; x < 640u; ++x)
+                                    {
+                                        uint32_t v = reader(side ? gpuVram.data() : cpuVram.data(), fbp * 32u, fbw, x, y);
+                                        if (psm == GS_PSM_CT16S || psm == GS_PSM_CT16)
+                                            v = ((v & 0x1f) << 3) | (((v >> 5) & 0x1f) << 11) | (((v >> 10) & 0x1f) << 19);
+                                        const unsigned char rgb[3] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16)};
+                                        std::fwrite(rgb, 1, 3, out);
+                                    }
+                            std::fclose(out);
+                        }
+                    }
+                    if (differing && reported < 30u)
+                    {
+                        ++reported;
+                        size_t changedFromInitial = 0, nonZeroInitial = 0;
+                        for (size_t i = 0; i < gpuVram.size() && i < initialVram.size(); ++i)
+                        {
+                            changedFromInitial += gpuVram[i] != initialVram[i] ? 1u : 0u;
+                            nonZeroInitial += initialVram[i] != 0 ? 1u : 0u;
+                        }
+                        std::printf("[replay] present %u record %llu: %u pages differ%s; GPU bytes changed since start %zu, nonzero at start %zu\n",
+                                    presents, static_cast<unsigned long long>(records), differing, pages.c_str(),
+                                    changedFromInitial, nonZeroInitial);
+                    }
+                    break;
+                }
+                default:
+                    break;
+                }
+                // BDR_PGS_REPLAY_FIRST=1: stop at the first record after which the
+                // two VRAM images differ, and print it.
+                if (cpuReady && kind != 'P' && std::getenv("BDR_PGS_REPLAY_FIRST"))
+                {
+                    gpu->Flush();
+                    gpu->SnapshotVram(gpuVram);
+                    size_t first = cpuVram.size(), count = 0;
+                    for (size_t i = 0; i < cpuVram.size(); ++i)
+                        if (cpuVram[i] != gpuVram[i])
+                        {
+                            first = std::min(first, i);
+                            ++count;
+                        }
+                    if (count > static_cast<size_t>(std::atoll(std::getenv("BDR_PGS_REPLAY_FIRST"))))
+                    {
+                        std::printf("[replay] first divergence after record %llu kind %c id %u size %u: %zu bytes, first at 0x%zx\n",
+                                    static_cast<unsigned long long>(records), kind, id, size, count, first);
+                        // BDR_PGS_REPLAY_DUMPFB=fbp,fbw,psm: that buffer of both sides (CPU left) as a PPM.
+                        if (const char *fb = std::getenv("BDR_PGS_REPLAY_DUMPFB"))
+                        {
+                            unsigned fbp = 0, fbw = 0, psm = 0;
+                            std::sscanf(fb, "%u,%u,%u", &fbp, &fbw, &psm);
+                            const auto reader = psm == GS_PSM_CT16S ? GSMem::ReadCT16S : psm == GS_PSM_CT16 ? GSMem::ReadCT16 : GSMem::ReadCT32;
+                            if (FILE *out = std::fopen("replay_divergence.ppm", "wb"))
+                            {
+                                const uint32_t w = fbw * 64u;
+                                std::fprintf(out, "P6\n%u 512\n255\n", w * 2u);
+                                for (uint32_t y = 0; y < 512u; ++y)
+                                    for (int side = 0; side < 2; ++side)
+                                        for (uint32_t x = 0; x < w; ++x)
+                                        {
+                                            uint32_t v = reader(side ? gpuVram.data() : cpuVram.data(), fbp * 32u, fbw, x, y);
+                                            if (psm == GS_PSM_CT16S || psm == GS_PSM_CT16)
+                                                v = ((v & 0x1f) << 3) | (((v >> 5) & 0x1f) << 11) | (((v >> 10) & 0x1f) << 19);
+                                            const unsigned char rgb[3] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16)};
+                                            std::fwrite(rgb, 1, 3, out);
+                                        }
+                                std::fclose(out);
+                            }
+                        }
+                        for (uint32_t i = 0; i < std::min<uint32_t>(size, 256u); i += 16)
+                        {
+                            uint64_t lo = 0, hi = 0;
+                            std::memcpy(&lo, data.data() + i, 8);
+                            if (i + 16 <= size)
+                                std::memcpy(&hi, data.data() + i + 8, 8);
+                            std::printf("[replay]   %016llx %016llx\n", static_cast<unsigned long long>(lo), static_cast<unsigned long long>(hi));
+                        }
+                        break;
+                    }
+                }
+                if (presents >= limit)
+                    break;
+            }
+            std::fclose(file);
+            std::printf("[replay] %llu records, %u presentations\n", static_cast<unsigned long long>(records), presents);
+        });
+
+        tc.Run("paraLLEl-GS draws a PACKED A+D sprite into VRAM", [](TestCase &t)
+        {
+            GSRegisters regs{};
+            std::unique_ptr<GSRasterBackend> backend;
+            try
+            {
+                backend = CreateParallelGSBackend(regs);
+            }
+            catch (const std::exception &)
+            {
+                return; // No Vulkan device on this machine.
+            }
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            backend->Initialize(vram.data(), static_cast<uint32_t>(vram.size()));
+
+            const std::pair<uint8_t, uint64_t> writes[] = {
+                {GS_REG_FRAME_1, (0ull << 0) | (1ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24)},
+                {GS_REG_ZBUF_1, (100ull << 0) | (1ull << 32)},
+                {GS_REG_SCISSOR_1, (63ull << 16) | (63ull << 48)},
+                {GS_REG_XYOFFSET_1, 0ull},
+                {GS_REG_TEST_1, 0x30000ull},
+                {GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE)},
+                {GS_REG_RGBAQ, 0x800000FFull},
+                {GS_REG_XYZ2, 0ull},
+                {GS_REG_XYZ2, (16ull * 16ull) | ((16ull * 16ull) << 16)},
+            };
+            std::vector<uint64_t> packet;
+            const uint64_t count = sizeof(writes) / sizeof(writes[0]);
+            packet.push_back(count | (1ull << 15) | (1ull << 60)); // NLOOP, EOP, PACKED, NREG = 1
+            packet.push_back(0xEull);                              // A+D
+            for (const auto &write : writes)
+            {
+                packet.push_back(write.second);
+                packet.push_back(write.first);
+            }
+            backend->ProcessGIF(3, reinterpret_cast<const uint8_t *>(packet.data()), static_cast<uint32_t>(packet.size() * 8u));
+            backend->Flush();
+            t.Equals(backend->ReadVram(GS_PSM_CT32, 0, 1, 5, 5) & 0x00FFFFFFu, 0x0000FFu, "sprite pixel is red");
+            t.Equals(backend->ReadVram(GS_PSM_CT32, 0, 1, 20, 20), 0u, "pixel outside the sprite is untouched");
+
+            // Scan the buffer out as PAL 640x512 (CRTC values of Burnout Dominator).
+            regs.smode1 = (32ull << 3) | (3ull << 13);
+            GSPresentationRequest request{};
+            request.pmode = 0x8001ull; // EN1, ALP = 0x80
+            request.smode2 = 1ull;
+            request.dispfb1 = (1ull << 9);
+            request.display1 = 0x290ull | (0x48ull << 12) | (3ull << 23) | (0x9FFull << 32) | (0x1FFull << 44);
+            const PresentationFrame frame = backend->Present(request);
+            t.IsTrue(frame.width != 0u && frame.height != 0u && !frame.pixels.empty(), "scanout produces pixels");
+            uint32_t red = 0, lit = 0;
+            for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4)
+            {
+                // PMODE ALP = 0x80 blends circuit 1 at half intensity over the black background.
+                red += frame.pixels[i] >= 0x70 && frame.pixels[i + 1] < 0x10 && frame.pixels[i + 2] < 0x10 ? 1u : 0u;
+                lit += (frame.pixels[i] | frame.pixels[i + 1] | frame.pixels[i + 2]) != 0 ? 1u : 0u;
+            }
+            if (red == 0u)
+                std::printf("[pgs-test] scanout %ux%u lit=%u first=%02x%02x%02x\n", frame.width, frame.height, lit,
+                            frame.pixels[0], frame.pixels[1], frame.pixels[2]);
+            t.IsTrue(red > 0u, "the red sprite appears in the scanout");
+
+            // A host-to-local IMAGE transfer on PATH2 (how VIF1 DIRECT uploads video frames).
+            std::vector<uint64_t> upload = {
+                4ull | (1ull << 60), 0xEull, // A+D x4, no EOP
+                (0ull << 32) | (1ull << 48) | (static_cast<uint64_t>(GS_PSM_CT32) << 56), GS_REG_BITBLTBUF,
+                (32ull << 32) | (32ull << 48), GS_REG_TRXPOS,
+                16ull | (16ull << 32), GS_REG_TRXREG,
+                0ull, GS_REG_TRXDIR,
+                64ull | (1ull << 15) | (2ull << 58), 0ull, // IMAGE, 64 qwords
+            };
+            for (uint32_t i = 0; i < 16u * 16u / 2u; ++i)
+                upload.push_back(0x8000FF008000FF00ull);
+            backend->ProcessGIF(2, reinterpret_cast<const uint8_t *>(upload.data()), static_cast<uint32_t>(upload.size() * 8u));
+            t.Equals(backend->ReadVram(GS_PSM_CT32, 0, 1, 40, 40) & 0x00FFFFFFu, 0x00FF00u, "uploaded pixel is green");
+            const PresentationFrame frame2 = backend->Present(request);
+            uint32_t green = 0;
+            for (size_t i = 0; i + 3 < frame2.pixels.size(); i += 4)
+                green += frame2.pixels[i + 1] >= 0x70 && frame2.pixels[i] < 0x10 ? 1u : 0u;
+            t.IsTrue(green > 0u, "the uploaded square appears in the scanout");
+        });
+#endif
 
         tc.Run("GS subtractive FIX blend over a filled sprite thresholds texels", [](TestCase &t)
         {

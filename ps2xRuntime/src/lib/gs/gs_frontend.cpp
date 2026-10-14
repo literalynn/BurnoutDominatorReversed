@@ -685,11 +685,22 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
     return true;
 }
 
-void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+bool GS::usesRawCommands() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    return m_backend && m_backend->UsesRawCommands();
+}
+
+void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t path)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!data || sizeBytes < 16 || !m_backend)
         return;
+    if (m_backend->UsesRawCommands())
+    {
+        m_backend->ProcessGIF(path, data, sizeBytes & ~15u);
+        return;
+    }
 
     if (tryProcessNativeImageUploadPacket(data, sizeBytes))
         return;
@@ -792,6 +803,13 @@ bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes)
     if (!validatePackedGifPacket(data, sizeBytes))
         return false;
 
+    if (m_backend->UsesRawCommands())
+    {
+        m_backend->ProcessGIF(3, data, sizeBytes & ~15u);
+        ++m_nativePackedGIFPacketCount;
+        return true;
+    }
+
     const bool processed = visitPackedGifPacket(data, sizeBytes, [&](const PackedGifPacketTag &tag)
                                                 {
         m_curQ = 1.0f;
@@ -831,6 +849,24 @@ void GS::uploadImageNative(uint64_t bitbltbuf,
                            uint32_t sizeBytes)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_backend && m_backend->UsesRawCommands())
+    {
+        // Replay the transfer as the GS would receive it: the four transfer
+        // registers, then the pixels as one IMAGE packet on PATH3.
+        m_backend->WriteRegisterRaw(GS_REG_BITBLTBUF, bitbltbuf);
+        m_backend->WriteRegisterRaw(GS_REG_TRXPOS, trxpos);
+        m_backend->WriteRegisterRaw(GS_REG_TRXREG, trxreg);
+        m_backend->WriteRegisterRaw(GS_REG_TRXDIR, trxdir);
+        const uint32_t qwords = (sizeBytes + 15u) / 16u;
+        if (!data || qwords == 0u)
+            return;
+        std::vector<uint8_t> packet((static_cast<size_t>(qwords) + 1u) * 16u, 0u);
+        const uint64_t tag = static_cast<uint64_t>(qwords & 0x7FFFu) | (1ull << 15) | (2ull << 58); // NLOOP, EOP, FLG=IMAGE
+        std::memcpy(packet.data(), &tag, sizeof(tag));
+        std::memcpy(packet.data() + 16u, data, sizeBytes);
+        m_backend->ProcessGIF(3, packet.data(), static_cast<uint32_t>(packet.size()));
+        return;
+    }
     uploadImageNativeUnlocked(bitbltbuf, trxpos, trxreg, trxdir, data, sizeBytes);
 }
 
@@ -1114,6 +1150,11 @@ void GS::writeRegister(uint8_t regAddr, uint64_t value)
 
 void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
 {
+    if (m_backend && m_backend->UsesRawCommands())
+    {
+        m_backend->WriteRegisterRaw(regAddr, value);
+        return;
+    }
     const bool interestingReg =
         regAddr == GS_REG_PRIM ||
         regAddr == GS_REG_RGBAQ ||
@@ -1743,13 +1784,15 @@ void GS::processImageData(const uint8_t *data, uint32_t sizeBytes)
 bool GS::clearFramebufferContext(uint32_t contextIndex, uint32_t rgba)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-    return m_backend && m_backend->ClearFramebuffer(m_ctx[(contextIndex != 0u) ? 1 : 0], rgba);
+    // A raw backend keeps the context registers; this frontend copy is not current.
+    return m_backend && !m_backend->UsesRawCommands() &&
+           m_backend->ClearFramebuffer(m_ctx[(contextIndex != 0u) ? 1 : 0], rgba);
 }
 
 bool GS::clearActiveFramebuffer(uint32_t rgba)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-    return m_backend && m_backend->ClearFramebuffer(activeContext(), rgba);
+    return m_backend && !m_backend->UsesRawCommands() && m_backend->ClearFramebuffer(activeContext(), rgba);
 }
 
 uint32_t GS::consumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)

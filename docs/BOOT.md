@@ -162,6 +162,12 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_TRACE_GS_VSYNC=N` | every primitive drawn during VSync tick N: primitive type, frame, TEX0 (base, width, format, size, CLUT base, format, mode, offset), FBMSK, ZBUF, TEST, ALPHA, CLAMP, TEX1, XYOFFSET, first two vertices (position, UV, ST) and first vertex colour |
 | `BDR_DUMP_GS_DIR=dir` | with `BDR_TRACE_GS_VSYNC=N`: writes each render target of VSync N to `dir` as a PPM (`target_NNN_fbpP_psmM.ppm`) when the game moves on to another target, to follow multi-pass effects |
 | `BDR_PROFILE_DELAY_S=N` | with `BDR_PROFILE=1`: starts sampling after N seconds, to profile one phase (e.g. the race) |
+| `PS2X_GS_BACKEND=cpu` | keeps the CPU rasterizer in a build made with paraLLEl-GS (the default when Vulkan works) |
+| `BDR_PGS_RECORD=file` | paraLLEl-GS: records every backend input (initial VRAM, GIF packets with their path, registers, presentations) |
+| `BDR_PGS_REPLAY=file` | in `ps2x_tests`: replays a recording into the CPU rasterizer and paraLLEl-GS and lists, at each presentation, the 8 KiB pages that differ; `BDR_PGS_REPLAY_FIRST=N` stops at the first record leaving more than N differing bytes (with `BDR_PGS_REPLAY_DUMPFB=fbp,fbw,psm`, both buffers go to `replay_divergence.ppm`); `BDR_PGS_REPLAY_DUMP=dir` writes the displayed buffer of both sides for the first 16 presentations |
+| `BDR_PGS_VRAM_PPM=dir` | paraLLEl-GS: at each presentation, the DISPFB1 buffer as read back from its VRAM |
+| `BDR_PGS_TRACE=1` | paraLLEl-GS: prints the display registers at each presentation |
+| `BDR_PROFILE_SECONDS=N` | with `BDR_PROFILE=1`: after N seconds of sampling, prints the report and the sampled thread's call stack, even if that thread never returns (hangs) |
 | `BDR_GS_STATS=1` | once a second: primitives queued to the GS raster workers, barriers inserted because a texture reads pending writes, serial operations, worker launches, drains and the time the game thread waited for them |
 | `BDR_PROFILE_THREAD=name` | with `BDR_PROFILE=1`: samples that thread instead of `GameThread`, e.g. `GSRaster0` for a GS raster worker |
 | `BDR_PROFILE=1` | sampler of the guest thread (EE and IOP run on it; GS rasterization too with `BDR_GS_THREADS=1`); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |

@@ -17,6 +17,15 @@ option(PS2X_STRICT_RETURN_DIAGNOSTICS "Route generated JR $ra returns through ru
 option(PS2X_SHOW_WINDOWS_CONSOLE "Show a console window for ps2EntryRunner on Windows release builds" ON)
 option(PS2X_ENABLE_DEBUG_UI "Build the desktop runtime debug UI" ON)
 
+set(PS2X_GS_BACKEND "CPU" CACHE STRING "GS backend: CPU, or PARALLEL_GS (paraLLEl-GS on Vulkan, CPU fallback at run time)")
+set_property(CACHE PS2X_GS_BACKEND PROPERTY STRINGS CPU PARALLEL_GS)
+if(NOT PS2X_GS_BACKEND MATCHES "^(CPU|PARALLEL_GS)$")
+    message(FATAL_ERROR "PS2X_GS_BACKEND must be CPU or PARALLEL_GS")
+endif()
+if(PS2X_GS_BACKEND STREQUAL "PARALLEL_GS" AND (ANDROID OR NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")))
+    message(FATAL_ERROR "PARALLEL_GS is supported only on Windows and Linux desktop")
+endif()
+
 if(PS2X_ENABLE_SCCACHE)
     find_program(PS2X_SCCACHE_PROGRAM sccache)
 
@@ -400,6 +409,11 @@ add_library(ps2_runtime STATIC
     src/lib/vu/ps2_vu1_program.cpp
     src/lib/games_database.cpp
 )
+
+if(PS2X_GS_BACKEND STREQUAL "PARALLEL_GS")
+    message(STATUS "Using the paraLLEl-GS backend for PS2 graphics")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ParallelGS.cmake")
+endif()
 
 # Keep the VU execution loop and its arithmetic helpers visible to the optimizer.
 set_target_properties(ps2_runtime PROPERTIES UNITY_BUILD ON UNITY_BUILD_MODE GROUP)

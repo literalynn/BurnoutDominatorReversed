@@ -500,7 +500,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 const bool directHl = (opcode == VIF_DIRECTHL);
                 submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
 
-                const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
+                const uint32_t pendingImageQw = m_gifPathsKeepTagState ? 0u : pendingGifImageQwc(data + pos, qwCount * 16u);
                 if (pendingImageQw != 0u)
                 {
                     m_vif1PendingPath2ImageQwc = pendingImageQw;

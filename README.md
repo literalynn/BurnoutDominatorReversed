@@ -8,7 +8,7 @@ A static recompilation of **Burnout Dominator** for PlayStation 2 (European rele
 
 ## Status
 
-**Work in progress — not playable yet.** The game boots through the intro, the 50 Hz / 60 Hz choice and the title screen, creates and saves a profile on the emulated memory card, and reaches the World Tour menus with the emulated DualShock 2 (PC gamepad or keyboard). It loads the first race, whose 3D scene renders but looks washed out, at 1 to 1.5 frames per second (the CPU GS rasterizer is the bottleneck); many menu textures are corrupted, and menus run at about 30 to 45 frames per second out of 50.
+**Work in progress — not playable yet.** The game boots through the intro, the 50 Hz / 60 Hz choice and the title screen, creates and saves a profile on the emulated memory card, and reaches the World Tour menus with the emulated DualShock 2 (PC gamepad or keyboard). With the GS emulated on the graphics card (paraLLEl-GS, Vulkan), it reaches the first race at about 16 frames per second: road, scenery, traffic and HUD are drawn, but many textures have wrong colours. Menus run at 35 to 52 frames per second out of 50.
 
 Keyboard, when no gamepad is connected: arrows or WASD = D-pad, X or Space = Cross, C or Esc = Circle, Z = Square, V = Triangle, Q/E = L1/R1, left/right Shift = L2/R2, Enter = Start, Tab = Select.
 
@@ -22,6 +22,7 @@ You need:
 
 - your own ISO of the European Burnout Dominator disc (SLES-54627). **Leave it where it is afterwards**: the game reads it at every launch. If you move it, drop it onto `Installer.bat` again;
 - about 20 GB free on `C:` (the extracted disc, the translated code and the build go to `C:\bdr-work`);
+- a graphics card with Vulkan support (any recent NVIDIA, AMD or Intel driver). The GS is emulated on it with paraLLEl-GS; without Vulkan the game falls back to a much slower CPU renderer;
 - four programs, installed once. In the Terminal app:
   1. **Python**: `winget install Python.Python.3.12` (or <https://www.python.org/downloads/>, ticking **"Add python.exe to PATH"**);
   2. **Git**: `winget install Git.Git`;
@@ -160,6 +161,6 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: the pr
 
 ## License and credits
 
-Built on [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors. The included PS2Recomp sources keep their GPLv3 license ([LICENSE](LICENSE)); the integration code added here is under the same license. Game files and the C++ derived from them are not covered by this license, are never committed and stay on your machine.
+Built on [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors. The included PS2Recomp sources keep their GPLv3 license ([LICENSE](LICENSE)); the integration code added here is under the same license. The build fetches [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) by Arntzen Software (LGPLv3) to emulate the GS; `python tools/project.py configure --game --gs cpu` builds without it. Game files and the C++ derived from them are not covered by this license, are never committed and stay on your machine.
 
 Burnout Dominator is a trademark of Electronic Arts. This project is not affiliated with or endorsed by Electronic Arts, Criterion Games or Sony Interactive Entertainment.

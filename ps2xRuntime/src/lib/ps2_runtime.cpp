@@ -5,6 +5,9 @@
 #include "game_overrides.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_frontend.h"
+#ifdef PS2X_GS_PARALLEL
+#include "runtime/gs/gs_parallel_backend.h"
+#endif
 #include "runtime/ee_scheduler.h"
 #include "runtime/ps2_wait_stats.h"
 #include "runtime/ee_unwind.h"
@@ -682,8 +685,25 @@ bool PS2Runtime::syncCoreSubsystems()
     }
 
     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
-    m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
-                                    { m_gs.processGIFPacket(data, size); });
+#ifdef PS2X_GS_PARALLEL
+    // PS2X_GS_BACKEND=cpu keeps the CPU rasterizer; without a usable Vulkan
+    // device the CPU rasterizer stays in place too.
+    if (const char *requested = std::getenv("PS2X_GS_BACKEND"); !requested || std::string(requested) != "cpu")
+    {
+        try
+        {
+            m_gs.setRasterBackend(CreateParallelGSBackend(m_memory.gs()));
+            std::cout << "[gs] paraLLEl-GS backend (Vulkan)" << std::endl;
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "[gs] paraLLEl-GS unavailable, using the CPU rasterizer: " << error.what() << std::endl;
+        }
+    }
+#endif
+    m_memory.setGifPathsKeepTagState(m_gs.usesRawCommands());
+    m_gifArbiter.setProcessPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size)
+                                    { m_gs.processGIFPacket(data, size, static_cast<uint32_t>(path)); });
     m_memory.setGifArbiter(&m_gifArbiter);
     m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {

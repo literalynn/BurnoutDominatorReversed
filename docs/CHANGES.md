@@ -2,6 +2,19 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## paraLLEl-GS backend (October 14, 2026)
+
+The GS can now run on [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) (Arntzen Software, LGPLv3), which emulates the GS with Vulkan compute, following upstream PS2Recomp pull request #285 (work in progress). The CPU rasterizer stays as the fallback when no Vulkan device is found, and for the tests.
+
+- `ps2xRuntime/cmake/ParallelGS.cmake`, `ParallelGSPatches.cmake` (new): `PS2X_GS_BACKEND=PARALLEL_GS` fetches paraLLEl-GS at commit 3a66c19 (`FETCHCONTENT_SOURCE_DIR_PARALLEL_GS` accepts a local checkout), builds it with the DLL runtime and debug info, and patches two sources at configure time: the transfer tail fix of #285, and `compute_page_rect`, whose block count wraps to about 2^32 for a texture larger than a page row at a base that is not page aligned (an endless loop in Burnout's intro); such a rect is now treated as straddling. `ps2xRuntime/CMakeLists.txt`: the option.
+- `ps2xRuntime/src/lib/gs/gs_parallel_backend.cpp`, `include/runtime/gs/gs_parallel_backend.h` (new): the backend, adapted from #285. It creates its own Vulkan device and reads the scanout image back to host memory, instead of #285's Vulkan-to-OpenGL interop, so the window, frame dumps and headless runs all use the usual `PresentationFrame` pixels. It follows transfers for `GetTransferSnapshot`, maps SIGNAL, FINISH and LABEL to CSR and SIGLBLID, and records its input with `BDR_PGS_RECORD`.
+- `gs_backend.h`: `UsesRawCommands`, `ProcessGIF`, `WriteRegisterRaw`. `gs_frontend.h/.cpp`: `processGIFPacket` takes the GIF path; with a raw backend, GIF packets, register writes and native image uploads go to the backend unparsed, and the frontend's framebuffer clears are refused. `ps2_gif_arbiter.h/.cpp`: the packet callback receives the path. `vu/ps2_vu1_core.cpp`: XGKICK without an arbiter uses PATH1.
+- `ps2_memory.h`, `ps2_vif1_interpreter.cpp`: `setGifPathsKeepTagState`. paraLLEl-GS, like the GS, keeps each path's GIF tag state between packets. A VIF1 DIRECT whose image data comes in the next DIRECT was re-sent under a synthetic IMAGE tag (for the CPU frontend, which parses every packet from a tag); the GS then read that second tag as pixels and lost track of PATH2 (giant triangles, black screen). With a raw backend, DIRECT payloads now go out as they are.
+- `ps2_runtime.cpp`: `syncCoreSubsystems` selects paraLLEl-GS unless `PS2X_GS_BACKEND=cpu`, in windowed and headless runs. `Kernel/Syscalls/System.cpp`: `GsSetCrt` also sets SMODE1 (CMOD, LC) as the BIOS does (from #285); paraLLEl-GS derives the video mode from it.
+- Tests: `paraLLEl-GS draws a PACKED A+D sprite into VRAM` (sprite, scanout, PATH2 IMAGE upload); `paraLLEl-GS replay matches the CPU rasterizer` replays a `BDR_PGS_RECORD` file into both backends (`BDR_PGS_REPLAY`, BOOT.md §10). `ps2xTest/src/main.cpp` sets `PS2X_GS_BACKEND=cpu`, since runtime tests read the guest-side VRAM.
+
+Result (Windows, RTX 5090): the intro and the 50 Hz / 60 Hz screen run at 50–54 VSync/s instead of 34.
+
 ## Texture page cache (October 14, 2026)
 
 - `ps2xRuntime/include/runtime/gs/gs_texture_page_cache.h`: each cache keeps 64 page copies instead of one. The page being read still keeps the bytes it had when it was loaded until another page is read or TEXFLUSH, as before; a page read again reuses its earlier copy only when no VRAM write touched it since, so it returns the same bytes as a fresh copy. Before, every page change copied 8 KiB: with bilinear filtering on textures spanning several pages, that was one copy per texel, about a quarter of a raster worker's time in a race (`BDR_PROFILE_THREAD=GSRaster0`).

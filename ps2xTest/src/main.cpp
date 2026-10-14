@@ -35,6 +35,13 @@ int main()
         setenv("BDR_GS_THREADS", "1", 0);
 #endif
     }
+    // Runtime tests read the guest-side VRAM, which only the CPU rasterizer
+    // writes; the paraLLEl-GS backend has its own test.
+#ifdef _WIN32
+    _putenv_s("PS2X_GS_BACKEND", "cpu");
+#else
+    setenv("PS2X_GS_BACKEND", "cpu", 1);
+#endif
     MiniTest::BeforeEach(reset_ps2_test_function_table);
 
     register_code_generator_tests();
