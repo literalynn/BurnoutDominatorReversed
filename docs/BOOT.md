@@ -159,7 +159,9 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_DETERMINISTIC=1` | VBlank, alarms and timers on EE cycles only: identical runs, idle time skipped, speed unrelated to real time |
 | `BDR_WATCH_WORD=0xADDR[:0xVALUE]` | after every dispatched guest function, reports a change of the word at ADDR (or its first change to VALUE) with the last 32 dispatched functions |
 | `BDR_DISPATCH_HISTORY=1` | keeps the last 256 scheduler dispatches (thread, pc, sp, ra) and prints them when the scheduler reaches a pc without generated code |
-| `BDR_TRACE_GS_VSYNC=N` | every primitive drawn during VSync tick N: primitive type, frame, TEX0 (base, width, format, size, CLUT base, format, mode, offset) |
+| `BDR_TRACE_GS_VSYNC=N` | every primitive drawn during VSync tick N: primitive type, frame, TEX0 (base, width, format, size, CLUT base, format, mode, offset), FBMSK, ZBUF, TEST, ALPHA, CLAMP, TEX1, XYOFFSET, first two vertices (position, UV, ST) and first vertex colour |
+| `BDR_DUMP_GS_DIR=dir` | with `BDR_TRACE_GS_VSYNC=N`: writes each render target of VSync N to `dir` as a PPM (`target_NNN_fbpP_psmM.ppm`) when the game moves on to another target, to follow multi-pass effects |
+| `BDR_PROFILE_DELAY_S=N` | with `BDR_PROFILE=1`: starts sampling after N seconds, to profile one phase (e.g. the race) |
 | `BDR_PROFILE=1` | sampler of the guest thread (EE and IOP run on it; GS rasterization too with `BDR_GS_THREADS=1`); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
 
 With these tools, the profile showed the game ran at 7% of real time because the IOP and the timers were advanced every 8 EE cycles; they now are in batches of 2048 cycles (CHANGES.md).

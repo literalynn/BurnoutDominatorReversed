@@ -8,6 +8,7 @@ Applied from ran-j/PS2Recomp pull requests #280, #281 and #282 (same project, sa
 
 - `ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp`: `TEST.ZTE=0` disables the depth test, as on the GS (#280). Sprites keep fractional endpoints, cover `[ceil(x0), ceil(x1))` like the other primitives, pair UV with their endpoints when the vertices are reversed, take Q from the second vertex and sample through the floating-coordinate path for UV as well as STQ (#281). STQ texel coordinates saturate like the 12.4 hardware path before wrapping (#282).
 - Tests: `ps2xTest/gs_cache/gs_depth_test_tests.cpp`, `gs_sprite_alignment_tests.cpp` and `README.md` (new, from #280/#281), STQ saturation tests in `ps2xTest/src/ps2_gs_tests.cpp` (#282). Eight existing tests drew sprites whose two vertices coincide; a GS draws nothing for those, so they now draw one pixel (`ps2_gs_tests.cpp`, `ps2_runtime_expansion_tests.cpp`).
+- `gs_frontend.cpp`: `BDR_TRACE_GS_VSYNC` also prints FBMSK, ZBUF, TEST, ALPHA, CLAMP, TEX1, XYOFFSET and the first two vertices; `BDR_DUMP_GS_DIR` writes every render target of that VSync as a PPM (BOOT.md §10). `ps2_gs_tests.cpp`: a subtractive FIX blend over a filled sprite (Burnout's bloom bright pass) keeps `(texel - grey) * 255 / 128`.
 
 ## VU1 engine and compiled VU1 programs (October 14, 2026)
 

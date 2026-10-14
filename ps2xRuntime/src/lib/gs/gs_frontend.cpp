@@ -1571,6 +1571,54 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
     recordRegisterDebugEventUnlocked(regAddr, value);
 }
 
+// BDR_DUMP_GS_DIR=dir with BDR_TRACE_GS_VSYNC=N: writes each render target of
+// VSync N to dir as a PPM when the game moves on to another target.
+namespace
+{
+void dumpTracedTargetOnSwitch(GSRasterBackend &backend, const GSPrimitiveBatch &batch, bool tracing, bool inTick)
+{
+    static const char *dir = std::getenv("BDR_DUMP_GS_DIR");
+    static uint32_t fbp = 0, fbw = 0, psm = 0, height = 0, index = 0;
+    static bool active = false;
+    if (!dir || !tracing)
+        return;
+    const auto &frame = batch.state.context.frame;
+    const bool sameTarget = active && inTick && frame.fbp == fbp && frame.fbw == fbw && frame.psm == psm;
+    if (sameTarget)
+    {
+        height = std::max<uint32_t>(height, batch.state.context.scissor.y1 + 1u);
+        return;
+    }
+    if (active)
+    {
+        const uint32_t width = std::max<uint32_t>(fbw, 1u) * 64u;
+        char path[512];
+        std::snprintf(path, sizeof(path), "%s/target_%03u_fbp%u_psm%u.ppm", dir, index++, fbp, psm);
+        if (FILE *file = std::fopen(path, "wb"))
+        {
+            std::fprintf(file, "P6\n%u %u\n255\n", width, height);
+            const bool is16 = (psm & 0x2u) != 0u;
+            for (uint32_t y = 0; y < height; ++y)
+                for (uint32_t x = 0; x < width; ++x)
+                {
+                    uint32_t v = backend.ReadVram(psm, fbp << 5u, fbw, x, y);
+                    if (is16)
+                        v = ((v & 0x1Fu) << 3) | (((v >> 5) & 0x1Fu) << 11) | (((v >> 10) & 0x1Fu) << 19);
+                    const unsigned char rgb[3] = {static_cast<unsigned char>(v), static_cast<unsigned char>(v >> 8),
+                                                  static_cast<unsigned char>(v >> 16)};
+                    std::fwrite(rgb, 1, 3, file);
+                }
+            std::fclose(file);
+        }
+    }
+    active = inTick;
+    fbp = frame.fbp;
+    fbw = frame.fbw;
+    psm = frame.psm;
+    height = batch.state.context.scissor.y1 + 1u;
+}
+}
+
 void GS::vertexKick(bool drawing)
 {
     ++m_vtxCount;
@@ -1629,8 +1677,10 @@ void GS::vertexKick(bool drawing)
             const char *value = std::getenv("BDR_TRACE_GS_VSYNC");
             return value ? std::atoll(value) : -1ll;
         }();
-        if (traceTick >= 0 && m_privRegs &&
-            m_privRegs->vsyncTick.load(std::memory_order_acquire) == static_cast<uint64_t>(traceTick))
+        const bool traceThisTick = traceTick >= 0 && m_privRegs &&
+            m_privRegs->vsyncTick.load(std::memory_order_acquire) == static_cast<uint64_t>(traceTick);
+        dumpTracedTargetOnSwitch(*m_backend, batch, traceTick >= 0 && m_privRegs, traceThisTick);
+        if (traceThisTick)
         {
             const GSDrawState &state = batch.state;
             const auto &c = state.context;
@@ -1642,7 +1692,15 @@ void GS::vertexKick(bool drawing)
                       << static_cast<uint32_t>(c.tex0.tw) << ",th" << static_cast<uint32_t>(c.tex0.th) << ",tcc"
                       << static_cast<uint32_t>(c.tex0.tcc) << ",tfx" << static_cast<uint32_t>(c.tex0.tfx) << ",cbp" << c.tex0.cbp
                       << ",cpsm" << static_cast<uint32_t>(c.tex0.cpsm) << ",csm" << static_cast<uint32_t>(c.tex0.csm) << ",csa"
-                      << static_cast<uint32_t>(c.tex0.csa) << " xy0=" << v0.x << ',' << v0.y << std::endl;
+                      << static_cast<uint32_t>(c.tex0.csa) << std::hex << " fbmsk=" << c.frame.fbmsk << " zbuf=" << c.zbuf.zbp
+                      << ",psm" << static_cast<uint32_t>(c.zbuf.psm) << ",zmsk" << c.zbuf.zmask << " test=" << c.test
+                      << " alpha=" << c.alpha << " clamp=" << c.clamp << " tex1=" << c.tex1 << std::dec
+                      << " ofs=" << c.xyoffset.ofx << ',' << c.xyoffset.ofy << " uv=" << v0.u << ',' << v0.v << ','
+                      << batch.vertices[1].u << ',' << batch.vertices[1].v << " st=" << v0.s << ',' << v0.t << ','
+                      << batch.vertices[1].s << ',' << batch.vertices[1].t << " n=" << static_cast<uint32_t>(batch.vertexCount)
+                      << " xy0=" << v0.x << ',' << v0.y << ',' << v0.z << " xy1=" << batch.vertices[1].x << ','
+                      << batch.vertices[1].y << " rgba0=" << static_cast<uint32_t>(v0.r) << ',' << static_cast<uint32_t>(v0.g)
+                      << ',' << static_cast<uint32_t>(v0.b) << ',' << static_cast<uint32_t>(v0.a) << std::endl;
         }
         m_backend->Submit(batch);
         recordDrawDebugEventUnlocked(needed);

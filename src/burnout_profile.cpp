@@ -79,6 +79,12 @@ Sampler::Sampler() {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         if (!target)
             return;
+        // BDR_PROFILE_DELAY_S=N: skip the first N seconds (menus) before sampling.
+        if (const char* delay = std::getenv("BDR_PROFILE_DELAY_S")) {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(std::atoi(delay));
+            while (!state->stop.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
         HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                               TIMER_ALL_ACCESS);
         while (!state->stop.load(std::memory_order_acquire) && state->samples.size() < kMaxSamples) {

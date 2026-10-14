@@ -1263,6 +1263,64 @@ void register_ps2_gs_tests()
                      "CT32 primitives should land in the same local-memory layout that later CT32 texture sampling expects");
         });
 
+        tc.Run("GS subtractive FIX blend over a filled sprite thresholds texels", [](TestCase &t)
+        {
+            // Burnout's bloom bright pass: fill the target with grey, then draw
+            // the scene with (Cs - Cd) * 255 / 128 so that only bright texels remain.
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+
+            constexpr uint32_t kTexTbp = 64u;
+            constexpr uint64_t kFrame =
+                (150ull << 0) |
+                (1ull << 16) |
+                (static_cast<uint64_t>(GS_PSM_CT32) << 24) |
+                (0xFF000000ull << 32);
+            constexpr uint64_t kTex0 =
+                (static_cast<uint64_t>(kTexTbp) << 0) |
+                (1ull << 14) |
+                (static_cast<uint64_t>(GS_PSM_CT32) << 20) |
+                (2ull << 26) |
+                (2ull << 30) |
+                (1ull << 34);
+            constexpr uint32_t kSourcePixels[4] = {0x80404040u, 0x80C0C0C0u, 0x80808080u, 0x80FFFFFFu};
+            constexpr uint32_t kExpected[4] = {0x00000000u, 0x007F7F7Fu, 0x00000000u, 0x00FDFDFDu};
+
+            for (uint32_t y = 0u; y < 4u; ++y)
+                for (uint32_t x = 0u; x < 4u; ++x)
+                    writeReferencePSMCT32Pixel(vram, kTexTbp, 1u, x, y, kSourcePixels[x]);
+
+            gs.writeRegister(GS_REG_FRAME_1, kFrame);
+            gs.writeRegister(GS_REG_ZBUF_1, (200ull << 0) | (static_cast<uint64_t>(GS_PSM_Z24 & 0xF) << 24));
+            gs.writeRegister(GS_REG_SCISSOR_1, (3ull << 16) | (3ull << 48));
+            gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
+            gs.writeRegister(GS_REG_TEST_1, 0x30003ull);
+            gs.writeRegister(GS_REG_TEX0_1, kTex0);
+            gs.writeRegister(GS_REG_TEX1_1, 1ull);
+            gs.writeRegister(GS_REG_CLAMP_1, 0ull);
+
+            // Fill: untextured sprite, ALPHA = Cs.
+            gs.writeRegister(GS_REG_ALPHA_1, 0x2Aull);
+            gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 6) | (1ull << 8));
+            gs.writeRegister(GS_REG_RGBAQ, 0x00808080ull);
+            gs.writeRegister(GS_REG_XYZ2, 0ull);
+            gs.writeRegister(GS_REG_XYZ2, (64ull << 0) | (64ull << 16));
+
+            // Threshold: textured sprite, ALPHA = (Cs - Cd) * FIX >> 7 with FIX = 255.
+            gs.writeRegister(GS_REG_ALPHA_1, 0xA4ull | (0xFFull << 32));
+            gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 4) | (1ull << 6) | (1ull << 8));
+            gs.writeRegister(GS_REG_UV, (8ull << 0) | (8ull << 16));
+            gs.writeRegister(GS_REG_XYZ2, 0ull);
+            gs.writeRegister(GS_REG_UV, (72ull << 0) | (72ull << 16));
+            gs.writeRegister(GS_REG_XYZ2, (64ull << 0) | (64ull << 16));
+
+            for (uint32_t y = 0u; y < 4u; ++y)
+                for (uint32_t x = 0u; x < 4u; ++x)
+                    t.Equals(readReferenceFramePSMCT32Pixel(vram, 150u, 1u, x, y), kExpected[x],
+                             "bright pass should keep (texel - grey) * 255 / 128, clamped at zero");
+        });
+
         tc.Run("FST sprite 1:1 CT32 copies preserve source texels at the right and bottom edges", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
