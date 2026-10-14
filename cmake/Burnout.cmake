@@ -38,6 +38,11 @@ if(BDR_BUILD_GAME)
         target_compile_options(ps2EntryRunner PRIVATE /bigobj /utf-8 "/MP${BDR_COMPILER_WORKERS}")
         # A PDB lets BDR_PROFILE name the guest functions and runtime code it samples.
         target_link_options(ps2EntryRunner PRIVATE $<$<CONFIG:Release>:/DEBUG>)
+        # Full debug info for the runtime only, so samples in static and inlined
+        # runtime code resolve to their own function and line.
+        if(TARGET ps2_runtime)
+            target_compile_options(ps2_runtime PRIVATE $<$<CONFIG:Release>:/Z7>)
+        endif()
     endif()
 endif()
 

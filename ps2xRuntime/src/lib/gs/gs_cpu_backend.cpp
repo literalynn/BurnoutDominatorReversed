@@ -9,6 +9,7 @@
 #include "ThreadNaming.h"
 #include "runtime/ps2_wait_stats.h"
 #include <atomic>
+#include <chrono>
 #include <algorithm>
 #include <barrier>
 #include <cmath>
@@ -579,6 +580,32 @@ namespace
     constexpr size_t kMaxPendingPrimitives = 16384u;
     constexpr uint32_t kGsPageBytes = 8192u;
 
+    // BDR_GS_STATS=1: once a second, counts of queued primitives, barriers
+    // inserted because a texture reads pending writes, serial operations,
+    // worker launches and drains (with the time the submitting thread waited).
+    struct GsStats
+    {
+        bool enabled = std::getenv("BDR_GS_STATS") != nullptr;
+        std::atomic<uint64_t> primitives{0}, readBarriers{0}, serialOps{0}, launches{0}, drains{0}, drainMicros{0};
+        std::chrono::steady_clock::time_point next = std::chrono::steady_clock::now();
+
+        void maybePrint()
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now < next)
+                return;
+            next = now + std::chrono::seconds(1);
+            std::printf("[gs-stats] prims=%llu readBarriers=%llu serial=%llu launches=%llu drains=%llu drainMs=%llu\n",
+                        static_cast<unsigned long long>(primitives.exchange(0)),
+                        static_cast<unsigned long long>(readBarriers.exchange(0)),
+                        static_cast<unsigned long long>(serialOps.exchange(0)),
+                        static_cast<unsigned long long>(launches.exchange(0)),
+                        static_cast<unsigned long long>(drains.exchange(0)),
+                        static_cast<unsigned long long>(drainMicros.exchange(0) / 1000u));
+        }
+    };
+    GsStats g_gsStats;
+
     inline bool ownsRow(int y) noexcept
     {
         return t_rowBand.count == 1u ||
@@ -758,8 +785,16 @@ void GSCpuBackend::QueuePrimitive(const GSPrimitiveBatch &batch)
         }
     }
 
-    if (readsWrittenRange(m_pendingWrites, batch.state))
+    const bool readsPendingWrites = readsWrittenRange(m_pendingWrites, batch.state);
+    if (readsPendingWrites)
         QueueSerialUnlocked({}); // a barrier: the texture's writers finish first
+    if (g_gsStats.enabled)
+    {
+        ++g_gsStats.primitives;
+        g_gsStats.readBarriers += readsPendingWrites ? 1u : 0u;
+        if ((g_gsStats.primitives.load(std::memory_order_relaxed) & 255u) == 0u)
+            g_gsStats.maybePrint();
+    }
     m_pending.push_back(batch);
     addWrittenRanges(m_pendingWrites, batch.state);
     LaunchIfIdleUnlocked();
@@ -789,6 +824,8 @@ void GSCpuBackend::QueueSerialUnlocked(std::function<void()> op)
             op();
         return;
     }
+    if (g_gsStats.enabled)
+        ++g_gsStats.serialOps;
     m_workers->pendingSerial.emplace_back(m_pending.size(), std::move(op));
     // Primitives queued after this point see every earlier write done.
     m_pendingWrites.clear();
@@ -799,6 +836,8 @@ void GSCpuBackend::QueueSerialUnlocked(std::function<void()> op)
 void GSCpuBackend::LaunchPendingUnlocked() const
 {
     RasterWorkers &workers = *m_workers;
+    if (g_gsStats.enabled)
+        ++g_gsStats.launches;
     std::lock_guard<std::mutex> lock(workers.mutex);
     workers.job.swap(m_pending);
     m_pending.clear();
@@ -817,8 +856,15 @@ void GSCpuBackend::DrainUnlocked() const
     auto wait = [&workers]()
     {
         ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::GsDrain);
+        const auto start = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> lock(workers.mutex);
         workers.done.wait(lock, [&workers]() { return workers.remaining == 0u; });
+        if (g_gsStats.enabled)
+        {
+            ++g_gsStats.drains;
+            g_gsStats.drainMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - start).count());
+        }
     };
     wait();
     if (!m_pending.empty() || !workers.pendingSerial.empty())

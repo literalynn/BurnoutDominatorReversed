@@ -7,6 +7,7 @@ Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json
 - `ps2xRuntime/include/runtime/gs/gs_texture_page_cache.h`: each cache keeps 64 page copies instead of one. The page being read still keeps the bytes it had when it was loaded until another page is read or TEXFLUSH, as before; a page read again reuses its earlier copy only when no VRAM write touched it since, so it returns the same bytes as a fresh copy. Before, every page change copied 8 KiB: with bilinear filtering on textures spanning several pages, that was one copy per texel, about a quarter of a raster worker's time in a race (`BDR_PROFILE_THREAD=GSRaster0`).
 - `ps2xRuntime/include/runtime/gs/ps2_gs_memory.h`: `PixelStorageTraits::Write` (no longer `constexpr`) marks the written page in `g_pageCopyHolders`, which every cache checks before reusing a copy.
 - `ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp`: raster workers are named `GSRaster<N>`; bilinear channel interpolation rounds by adding 0.5 instead of calling `std::lround` (the value is never negative).
+- `gs_cpu_backend.cpp`: `BDR_GS_STATS=1` prints queue counters once a second (BOOT.md §10).
 - Test: `gs_cache.memory.reload_after_write`.
 
 ## GS rasterizer fixes from upstream pull requests (October 14, 2026)
