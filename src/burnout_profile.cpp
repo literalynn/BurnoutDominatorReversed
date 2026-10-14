@@ -160,7 +160,14 @@ Sampler::Sampler() {
         if (timer)
             CloseHandle(timer);
         if (seconds) {
-            printStack(target);
+            // BDR_PROFILE_STACKS=N: N call stacks 200 ms apart instead of one.
+            const char* stacks = std::getenv("BDR_PROFILE_STACKS");
+            const int count = stacks ? std::max(1, std::atoi(stacks)) : 1;
+            for (int i = 0; i < count; ++i) {
+                std::printf("[stack] --- %d\n", i);
+                printStack(target);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
             report();
         }
         CloseHandle(target);

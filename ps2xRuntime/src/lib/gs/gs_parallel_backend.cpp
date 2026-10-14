@@ -215,6 +215,8 @@ namespace
         // {char kind; uint32 id; uint32 size; bytes}: 'I' initial VRAM, 'G' GIF
         // packet (id = path), 'R' register (id = address), 'U' image data, 'P'
         // presentation. ps2x_tests replays it (BDR_PGS_REPLAY) to compare backends.
+        // BDR_PGS_RECORD_FROM=N and BDR_PGS_RECORD_VSYNCS=M limit the recording
+        // to VSync ticks N to N+M; it then starts with the VRAM of tick N ('I').
         void traceCall(char kind, uint32_t id, const uint8_t *data, uint32_t size)
         {
             static FILE *record = [] {
@@ -223,6 +225,22 @@ namespace
             }();
             if (!record)
                 return;
+            static const uint64_t from = std::getenv("BDR_PGS_RECORD_FROM") ? std::strtoull(std::getenv("BDR_PGS_RECORD_FROM"), nullptr, 10) : 0;
+            static const uint64_t vsyncs = std::getenv("BDR_PGS_RECORD_VSYNCS") ? std::strtoull(std::getenv("BDR_PGS_RECORD_VSYNCS"), nullptr, 10) : ~0ull;
+            static bool started = from == 0;
+            const uint64_t tick = priv.vsyncTick.load(std::memory_order_relaxed);
+            if (tick < from || tick - from > vsyncs)
+                return;
+            if (!started)
+            {
+                started = true;
+                const char initial = 'I';
+                const uint32_t zero = 0, bytes = uint32_t(VramSize);
+                std::fwrite(&initial, 1, 1, record);
+                std::fwrite(&zero, 4, 1, record);
+                std::fwrite(&bytes, 4, 1, record);
+                std::fwrite(gs.map_vram_read(0, VramSize), 1, VramSize, record);
+            }
             std::fwrite(&kind, 1, 1, record);
             std::fwrite(&id, 4, 1, record);
             std::fwrite(&size, 4, 1, record);

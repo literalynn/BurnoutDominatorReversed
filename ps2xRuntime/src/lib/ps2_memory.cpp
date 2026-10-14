@@ -100,6 +100,19 @@ namespace
 
     constexpr uint32_t kGsCsrRegOffset = 0x1000u;
 
+    // DMA addresses (MADR, TADR, DMAtag ADDR) select the scratchpad with bit 31
+    // (SPR) and a 14-bit offset; EE pointers into it (0x70000000) are accepted too.
+    // For the EE itself, 0x8xxxxxxx is KSEG0 RAM, hence a DMA-specific test.
+    inline bool dmaScratchpad(uint32_t address)
+    {
+        return (address & 0x80000000u) != 0u || ps2IsScratchpadAddress(address);
+    }
+
+    inline uint32_t dmaScratchpadOffset(uint32_t address)
+    {
+        return ps2IsScratchpadAddress(address) ? ps2ScratchpadOffset(address) : (address & 0x3FFFu);
+    }
+
     // Atomically apply a 32-bit write to one half (off=0 low dword, off=4 high
     // dword) of the GS CSR register. Bits 0..1 of the low dword (SIGNAL/FINISH) are
     // write-one-to-clear; everything else is a plain merge. Uses compare_exchange
@@ -1351,7 +1364,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 {
                     if (qwCount == 0)
                         return;
-                    const bool scratch = isScratchpad(srcAddr);
+                    const bool scratch = dmaScratchpad(srcAddr);
                     PendingTransfer pt;
                     pt.fromScratchpad = scratch;
                     pt.srcAddr = srcAddr;
@@ -1385,9 +1398,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     {
                         const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                         uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
-                        const bool scratch = isScratchpad(srcAddr);
-                        uint32_t src = 0;
-                        src = translateAddress(srcAddr);
+                        const bool scratch = dmaScratchpad(srcAddr);
+                        const uint32_t src0 = scratch ? dmaScratchpadOffset(srcAddr) : translateAddress(srcAddr);
+                        uint32_t src = src0;
                         const uint8_t *base2;
                         uint32_t maxSz2;
                         if (scratch)
@@ -1418,9 +1431,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                     auto appendVifTagData = [&](uint32_t localTagAddr)
                     {
-                        uint32_t tagPhys = 0u;
-                        const bool tagScratch = isScratchpad(localTagAddr);
-                        tagPhys = translateAddress(localTagAddr);
+                        const bool tagScratch = dmaScratchpad(localTagAddr);
+                        const uint32_t tagPhys = tagScratch ? dmaScratchpadOffset(localTagAddr) : translateAddress(localTagAddr);
 
                         const uint8_t *localBase = tagScratch ? m_scratchpad : m_rdram;
                         const uint32_t localMax = tagScratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
@@ -1438,15 +1450,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                     int tagsProcessed = 0;
                     uint32_t lastTagUpper = (chcr >> 16) & 0xFFFFu;
+                    // BDR_TRACE_DMA_CHAIN=N: print the tags of up to N chains whose data exceeds 512 KiB.
+                    static int traceBudget = std::getenv("BDR_TRACE_DMA_CHAIN") ? std::atoi(std::getenv("BDR_TRACE_DMA_CHAIN")) : 0;
+                    std::vector<std::array<uint32_t, 4>> traceTags;
 
                     while (tagsProcessed < kMaxChainTags)
                     {
                         const uint32_t currentTagAddr = tagAddr;
-                        const bool tagInSPR = isScratchpad(tagAddr);
+                        const bool tagInSPR = dmaScratchpad(tagAddr);
                         uint32_t physTag = 0;
                         try
                         {
-                            physTag = translateAddress(tagAddr);
+                            physTag = tagInSPR ? dmaScratchpadOffset(tagAddr) : translateAddress(tagAddr);
                         }
                         catch (...)
                         {
@@ -1472,9 +1487,11 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint16_t tagQwc = static_cast<uint16_t>(tag & 0xFFFF);
                         uint32_t id = static_cast<uint32_t>((tag >> 28) & 0x7);
                         const bool irq = ((tag >> 31) & 0x1ull) != 0ull;
-                        uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
+                        uint32_t addr = static_cast<uint32_t>(tag >> 32); // bit 31: SPR
                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
                         ++tagsProcessed;
+                        if (traceBudget > 0)
+                            traceTags.push_back({currentTagAddr, id, tagQwc, addr});
 
                         uint32_t dataAddr = 0;
                         bool hasPayload = (tagQwc > 0);
@@ -1555,6 +1572,15 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             break;
                     }
 
+                    if (traceBudget > 0 && chainBuf.size() > 512u * 1024u)
+                    {
+                        --traceBudget;
+                        std::cout << "[dma-chain] channel 0x" << std::hex << channelBase << " bytes 0x" << chainBuf.size()
+                                  << " tags " << std::dec << traceTags.size() << std::endl;
+                        for (const auto &t : traceTags)
+                            std::cout << "[dma-chain]   at 0x" << std::hex << t[0] << " id " << t[1] << " qwc 0x" << t[2]
+                                      << " addr 0x" << t[3] << std::dec << std::endl;
+                    }
                     m_ioRegisters[channelBase + 0x30] = tagAddr;
                     m_ioRegisters[channelBase + 0x40] = asr0;
                     m_ioRegisters[channelBase + 0x50] = asr1;
@@ -1823,6 +1849,11 @@ void PS2Memory::processPendingTransfers()
         }
     }
     m_pendingGifTransfers.clear();
+    // A GIF DMA started before these VIF transfers reaches the GS first: the
+    // arbiter would otherwise put the PATH1/PATH2 packets they produce ahead of
+    // it, and geometry would sample textures that PATH3 had not uploaded yet.
+    if (m_gifArbiter)
+        m_gifArbiter->drain();
 
     const bool hadVif0 = !m_pendingVif0Transfers.empty();
     for (auto &p : m_pendingVif0Transfers)
@@ -2088,7 +2119,8 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
 
-    if (!m_rdram || !m_gsVRAM || m_path3Masked)
+    // A GS that keeps the GIF path state takes the DMA data as it is.
+    if (!m_rdram || !m_gsVRAM || m_path3Masked || m_gifPathsKeepTagState)
         return false;
     if (m_gifArbiter && !m_gifArbiter->empty())
         return false;
@@ -2280,7 +2312,8 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
 
-    if (!m_rdram || !m_gsVRAM || m_path3Masked)
+    // A GS that keeps the GIF path state takes the DMA data as it is.
+    if (!m_rdram || !m_gsVRAM || m_path3Masked || m_gifPathsKeepTagState)
         return false;
     if (m_gifArbiter && !m_gifArbiter->empty())
         return false;

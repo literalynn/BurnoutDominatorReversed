@@ -783,7 +783,7 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t path
             if ((nloop * nreg) & 1)
                 offset += 8;
         }
-        else if (flg == GIF_FMT_IMAGE)
+        else // IMAGE, and FLG 3, which the GS manual defines as working like IMAGE
         {
             uint32_t imageBytes = nloop * 16;
             if (offset + imageBytes > sizeBytes)

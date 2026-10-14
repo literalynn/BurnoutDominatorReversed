@@ -21,6 +21,11 @@ if (-not $MSBuildPath) {
     }
     $MSBuildPath = & $vswherePath -latest -products '*' -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'MSBuild/**/Bin/MSBuild.exe' | Select-Object -First 1
     if (-not $MSBuildPath) {
+        # An instance left incomplete by an interrupted update is skipped by
+        # -latest, although its MSBuild and compiler still work.
+        $MSBuildPath = & $vswherePath -all -products '*' -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'MSBuild/**/Bin/MSBuild.exe' | Select-Object -Last 1
+    }
+    if (-not $MSBuildPath) {
         throw 'MSBuild.exe was not found in an installed Visual Studio instance.'
     }
 }

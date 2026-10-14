@@ -3041,6 +3041,44 @@ void register_ps2_vu1_tests()
             }
         });
 
+        tc.Run("XGKICK sends a FLG 3 GIF packet like an IMAGE one", [](TestCase &t)
+        {
+            // The GS manual defines FLG 3 ("disable") as working like IMAGE;
+            // Burnout Dominator's VU1 microcode kicks such packets.
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::vector<std::vector<uint8_t>> captured;
+            mem.setGifPacketCallback([&](const uint8_t *data, uint32_t sizeBytes)
+            {
+                captured.emplace_back(data, data + sizeBytes);
+            });
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+
+            uint8_t *vuCode = mem.getVU1Code();
+            uint8_t *vuData = mem.getVU1Data();
+            std::memset(vuCode, 0, PS2_VU1_CODE_SIZE);
+            std::memset(vuData, 0, PS2_VU1_DATA_SIZE);
+            const uint64_t tag = makeGifTag(2u, 3u, 0u, true);
+            std::memcpy(vuData, &tag, sizeof(tag));
+            for (uint32_t i = 0; i < 32u; ++i)
+                vuData[16u + i] = static_cast<uint8_t>(0x40u + i);
+            const uint32_t lower = makeVuLowerSpecial(0x6Cu, 1u);
+            std::memcpy(vuCode, &lower, sizeof(lower));
+
+            VU1Interpreter vu1;
+            vu1.state().vi[1] = 0;
+            vu1.execute(vuCode, PS2_VU1_CODE_SIZE, vuData, PS2_VU1_DATA_SIZE, gs, &mem, 0u, 0u, 0u, 8u);
+
+            t.Equals(captured.size(), static_cast<size_t>(1u), "XGKICK should emit the packet");
+            if (!captured.empty())
+            {
+                t.Equals(captured[0].size(), static_cast<size_t>(48u), "the packet holds the tag and two payload qwords");
+                t.IsTrue(captured[0].size() == 48u && captured[0][47] == 0x5Fu, "the payload is copied in full");
+            }
+        });
+
         tc.Run("XGKICK wraps within a qword for an external unaligned data size", [](TestCase &t)
         {
             Vu1Fixture fx;
