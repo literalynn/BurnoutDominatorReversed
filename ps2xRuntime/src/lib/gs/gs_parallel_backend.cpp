@@ -151,6 +151,10 @@ namespace
                 transfer.copiedPixels = transfer.direction == 2 ? transfer.totalPixels : 0;
                 uploadedBytes = uploadTailSize = 0;
                 fifoOffset = fifoTail.size();
+                if (transfer.direction == 1 && std::getenv("BDR_PGS_TRACE"))
+                    std::printf("[pgs-readback] vsync=%llu bitbltbuf=%016llx trxreg=%016llx bytes=%zu\n",
+                                (unsigned long long)priv.vsyncTick.load(), (unsigned long long)bitblt,
+                                (unsigned long long)trxreg, transferBytes);
             }
             if (addr == GS_REG_HWREG)
                 observeImage(8);
