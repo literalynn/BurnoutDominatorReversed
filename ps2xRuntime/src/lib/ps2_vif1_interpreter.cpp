@@ -336,6 +336,24 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         uint8_t num = (cmd >> 16) & 0xFF;
         const bool irq = (cmd & 0x80000000u) != 0u;
 
+        // BDR_TRACE_VIF1=first,count: every VIF1 code of VSync ticks first..first+count,
+        // with the TOPS/ITOPS/BASE/OFST state it runs with.
+        static const std::pair<uint64_t, uint64_t> traceWindow = []
+        {
+            const char *value = std::getenv("BDR_TRACE_VIF1");
+            uint64_t first = 0, count = 0;
+            if (value && std::sscanf(value, "%llu,%llu", reinterpret_cast<unsigned long long *>(&first),
+                                     reinterpret_cast<unsigned long long *>(&count)) == 2)
+                return std::make_pair(first, first + count);
+            return std::make_pair(uint64_t{1}, uint64_t{0});
+        }();
+        if (const uint64_t tick = gs_regs.vsyncTick.load(std::memory_order_relaxed);
+            tick >= traceWindow.first && tick <= traceWindow.second)
+            std::printf("[vif1] v=%llu pos=0x%x/0x%x cmd=%08x op=%02x num=%u imm=%04x tops=%03x itops=%03x base=%03x ofst=%03x dbf=%u cycle=%04x mode=%u\n",
+                        static_cast<unsigned long long>(tick), pos - 4u, sizeBytes, cmd, opcode, num, imm,
+                        vif1_regs.tops & 0x3FFu, vif1_regs.itops & 0x3FFu, vif1_regs.base & 0x3FFu, vif1_regs.ofst & 0x3FFu,
+                        (vif1_regs.stat >> 7) & 1u, vif1_regs.cycle & 0xFFFFu, vif1_regs.mode & 3u);
+
         // Track most-recent command for VIFn_CODE emulation.
         vif1_regs.code = cmd;
         vif1_regs.num = num;
@@ -568,6 +586,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
+            if (pos + totalBytes > sizeBytes && traceWindow.first <= traceWindow.second)
+                std::printf("[vif1] UNPACK truncated: needs 0x%x bytes, 0x%x left\n", totalBytes, sizeBytes - pos);
             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
@@ -605,6 +625,13 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     {
                         srcVec = srcBase + srcIndex * bytesPerVector;
                         ++srcIndex;
+                        decoded = true;
+                    }
+                    else if (!sourceAvailable && pos + (srcIndex + 1u) * bytesPerVector <= sizeBytes)
+                    {
+                        // Filling write (WL > CL): the console writes the next source
+                        // vector again without consuming it (PCSX2 Vif_Unpack.cpp).
+                        srcVec = srcBase + srcIndex * bytesPerVector;
                         decoded = true;
                     }
 
@@ -706,6 +733,32 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         handledFormat = false;
                     }
 
+                    // As on the console (PCSX2 Vif_Unpack.cpp): V2 writes x y x y, and V3
+                    // is unpacked like V4, so w takes the source element after z.
+                    if (handledFormat && vl < 3u && components == 2)
+                    {
+                        decompressed[2] = decompressed[0];
+                        decompressed[3] = decompressed[1];
+                    }
+                    else if (handledFormat && vl < 3u && components == 3)
+                    {
+                        const uint32_t elementBytes = 4u >> vl;
+                        const size_t offset = static_cast<size_t>(srcVec - data) + 3u * elementBytes;
+                        if (offset + elementBytes <= sizeBytes)
+                        {
+                            if (vl == 0u)
+                                std::memcpy(&decompressed[3], data + offset, 4u);
+                            else if (vl == 1u)
+                            {
+                                uint16_t raw = 0;
+                                std::memcpy(&raw, data + offset, sizeof(raw));
+                                decompressed[3] = extend16(raw);
+                            }
+                            else
+                                decompressed[3] = extend8(data[offset]);
+                        }
+                    }
+
                     // Unknown compressed format fallback: preserve legacy raw-copy behavior.
                     if (!handledFormat && decoded && !maskEnable && (vif1_regs.mode == 0u || vif1_regs.mode == 3u))
                     {
@@ -743,6 +796,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                                     writeVal = writeVal + vif1_regs.row[field];
                                     if (mode == 2u)
                                         vif1_regs.row[field] = writeVal;
+                                }
+                                else if (canAdd && mode == 3u)
+                                {
+                                    vif1_regs.row[field] = writeVal; // mode 3 also stores the data in ROW
                                 }
                             }
                         }

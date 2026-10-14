@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## VIF1 UNPACK as on the console (October 14, 2026)
+
+- `ps2_vif1_interpreter.cpp`, following PCSX2 `Vif_Unpack.cpp`: V2 unpacks write x y x y (z and w used to keep old VU memory); V3 unpacks are done like V4, so w is the source element after z; STMOD mode 3 also stores the data in ROW; a filling write (WL > CL) writes the next source vector again without consuming it, instead of ROW. Test: `VIF UNPACK V2 repeats xy, V3 reads w from the next element, mode 3 sets ROW`.
+- Debugging: `BDR_TRACE_VIF1=first,count` prints the VIF1 commands of some VSync ticks with their TOPS/ITOPS/BASE/OFST/DBF/CYCLE/MODE state; truncated UNPACKs are reported.
+
 ## GIF FLG 3, DMA scratchpad bit, GIF and VIF order (October 14, 2026)
 
 - `vu/ps2_vu1_core.cpp`: XGKICK treats a GIF tag with FLG 3 as IMAGE, as the GS manual defines it. It used to report a reserved instruction (code 0xFFFFFFF8, logged as `[VU1 reserved lower] pc=0x18e8`), drop the packet and stop VU1; Burnout Dominator's VU1 microcode kicks such packets from the car select on. `gs/gs_frontend.cpp` (CPU frontend), `gs/ps2_gif_arbiter.cpp` and `ps2_vif1_interpreter.cpp` (pending image data) treat FLG 3 the same way. Test: `XGKICK sends a FLG 3 GIF packet like an IMAGE one`.

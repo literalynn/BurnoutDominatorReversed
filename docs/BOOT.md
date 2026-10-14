@@ -169,6 +169,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_PGS_TRACE=1` | paraLLEl-GS: prints the display registers at each presentation and the transfer registers of each local-to-host readback |
 | `BDR_PGS_RECORD_FROM=N`, `BDR_PGS_RECORD_VSYNCS=M` | with `BDR_PGS_RECORD`: records only VSync ticks N to N+M, starting with the VRAM of tick N |
 | `BDR_TRACE_DMA_CHAIN=N` | prints the tags (address, id, QWC, ADDR) of up to N DMA chains whose data exceeds 512 KiB |
+| `BDR_TRACE_VIF1=first,count` | every VIF1 command of VSync ticks `first` to `first+count`, with TOPS/ITOPS/BASE/OFST/DBF/CYCLE/MODE |
 | `BDR_VU_BADKICK_DIR=dir` | VU1 data, code and registers at the first XGKICK whose first GIF tag has only NLOOP/EOP and a non-zero REGS word, and VU1 data and registers at the last kick before it |
 | `BDR_PROFILE_STACKS=N` | with `BDR_PROFILE_SECONDS`: prints N call stacks of the profiled thread, 200 ms apart |
 | `BDR_PROFILE_SECONDS=N` | with `BDR_PROFILE=1`: after N seconds of sampling, prints the report and the sampled thread's call stack, even if that thread never returns (hangs) |

@@ -711,6 +711,35 @@ void register_ps2_memory_tests()
             t.Equals(mem.vif1_regs.row[3], 103u, "difference mode should update row register for W");
         });
 
+        tc.Run("VIF UNPACK V2 repeats xy, V3 reads w from the next element, mode 3 sets ROW", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+            appendU32(packet, makeVifCmd(0x64u, 1u, 0u)); // UNPACK V2-32 -> addr 0
+            appendU32(packet, 5u);
+            appendU32(packet, 6u);
+            appendU32(packet, makeVifCmd(0x68u, 2u, 1u)); // UNPACK V3-32 -> addr 1 and 2
+            for (uint32_t v = 1u; v <= 6u; ++v)
+                appendU32(packet, v);
+            appendU32(packet, makeVifCmd(0x05u, 0u, 3u)); // STMOD mode 3
+            appendU32(packet, makeVifCmd(0x6Cu, 1u, 3u)); // UNPACK V4-32 -> addr 3
+            for (uint32_t v = 7u; v <= 10u; ++v)
+                appendU32(packet, v);
+
+            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+
+            uint32_t q[4][4] = {};
+            std::memcpy(q, mem.getVU1Data(), sizeof(q));
+            t.IsTrue(q[0][0] == 5u && q[0][1] == 6u && q[0][2] == 5u && q[0][3] == 6u, "V2 should write x y x y");
+            t.IsTrue(q[1][0] == 1u && q[1][1] == 2u && q[1][2] == 3u && q[1][3] == 4u, "V3 w should be the next element");
+            t.IsTrue(q[2][0] == 4u && q[2][1] == 5u && q[2][2] == 6u, "second V3 vector");
+            t.IsTrue(q[3][0] == 7u && q[3][3] == 10u, "mode 3 should write the data");
+            t.IsTrue(mem.vif1_regs.row[0] == 7u && mem.vif1_regs.row[3] == 10u, "mode 3 should store the data in ROW");
+        });
+
         tc.Run("VIF fill write uses STMASK and STROW when WL>CL", [](TestCase &t)
         {
             PS2Memory mem;
