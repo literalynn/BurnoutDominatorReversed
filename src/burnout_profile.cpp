@@ -27,8 +27,11 @@ namespace bdr_profile {
 namespace {
 constexpr size_t kMaxSamples = 1u << 21;
 
-// Opens the thread that the runtime names "GameThread".
+// Opens the thread named by BDR_PROFILE_THREAD, "GameThread" by default.
 HANDLE openGameThread() {
+    const char* wanted = std::getenv("BDR_PROFILE_THREAD");
+    const std::string name = wanted && wanted[0] ? wanted : "GameThread";
+    const std::wstring wideName(name.begin(), name.end());
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snapshot == INVALID_HANDLE_VALUE)
         return nullptr;
@@ -45,7 +48,7 @@ HANDLE openGameThread() {
             continue;
         PWSTR description = nullptr;
         if (SUCCEEDED(GetThreadDescription(thread, &description)) && description) {
-            if (std::wstring(description) == L"GameThread")
+            if (std::wstring(description) == wideName)
                 found = thread;
             LocalFree(description);
         }
@@ -166,12 +169,30 @@ void Sampler::report() {
 
     std::vector<std::pair<std::string, uint32_t>> ranked(perFunction.begin(), perFunction.end());
     std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-    std::cout << "[profile] " << samples.size() << " samples of the guest thread"
+    std::cout << "[profile] " << samples.size() << " samples of the profiled thread"
               << (symbols ? "" : " (no symbols)") << '\n';
     const size_t shown = std::min<size_t>(ranked.size(), 45);
     for (size_t i = 0; i < shown; ++i) {
         std::printf("[profile] %5.1f%% %7u  %s\n", 100.0 * ranked[i].second / static_cast<double>(samples.size()),
                     ranked[i].second, ranked[i].first.c_str());
+    }
+    // The hottest addresses with their symbol offset and source line: a large
+    // offset means the address has no symbol of its own (inlined or folded code).
+    std::vector<std::pair<uint64_t, uint32_t>> hot(perAddress.begin(), perAddress.end());
+    std::sort(hot.begin(), hot.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (size_t i = 0; symbols && i < std::min<size_t>(hot.size(), 20); ++i) {
+        auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = 511;
+        DWORD64 displacement = 0;
+        const bool named = SymFromAddr(process, hot[i].first, &displacement, symbol) != FALSE;
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof(line);
+        DWORD lineDisplacement = 0;
+        const bool lined = SymGetLineFromAddr64(process, hot[i].first, &lineDisplacement, &line) != FALSE;
+        std::printf("[profile] %7u  %s+0x%llx  %s:%lu\n", hot[i].second,named ? symbol->Name : "?",
+                    static_cast<unsigned long long>(displacement), lined ? line.FileName : "?",
+                    lined ? static_cast<unsigned long>(line.LineNumber) : 0ul);
     }
     std::cout.flush();
     if (symbols)

@@ -82,6 +82,25 @@ namespace
         cache.Invalidate();
         expectEqual(GSMem::ReadTexture(cache, f.vram.data(), GS_PSM_CT32, 31, 2, 8, 0), kGreen, "alias after flush");
     }
+
+    void reloadAfterWrite()
+    {
+        BackendFixture f;
+        GSMem::TexturePageCache cache;
+        const auto read = [&](uint32_t base)
+        {
+            return GSMem::ReadTexture(cache, f.vram.data(), GS_PSM_CT32, base, 1, 0, 0);
+        };
+        f.backend.WriteVram(GS_PSM_CT32, 32, 1, 0, 0, kRed);
+        f.backend.WriteVram(GS_PSM_CT32, 64, 1, 0, 0, kGreen);
+        expectEqual(read(32), kRed, "load the first page");
+        expectEqual(read(64), kGreen, "load the second page");
+        expectEqual(read(32), kRed, "an unwritten page is reused");
+        f.backend.WriteVram(GS_PSM_CT32, 32, 1, 0, 0, kGreen);
+        expectEqual(read(32), kRed, "the current page stays stale");
+        expectEqual(read(64), kGreen, "switch pages");
+        expectEqual(read(32), kGreen, "a page written since its copy is loaded again");
+    }
 }
 
 int main(int argc, char** argv)
@@ -94,6 +113,6 @@ int main(int argc, char** argv)
         {"t4hh", addressCoverage<GS_PSM_T4HH>}, {"z32", addressCoverage<GS_PSM_Z32>},
         {"z24", addressCoverage<GS_PSM_Z24>}, {"z16", addressCoverage<GS_PSM_Z16>},
         {"z16s", addressCoverage<GS_PSM_Z16S>}, {"alias_lanes", aliasLanes},
-        {"physical_tag_aliases", physicalTagAliases}
+        {"physical_tag_aliases", physicalTagAliases}, {"reload_after_write", reloadAfterWrite}
     });
 }

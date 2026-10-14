@@ -6,6 +6,7 @@
 #include "runtime/gs/ps2_gs_psmt8.h"
 #include "runtime/gs/ps2_gs_memory.h"
 #include "ps2_log.h"
+#include "ThreadNaming.h"
 #include "runtime/ps2_wait_stats.h"
 #include <atomic>
 #include <algorithm>
@@ -324,7 +325,8 @@ namespace
     {
         const float top = static_cast<float>(c00) + (static_cast<float>(c10) - static_cast<float>(c00)) * fx;
         const float bottom = static_cast<float>(c01) + (static_cast<float>(c11) - static_cast<float>(c01)) * fx;
-        return clampU8(static_cast<int>(std::lround(top + (bottom - top) * fy)));
+        // A convex combination of 0..255 values: adding 0.5 and truncating rounds like lround.
+        return clampU8(static_cast<int>(top + (bottom - top) * fy + 0.5f));
     }
 }
 
@@ -720,6 +722,7 @@ void GSCpuBackend::QueuePrimitive(const GSPrimitiveBatch &batch)
         {
             workers.threads.emplace_back([this, &workers, index, workerCount]()
                                          {
+                ThreadNaming::SetCurrentThreadName("GSRaster" + std::to_string(index));
                 t_rowBand = RowBand{index, workerCount};
                 t_textureCache = workers.caches[index].get();
                 uint64_t seen = 0u;

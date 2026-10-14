@@ -162,6 +162,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_TRACE_GS_VSYNC=N` | every primitive drawn during VSync tick N: primitive type, frame, TEX0 (base, width, format, size, CLUT base, format, mode, offset), FBMSK, ZBUF, TEST, ALPHA, CLAMP, TEX1, XYOFFSET, first two vertices (position, UV, ST) and first vertex colour |
 | `BDR_DUMP_GS_DIR=dir` | with `BDR_TRACE_GS_VSYNC=N`: writes each render target of VSync N to `dir` as a PPM (`target_NNN_fbpP_psmM.ppm`) when the game moves on to another target, to follow multi-pass effects |
 | `BDR_PROFILE_DELAY_S=N` | with `BDR_PROFILE=1`: starts sampling after N seconds, to profile one phase (e.g. the race) |
+| `BDR_PROFILE_THREAD=name` | with `BDR_PROFILE=1`: samples that thread instead of `GameThread`, e.g. `GSRaster0` for a GS raster worker |
 | `BDR_PROFILE=1` | sampler of the guest thread (EE and IOP run on it; GS rasterization too with `BDR_GS_THREADS=1`); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
 
 With these tools, the profile showed the game ran at 7% of real time because the IOP and the timers were advanced every 8 EE cycles; they now are in batches of 2048 cycles (CHANGES.md).

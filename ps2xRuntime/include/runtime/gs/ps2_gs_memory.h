@@ -259,7 +259,7 @@ namespace GSMem
 		static constexpr usz BitOffset();
 
 		// writes the pixel
-		static constexpr void Write(const PageLookupTableT& table, u8* data, u32 block, u32 bw, u32 x, u32 y, PackedT value);
+		static void Write(const PageLookupTableT& table, u8* data, u32 block, u32 bw, u32 x, u32 y, PackedT value);
 
 		// reads the pixel
 		static constexpr auto Read(const PageLookupTableT& table, const u8* data, u32 block, u32 bw, u32 x, u32 y, TexturePageCache* cache = nullptr) -> PackedT;
@@ -459,7 +459,7 @@ namespace GSMem
 	}
 
 	template<PixelStorageMode psm>
-	constexpr void PixelStorageTraits<psm>::Write(const PageLookupTableT& table, u8* data, u32 block, u32 bw, u32 x, u32 y, PackedT value)
+	void PixelStorageTraits<psm>::Write(const PageLookupTableT& table, u8* data, u32 block, u32 bw, u32 x, u32 y, PackedT value)
 	{
 		const u32 pixel_addr = Address(table, block, bw, x, y);
 		const u32 bits = pixel_addr * UnpackedBitWidth(psm) + BitOffset();
@@ -499,6 +499,7 @@ namespace GSMem
 		default:
 			break;
 		}
+		NotePageWrite(byte_addr);
 	}
 
 	template<PixelStorageMode psm>
