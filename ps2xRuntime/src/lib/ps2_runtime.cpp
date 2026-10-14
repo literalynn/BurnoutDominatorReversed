@@ -7,6 +7,7 @@
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ee_scheduler.h"
 #include "runtime/ps2_wait_stats.h"
+#include "runtime/ee_unwind.h"
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
 #include "Kernel/Stubs/GS.h"
@@ -1437,7 +1438,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     const uint32_t entryPc = ctx->pc;
     targetFn(rdram, ctx, this);
 
-    if (isStopRequested() || ctx->pc == 0u)
+    if (isStopRequested() || ctx->pc == 0u || ps2_ee_unwind::g_returningToScheduler)
     {
         return false;
     }

@@ -2,6 +2,7 @@
 
 #include "ps2_log.h"
 #include "runtime/ps2_wait_stats.h"
+#include "runtime/ee_unwind.h"
 #include "ps2_runtime_macros.h"
 
 #include <algorithm>
@@ -61,6 +62,41 @@ namespace
             return text && *text && *text != '0';
         }();
         return enabled;
+    }
+
+    // BDR_DISPATCH_HISTORY=1: the last 256 dispatches (thread, pc, sp, ra),
+    // printed when the scheduler reaches a pc with no generated code.
+    struct DispatchRecord
+    {
+        int thread;
+        uint32_t pc;
+        uint32_t sp;
+        uint32_t ra;
+    };
+    constexpr uint32_t kDispatchHistory = 256u;
+    DispatchRecord g_dispatchRecords[kDispatchHistory] = {};
+    uint32_t g_dispatchNext = 0u;
+
+    bool dispatchHistoryEnabled()
+    {
+        static const bool enabled = []
+        {
+            const char *text = std::getenv("BDR_DISPATCH_HISTORY");
+            return text && *text && *text != '0';
+        }();
+        return enabled;
+    }
+
+    void printDispatchHistory()
+    {
+        std::cerr << "[dispatch-history] oldest first:" << std::hex;
+        for (uint32_t i = 0; i < kDispatchHistory; ++i)
+        {
+            const DispatchRecord &record = g_dispatchRecords[(g_dispatchNext + i) % kDispatchHistory];
+            std::cerr << "\n  T" << std::dec << record.thread << std::hex << " pc=0x" << record.pc << " sp=0x" << record.sp
+                      << " ra=0x" << record.ra;
+        }
+        std::cerr << std::dec << std::endl;
     }
 
     void checkWordWatch(const uint8_t *rdram, uint32_t dispatchedPc, const R5900Context &context)
@@ -341,7 +377,10 @@ void EeScheduler::run()
             continue;
         }
 
-        if (!m_pendingInvocations.empty() && running->invocations.empty())
+        // Queued handlers (INTC, DMAC, alarms, VSync and SIF callbacks) run in
+        // interrupt context on the EE: they wait while the thread has EIE
+        // cleared (di ... ei).
+        if (!m_pendingInvocations.empty() && running->invocations.empty() && (context.cop0_status & 0x10000u) != 0u)
         {
             GuestInvocation invocation = std::move(m_pendingInvocations.front());
             m_pendingInvocations.pop_front();
@@ -361,6 +400,10 @@ void EeScheduler::run()
             }
             else
             {
+                if (dispatchHistoryEnabled())
+                {
+                    printDispatchHistory();
+                }
                 m_runtime.reportMissingFunction(m_rdram,
                                                 &context,
                                                 context.pc,
@@ -384,6 +427,12 @@ void EeScheduler::run()
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
             const uint32_t dispatchedPc = context.pc;
+            ps2_ee_unwind::g_returningToScheduler = false;
+            if (dispatchHistoryEnabled())
+            {
+                g_dispatchRecords[g_dispatchNext++ % kDispatchHistory] =
+                    DispatchRecord{m_currentThreadId, context.pc, getRegU32(&context, 29), getRegU32(&context, 31)};
+            }
             function(m_rdram, &context, &m_runtime);
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
@@ -483,6 +532,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     if (m_checkpointPending.load(std::memory_order_acquire) ||
         m_stopRequested.load(std::memory_order_acquire))
     {
+        ps2_ee_unwind::g_returningToScheduler = true;
         return true;
     }
 
@@ -490,6 +540,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     if (nextEventCycle != 0u && m_eeCycle >= nextEventCycle)
     {
         m_checkpointPending.store(true, std::memory_order_release);
+        ps2_ee_unwind::g_returningToScheduler = true;
         return true;
     }
 
@@ -503,6 +554,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     {
         m_rescheduleRequested = true;
         m_timeSliceExpired = true;
+        ps2_ee_unwind::g_returningToScheduler = true;
         return true;
     }
 

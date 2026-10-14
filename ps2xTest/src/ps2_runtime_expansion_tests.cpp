@@ -1,3 +1,4 @@
+#include "runtime/ee_unwind.h"
 #include "MiniTest.h"
 #include "ps2recomp/code_generator.h"
 #include "ps2recomp/instructions.h"
@@ -154,6 +155,17 @@ namespace
             setRegU32(*ctx, 2, 0x00FACE42u);
             // Leave ctx->pc at the entry point. dispatchGuestBranch should convert
             // unchanged call PC into the supplied fallthrough PC for call-like edges.
+        }
+    }
+
+    // A recursive inner call stopped by a checkpoint: the resume point is the
+    // entry of the function the outer call was running.
+    void testGuestBranchCheckpointAtEntryHandler(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        ps2_ee_unwind::g_returningToScheduler = true;
+        if (ctx)
+        {
+            ctx->pc = 0x3300u;
         }
     }
 
@@ -430,6 +442,30 @@ void register_ps2_runtime_expansion_tests()
                      "jump target must not execute on a nested host stack frame");
             t.Equals(ctx.pc, 0x3400u,
                      "central dispatcher should receive the exact jump target");
+        });
+
+        tc.Run("dispatchGuestBranch call keeps unwinding when a checkpoint stops at the callee entry", [](TestCase &t)
+        {
+            PS2Runtime runtime;
+            runtime.registerFunction(0x3300u, &testGuestBranchCheckpointAtEntryHandler);
+
+            R5900Context ctx{};
+            ctx.pc = 0x2000u;
+
+            const bool returnedToFallthrough = runtime.dispatchGuestBranch(
+                nullptr,
+                &ctx,
+                0x3300u,
+                0x2000u,
+                0x2008u,
+                PS2Runtime::GuestBranchKind::DirectCall,
+                "test-jal-checkpoint");
+            ps2_ee_unwind::g_returningToScheduler = false;
+
+            t.IsFalse(returnedToFallthrough,
+                      "the caller must return to the scheduler instead of continuing after the call");
+            t.Equals(ctx.pc, 0x3300u,
+                     "the resume point must reach the scheduler unchanged");
         });
 
         tc.Run("dispatchGuestBranch call returns false when callee transfers elsewhere", [](TestCase &t)
