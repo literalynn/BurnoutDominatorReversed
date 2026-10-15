@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## PATH3 packets released by a window go out before the DIRECT that follows (October 15, 2026)
+
+- `ps2_memory.cpp` (`releaseMaskedPath3Packets`): the PATH3 packets an unmask window lets out were queued in the GIF arbiter without draining it, so a VIF1 DIRECT later in the same window was sorted ahead of them by path priority. A PATH3 packet the GIF has started ends before PATH2 is served (continuous mode); the released packets now go out at once. Burnout Dominator draws each piece of its front-end images as `MSKPATH3 0`, texture upload on PATH3, `DIRECT` draw, `MSKPATH3 1`: the first piece was drawn before its texture arrived, so the 50/60 Hz screen showed stale VRAM and the title logo read "RNORNOUT OMINAOMINATOR".
+- `BDR_TRACE_DMA_KICKS=first,count`: GIF, VIF0 and VIF1 DMA starts with the queued sizes and the PATH3 mask.
+
 ## VIF0 UNPACK shares the VIF1 decoder; V4-5 scaling (October 15, 2026)
 
 - `ps2_vif1_interpreter.cpp`: VIF0 UNPACK only handled 32-bit formats and ignored masking, ROW/COL, STMOD and the S/V2/V3 layouts, so 16-bit, 8-bit and V4-5 data never reached VU0 memory. The VIF1 UNPACK body becomes `unpackToVu` (VU1: 1024 qwords and TOPS; VU0: 256 qwords, addresses wrap, no TOPS) and both VIFs use it. V4-5 now scales each 5-bit field to 8 bits and puts bit 15 in bit 7 of A, as the console does (PCSX2 `UNPACK_V4_5`), instead of storing the raw 5-bit values. Test: `VIF0 UNPACK decodes 16-bit and V4-5 data like VIF1`.

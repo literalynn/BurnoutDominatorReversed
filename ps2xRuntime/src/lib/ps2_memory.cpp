@@ -1620,6 +1620,32 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     enqueueTransfer(madr, qwc);
                 }
 
+                // BDR_TRACE_DMA_KICKS=first,count: each GIF/VIF0/VIF1 DMA start of those VSync ticks, with
+                // the size it queued and what is still queued on each channel.
+                static const std::pair<uint64_t, uint64_t> kickWindow = []
+                {
+                    const char *text = std::getenv("BDR_TRACE_DMA_KICKS");
+                    unsigned long long first = 0, count = 0;
+                    if (text && std::sscanf(text, "%llu,%llu", &first, &count) == 2)
+                        return std::make_pair(uint64_t{first}, uint64_t{first + count});
+                    return std::make_pair(uint64_t{1}, uint64_t{0});
+                }();
+                if (const uint64_t tick = gs_regs.vsyncTick.load(std::memory_order_relaxed);
+                    tick >= kickWindow.first && tick <= kickWindow.second)
+                {
+                    const auto bytes = [](const std::vector<PendingTransfer> &queue)
+                    {
+                        size_t total = 0;
+                        for (const auto &transfer : queue)
+                            total += transfer.chainData.empty() ? transfer.qwc * 16u : transfer.chainData.size();
+                        return total;
+                    };
+                    std::printf("[dma] v=%llu start %s chcr=%08x madr=%08x tadr=%08x qwc=%u queued gif=%zu vif1=%zu path3masked=%u\n",
+                                static_cast<unsigned long long>(tick),
+                                channelBase == 0x1000A000u ? "GIF" : channelBase == 0x10009000u ? "VIF1" : "VIF0",
+                                value, madr, m_ioRegisters[channelBase + 0x30], qwc, bytes(m_pendingGifTransfers),
+                                bytes(m_pendingVif1Transfers), m_path3Masked ? 1u : 0u);
+                }
                 const bool autoProcessTransfers =
                     (channelBase == 0x1000A000u) ? (m_gifPacketCallback || m_gifArbiter != nullptr) : true;
                 if (autoProcessTransfers)
@@ -2093,8 +2119,13 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
 
     if (cut != 0u)
     {
+        // A packet PATH3 has started ends before the GIF serves PATH2 (continuous mode): it
+        // goes out now instead of being sorted behind a DIRECT that follows in the window.
         if (m_gifArbiter)
+        {
             m_gifArbiter->submit(GifPathId::Path3, bytes.data(), static_cast<uint32_t>(cut * 16u), false);
+            m_gifArbiter->drain();
+        }
         else if (m_gifPacketCallback)
             m_gifPacketCallback(bytes.data(), static_cast<uint32_t>(cut * 16u));
     }
