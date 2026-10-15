@@ -471,12 +471,13 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         rebuildDecodedCodeCache(vuCode, codeSize, memory,
             m_unit == Unit::VU1 ? memory->getVU1CodeGeneration() : memory->getVU0CodeGeneration());
     commitReadyPipelines();
-    // A drained VU1 at the entry of a compiled program runs it whole.
-    if (trackedCode && m_unit == Unit::VU1 && m_useCompiledExecution &&
+    // A drained VU at the entry of a compiled program runs it whole.
+    if (trackedCode && m_useCompiledExecution &&
         budgetEnd - m_cycle >= ps2_vu_program::kMinimumBudget && ps2_vu_program::Access::drained(*this))
     {
-        const uint64_t generation = memory->getVU1CodeGeneration();
-        if (const auto routine = ps2_vu_program::find(vuCode, codeSize, m_state.pc, generation))
+        const uint64_t generation = m_unit == Unit::VU1 ? memory->getVU1CodeGeneration()
+                                                        : memory->getVU0CodeGeneration();
+        if (const auto routine = ps2_vu_program::find(vuCode, codeSize, m_state.pc, generation, m_unit))
             programEnded = ps2_vu_program::run(*this, vuCode, codeSize, budgetEnd, routine);
         else
             ps2_vu_program::recordMissing(vuCode, codeSize, m_state.pc);

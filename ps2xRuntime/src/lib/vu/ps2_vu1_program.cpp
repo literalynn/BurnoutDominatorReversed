@@ -63,7 +63,7 @@ void forgetRoutines()
     g_epoch.fetch_add(1u, std::memory_order_relaxed);
 }
 
-Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation)
+Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation, Unit unit)
 {
     // Microcode changes far less often than routines are entered, so each
     // answer stands until the code generation moves on.
@@ -80,7 +80,7 @@ Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t gener
                                           [](const Entry &candidate, uint32_t value) { return candidate.pc < value; });
     for (; entry != end && entry->pc == pc; ++entry)
     {
-        if (matches(*entry, code, codeSize))
+        if (entry->unit == unit && matches(*entry, code, codeSize))
         {
             routine = entry->run;
             break;
@@ -123,7 +123,9 @@ void recordMissing(const uint8_t *code, uint32_t codeSize, uint32_t pc)
     char name[20];
     std::snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash));
     const std::filesystem::path root(directory);
-    const std::filesystem::path image = root / (std::string("vu1-") + name + ".code");
+    // compile_vu_programs.py tells the units apart by the image name.
+    const std::filesystem::path image =
+        root / (std::string(codeSize == PS2_VU0_CODE_SIZE ? "vu0-" : "vu1-") + name + ".code");
     std::error_code error;
     std::filesystem::create_directories(root, error);
     if (!std::filesystem::exists(image, error))
@@ -223,8 +225,8 @@ void Access::finish(VU1Interpreter &vu, uint64_t cycle, uint32_t workingClip, ui
 }
 
 Run::Run(VU1Interpreter &vu)
-    : m_vu(vu), m_state(Access::state(vu)), m_data(Access::data(vu)),
-      m_base(Access::cycle(vu)), m_generation(Access::codeGeneration(vu))
+    : m_vu(vu), m_state(Access::state(vu)), m_data(Access::data(vu)), m_dataMask(Access::dataMask(vu)),
+      m_pcMask(Access::pcMask(vu)), m_base(Access::cycle(vu)), m_generation(Access::codeGeneration(vu))
 {
     // Drained on entry, so every ready cycle is now.
     m_backupValue = Access::branchBackup(vu, m_backupReg);
@@ -456,7 +458,7 @@ bool run(VU1Interpreter &vu, const uint8_t *code, uint32_t codeSize, uint64_t bu
         const uint32_t pc = routine(program, budgetEnd);
         if (program.finished())
             return program.ended();
-        routine = find(code, codeSize, pc, program.generation());
+        routine = find(code, codeSize, pc, program.generation(), Access::unit(vu));
         if (!routine)
         {
             recordMissing(code, codeSize, pc);

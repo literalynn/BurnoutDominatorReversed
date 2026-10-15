@@ -1,9 +1,10 @@
 #ifndef PS2_VU1_PROGRAM_H
 #define PS2_VU1_PROGRAM_H
 
-// VU1 programs compiled whole, MSCAL entry to E bit: pairs issue in order under
-// the interpreter's stall rules, results land at issue, and whatever is still
-// in flight on return goes back into the interpreter's pipelines.
+// VU programs compiled whole, MSCAL (VU1) or VCALLMS (VU0) entry to E bit: pairs
+// issue in order under the interpreter's stall rules, results land at issue, and
+// whatever is still in flight on return goes back into the interpreter's pipelines.
+// VU0 routines hold no XGKICK, EFU, MFP or XTOP, so both units decode alike.
 
 #include "ps2_vu1_exec.inl"
 
@@ -57,13 +58,14 @@ struct Entry
     const uint16_t *footprint; // pair indices the routine was built from
     const uint64_t *words;     // their instruction words, in the same order
     Routine run;
+    Unit unit = Unit::VU1;     // the unit whose microcode the routine was built from
 };
 
 // Programs are entered only when the budget clearly outlasts them, so a
 // cycle budget does not end one part-way in ordinary use.
 inline constexpr uint64_t kMinimumBudget = 4096u;
 
-Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation);
+Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation, Unit unit = Unit::VU1);
 
 // find() remembers its answers by code address and generation, which a new
 // interpreter or memory can repeat; a VU1 reset starts the answers over.
@@ -99,6 +101,10 @@ struct Access
     static uint64_t cycle(const VU1Interpreter &vu) { return vu.m_cycle; }
     static void setCycle(VU1Interpreter &vu, uint64_t cycle) { vu.m_cycle = cycle; }
     static uint8_t *data(VU1Interpreter &vu) { return vu.m_activeVuData; }
+    static Unit unit(const VU1Interpreter &vu) { return vu.m_unit; }
+    // VU1: 16 KiB of code and data; VU0: 4 KiB of each.
+    static uint32_t dataMask(const VU1Interpreter &vu) { return vu.m_unit == Unit::VU1 ? 0x3FF0u : 0x0FF0u; }
+    static uint32_t pcMask(const VU1Interpreter &vu) { return vu.m_unit == Unit::VU1 ? 0x3FFFu : 0x0FFFu; }
     static bool xgkickActive(const VU1Interpreter &vu) { return vu.m_xgkick.active; }
     static void startXgkick(VU1Interpreter &vu, uint32_t address) { vu.startXgkick(address); }
     static void progressXgkick(VU1Interpreter &vu) { vu.progressXgkick(); }
@@ -112,18 +118,21 @@ struct Access
     static void queueP(VU1Interpreter &vu, float value, uint32_t latency) { vu.queueP(value, latency); }
     static uint64_t codeGeneration(const VU1Interpreter &vu)
     {
-        return vu.m_activeMemory ? vu.m_activeMemory->getVU1CodeGeneration() : 0u;
+        if (!vu.m_activeMemory)
+            return 0u;
+        return vu.m_unit == Unit::VU1 ? vu.m_activeMemory->getVU1CodeGeneration()
+                                      : vu.m_activeMemory->getVU0CodeGeneration();
     }
     static uint32_t workingClip(const VU1Interpreter &vu) { return vu.m_workingClip; }
 
     // Nothing issued earlier can still change state or stall a pair.
     static bool drained(const VU1Interpreter &vu)
     {
-        return vu.m_unit == Unit::VU1 && vu.m_useCompiledExecution && !vu.pipelinesPending() &&
+        return vu.m_useCompiledExecution && !vu.pipelinesPending() &&
                !vu.m_state.branchPending && !vu.m_state.ebit && !vu.m_state.haltAfterDelaySlot &&
                !vu.m_stopRequested && !vu.m_pendingHaltD && !vu.m_pendingHaltT &&
                !vu.m_state.dBitEnabled && !vu.m_state.tBitEnabled && vu.m_activeVuData &&
-               vu.m_activeVuDataSize == 16384u && vu.m_activeMemory;
+               vu.m_activeVuDataSize == (vu.m_unit == Unit::VU1 ? 16384u : 4096u) && vu.m_activeMemory;
     }
 
     static int32_t branchBackup(const VU1Interpreter &vu, uint32_t &reg)
@@ -456,6 +465,8 @@ private:
     VU1Interpreter &m_vu;
     VU1State &m_state;
     uint8_t *m_data;
+    uint32_t m_dataMask;
+    uint32_t m_pcMask;
     uint64_t m_base;
     uint64_t m_generation;
     std::array<std::array<uint32_t, 4>, 32> m_vfReady{};
@@ -488,7 +499,8 @@ class Frame
 {
 public:
     PS2_VU_FORCE_INLINE Frame(Run &run, uint64_t budgetEnd)
-        : m_run(run), m_state(run.m_state), m_data(run.m_data), m_base(run.m_base),
+        : m_run(run), m_state(run.m_state), m_data(run.m_data), m_dataMask(run.m_dataMask),
+          m_pcMask(run.m_pcMask), m_base(run.m_base),
           m_limit(budgetEnd > run.m_base ? budgetEnd - run.m_base : 0u), m_pairs(run.m_pairs),
           m_cycle(run.m_cycle), m_flagHead(run.m_flagHead), m_flagTail(run.m_flagTail),
           m_workingClip(run.m_workingClip), m_backupValue(run.m_backupValue), m_backupReg(run.m_backupReg),
@@ -677,6 +689,8 @@ private:
     Run &m_run;
     VU1State &m_state;
     uint8_t *m_data;
+    uint32_t m_dataMask;
+    uint32_t m_pcMask;
     uint64_t m_base;
     uint64_t m_limit;
     uint64_t m_pairs;
@@ -1230,8 +1244,8 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     constexpr int32_t imm11 = static_cast<int32_t>(Lower << 21u) >> 21;
     constexpr uint32_t pcMask = 0x3FFFu;
     constexpr uint32_t relativeTarget = (Pc + 8u + static_cast<uint32_t>(imm11 * 8)) & pcMask;
-    const auto address = [](int32_t qword) PS2_VU_INLINE_LAMBDA {
-        return (static_cast<uint32_t>(qword) * 16u) & 0x3FF0u;
+    const auto address = [this](int32_t qword) PS2_VU_INLINE_LAMBDA {
+        return (static_cast<uint32_t>(qword) * 16u) & m_dataMask;
     };
     const auto store = [&](uint32_t addr, const uint32_t *words) PS2_VU_INLINE_LAMBDA {
         uint32_t lanes[4];
@@ -1344,7 +1358,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     {
         // Register jumps do not use the delayed operand of conditional branches.
         m_taken = true;
-        m_jumpTarget = (static_cast<uint32_t>(static_cast<uint16_t>(m_state.vi[viS])) * 8u) & pcMask;
+        m_jumpTarget = (static_cast<uint32_t>(static_cast<uint16_t>(m_state.vi[viS])) * 8u) & m_pcMask;
         m_state.branchTarget = m_jumpTarget;
         if constexpr (opcode == 0x25u)
             viResult = static_cast<int32_t>((Pc + 16u) / 8u);

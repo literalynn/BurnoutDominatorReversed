@@ -16,8 +16,8 @@
 #include <tuple>
 #include <vector>
 
-// Compiled VU1 routines against the interpreter, on the vu_programs.py programs
-// the runtime was built with, named by PS2_VU_PROGRAM_FIXTURES. With
+// Compiled VU0 and VU1 routines against the interpreter, on the vu_programs.py
+// programs the runtime was built with, named by PS2_VU_PROGRAM_FIXTURES. With
 // PS2_VU_REQUIRE_PROGRAMS, an entry without a routine fails.
 
 namespace
@@ -30,6 +30,7 @@ namespace
         std::string name;
         uint32_t pc = 0u;
         std::vector<uint8_t> code;
+        bool vu0 = false;
     };
 
     std::vector<ProgramEntry> loadEntries(std::string &error)
@@ -51,9 +52,11 @@ namespace
             ProgramEntry entry;
             while (listing >> entry.name >> std::hex >> entry.pc)
             {
-                std::ifstream image(directory + "/vu1-" + entry.name + ".code", std::ios::binary);
-                entry.code.assign(PS2_VU1_CODE_SIZE, 0u);
-                if (!image.read(reinterpret_cast<char *>(entry.code.data()), PS2_VU1_CODE_SIZE))
+                entry.vu0 = std::filesystem::exists(directory + "/vu0-" + entry.name + ".code");
+                std::ifstream image(directory + (entry.vu0 ? "/vu0-" : "/vu1-") + entry.name + ".code",
+                                    std::ios::binary);
+                entry.code.assign(entry.vu0 ? PS2_VU0_CODE_SIZE : PS2_VU1_CODE_SIZE, 0u);
+                if (!image.read(reinterpret_cast<char *>(entry.code.data()), std::streamsize(entry.code.size())))
                 {
                     error = "cannot read the code image " + entry.name;
                     return {};
@@ -100,9 +103,19 @@ namespace
         return state;
     }
 
-    // Floats everywhere but the GIF packet the programs kick.
-    std::vector<uint8_t> initialData()
+    // Floats everywhere but the GIF packet the programs kick (VU1 only).
+    std::vector<uint8_t> initialData(bool vu0 = false)
     {
+        if (vu0)
+        {
+            std::vector<uint8_t> data(PS2_VU0_DATA_SIZE, 0u);
+            for (uint32_t index = 0u; index < PS2_VU0_DATA_SIZE / 4u; ++index)
+            {
+                const float value = pattern(1000u + index);
+                std::memcpy(&data[index * 4u], &value, sizeof(value));
+            }
+            return data;
+        }
         std::vector<uint8_t> data(PS2_VU1_DATA_SIZE, 0u);
         for (uint32_t qword = 0u; qword < kKickQword; ++qword)
             for (uint32_t lane = 0u; lane < 4u; ++lane)
@@ -119,18 +132,34 @@ namespace
 
     struct Side
     {
+        explicit Side(bool vu0 = false)
+            : vu(vu0 ? VU1Interpreter::Unit::VU0 : VU1Interpreter::Unit::VU1), vu0(vu0)
+        {
+        }
+
         PS2Memory mem;
         GS gs;
         VU1Interpreter vu;
+        bool vu0;
         std::vector<std::vector<uint8_t>> packets;
 
-        bool initialize(const std::vector<uint8_t> &code, bool compiled)
+        uint8_t *code() { return vu0 ? mem.getVU0Code() : mem.getVU1Code(); }
+        uint8_t *data() { return vu0 ? mem.getVU0Data() : mem.getVU1Data(); }
+        uint32_t codeSize() const { return vu0 ? PS2_VU0_CODE_SIZE : PS2_VU1_CODE_SIZE; }
+        uint32_t dataSize() const { return vu0 ? PS2_VU0_DATA_SIZE : PS2_VU1_DATA_SIZE; }
+
+        bool initialize(const std::vector<uint8_t> &image, bool compiled)
         {
             if (!mem.initialize())
                 return false;
+            // A new memory can reuse the last one's address and code generation, which find() caches.
+            ps2_vu_program::forgetRoutines();
             gs.init(mem.getGSVRAM(), static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &mem.gs());
-            std::memcpy(mem.getVU1Code(), code.data(), PS2_VU1_CODE_SIZE);
-            mem.markVU1CodeModified();
+            std::memcpy(code(), image.data(), codeSize());
+            if (vu0)
+                mem.markVU0CodeModified();
+            else
+                mem.markVU1CodeModified();
             mem.setGifPacketCallback([this](const uint8_t *data, uint32_t size)
                                      { packets.emplace_back(data, data + size); });
             vu.setCompiledExecutionEnabled(compiled);
@@ -141,20 +170,18 @@ namespace
         {
             vu.reset();
             vu.state() = initial;
-            std::memcpy(mem.getVU1Data(), data.data(), PS2_VU1_DATA_SIZE);
+            std::memcpy(this->data(), data.data(), dataSize());
             packets.clear();
         }
 
         void start(uint32_t pc, uint32_t cycles)
         {
-            vu.execute(mem.getVU1Code(), PS2_VU1_CODE_SIZE, mem.getVU1Data(), PS2_VU1_DATA_SIZE, gs, &mem,
-                       pc, 0u, 0u, cycles);
+            vu.execute(code(), codeSize(), data(), dataSize(), gs, &mem, pc, 0u, 0u, cycles);
         }
 
         void resume(uint32_t cycles)
         {
-            vu.resume(mem.getVU1Code(), PS2_VU1_CODE_SIZE, mem.getVU1Data(), PS2_VU1_DATA_SIZE, gs, &mem,
-                      0u, 0u, cycles);
+            vu.resume(code(), codeSize(), data(), dataSize(), gs, &mem, 0u, 0u, cycles);
         }
 
         uint64_t cycles() const { return vu.state().cycles; }
@@ -163,7 +190,7 @@ namespace
     bool same(Side &native, Side &oracle)
     {
         return std::memcmp(&native.vu.state(), &oracle.vu.state(), sizeof(VU1State)) == 0 &&
-               std::memcmp(native.mem.getVU1Data(), oracle.mem.getVU1Data(), PS2_VU1_DATA_SIZE) == 0 &&
+               std::memcmp(native.data(), oracle.data(), native.dataSize()) == 0 &&
                native.packets == oracle.packets;
     }
 
@@ -217,8 +244,8 @@ namespace
         for (const auto &[name, x, y] : {std::tuple{"q", &a.q, &b.q}, {"p", &a.p, &b.p}, {"i", &a.i, &b.i}})
             if (differs(x, y, sizeof(float)))
                 text << ' ' << name;
-        for (uint32_t qword = 0u; qword < PS2_VU1_DATA_SIZE / 16u; ++qword)
-            if (differs(native.mem.getVU1Data() + qword * 16u, oracle.mem.getVU1Data() + qword * 16u, 16u))
+        for (uint32_t qword = 0u; qword < native.dataSize() / 16u; ++qword)
+            if (differs(native.data() + qword * 16u, oracle.data() + qword * 16u, 16u))
             {
                 text << " data qword 0x" << std::hex << qword << std::dec;
                 break;
@@ -245,18 +272,19 @@ namespace
 
     void checkEntry(TestCase &t, const ProgramEntry &entry, bool require)
     {
-        Side native, oracle;
+        Side native(entry.vu0), oracle(entry.vu0);
         if (!native.initialize(entry.code, true) || !oracle.initialize(entry.code, false))
         {
-            t.Fail("VU1 fixtures should initialize");
+            t.Fail("VU fixtures should initialize");
             return;
         }
         if (require)
-            t.IsTrue(ps2_vu_program::find(native.mem.getVU1Code(), PS2_VU1_CODE_SIZE, entry.pc,
-                                          native.mem.getVU1CodeGeneration()) != nullptr,
+            t.IsTrue(ps2_vu_program::find(native.code(), native.codeSize(), entry.pc,
+                                          entry.vu0 ? native.mem.getVU0CodeGeneration() : native.mem.getVU1CodeGeneration(),
+                                          entry.vu0 ? VU1Interpreter::Unit::VU0 : VU1Interpreter::Unit::VU1) != nullptr,
                      describe(entry, 0u, oracle) + ": the entry has a compiled routine");
         const VU1State initial = initialState();
-        const std::vector<uint8_t> data = initialData();
+        const std::vector<uint8_t> data = initialData(entry.vu0);
 
         // One uninterrupted run gives the cycle the program ends on.
         oracle.reset(initial, data);
@@ -270,7 +298,7 @@ namespace
         if (require)
             t.IsTrue(native.vu.compiledPairsExecuted() != 0u, describe(entry, kWideBudget, oracle) + ": ran compiled");
         const VU1State finalState = oracle.vu.state();
-        const std::vector<uint8_t> finalData(oracle.mem.getVU1Data(), oracle.mem.getVU1Data() + PS2_VU1_DATA_SIZE);
+        const std::vector<uint8_t> finalData(oracle.data(), oracle.data() + oracle.dataSize());
         const auto finalPackets = oracle.packets;
 
         // A budget the program outlasts stops it at a block boundary and the
@@ -305,7 +333,7 @@ namespace
                 }
             }
             t.IsTrue(std::memcmp(&oracle.vu.state(), &finalState, sizeof(VU1State)) == 0 &&
-                         std::memcmp(oracle.mem.getVU1Data(), finalData.data(), PS2_VU1_DATA_SIZE) == 0 &&
+                         std::memcmp(oracle.data(), finalData.data(), oracle.dataSize()) == 0 &&
                          oracle.packets == finalPackets,
                      describe(entry, budget, oracle) + ": sliced run ends like the uninterrupted one");
         }

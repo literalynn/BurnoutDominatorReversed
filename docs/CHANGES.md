@@ -2,6 +2,12 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Compiled VU0 microprograms (October 15, 2026)
+
+- `ps2_vu1_program.h`, `ps2_vu1_program.cpp`, `ps2_vu1_core.cpp`: the compiled-routine engine, VU1 only until now, also runs VU0 microprograms (VCALLMS). Routines carry their unit (`Entry::unit`, `find(..., unit)`), data addresses and register-jump targets are masked by the unit's memory size (4 KiB for VU0) instead of VU1's 16 KiB, the code generation is the unit's, and recordings name VU0 images `vu0-<hash>.code`. Burnout Dominator makes about 3,400 VU0 calls per frame in a race, each a few to a hundred cycles, and they all ran in the interpreter (a quarter of the game thread's time). With them compiled the race runs 49% faster; RAM after 1,000 race frames is identical to an interpreted run.
+- `tools/compile_vu_programs.py`: reads `vu0-` and `vu1-` images, keeps VU1-only instructions (MFP, XTOP, XGKICK, EFU) and VU0 branches across its 4 KiB edge out of VU0 routines (the runtime decodes VU0 routines as VU1 code), and tags VU0 entries with `Unit::VU0`. VU1 output is unchanged.
+- `ps2xTest/src/ps2_vu1_program_tests.cpp`: the compiled-against-interpreter check also runs VU0 recordings, and forgets cached routines between fixtures, since a new memory can reuse the previous one's address and code generation.
+
 ## Player settings, window, gamepads and picture quality (October 15, 2026)
 
 - `ps2xRuntime/include/runtime/host_settings.h`, `src/lib/host_settings.cpp` (new, listed in `ps2xRuntime/CMakeLists.txt`): `settings.ini` ("key = value", `#` comments) with window size, full screen, vsync, frame-rate cap, aspect (4:3, 16:9, stretch), smoothing, paraLLEl-GS super-sampling, progressive scan, stick dead zone and an extra gamepad mappings file. `src/burnout_main.cpp` reads it (`--settings`, default `<save>/../settings.ini`) and writes the defaults with explanations on a first windowed launch; `tools/project.py run` passes `<repo>/settings.ini`. Test: `settings.ini round-trips and reports bad lines`.

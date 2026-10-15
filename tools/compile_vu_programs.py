@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Compile VU1 microprogram routines to C++ from locally recorded microcode.
+"""Compile VU0 and VU1 microprogram routines to C++ from locally recorded microcode.
 
-Inputs are directories written by a run with PS2_VU_PROGRAM_PROFILE set: 16 KiB
-VU1 code images named vu1-<hash>.code and an entries.txt of "<hash> <pc>"
-lines. A routine is the code reachable from one entry through branches; calls
+Inputs are directories written by a run with PS2_VU_PROGRAM_PROFILE set: code
+images named vu1-<hash>.code (16 KiB) or vu0-<hash>.code (4 KiB) and an
+entries.txt of "<hash> <pc>" lines. A routine is the code reachable from one entry through branches; calls
 and register jumps end it, and their targets become routines of their own.
 The output is generated from game microcode and must stay local.
 """
@@ -12,7 +12,9 @@ import argparse
 import struct
 from pathlib import Path
 
-CODE_SIZE = 16384
+CODE_SIZES = {"vu1": 16384, "vu0": 4096}
+# VU1 defaults, as vu_program_manifest.py uses them.
+CODE_SIZE = CODE_SIZES["vu1"]
 PAIRS = CODE_SIZE // 8
 # Run::kMaxBlockPairs: each block reserves flag queue room for its pairs.
 MAX_BLOCK_PAIRS = 128
@@ -33,6 +35,9 @@ EFU_SPECIAL = set(range(0x70, 0x77)) | set(range(0x78, 0x7F))
 LOWER_SPECIAL = {0x30, 0x31, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D,
                  0x3E, 0x3F, 0x64, 0x68, 0x69, 0x6C} | EFU_SPECIAL
 FDIV_SPECIAL = {0x38, 0x39, 0x3A, 0x3B}
+# VU1 only: MFP, XTOP, XGKICK and the EFU. The runtime decodes VU0 routines as
+# VU1 code, which is only right without these.
+VU1_ONLY_SPECIAL = {0x64, 0x68, 0x6C} | EFU_SPECIAL
 
 
 def upper_supported(upper):
@@ -64,11 +69,13 @@ def lower_supported(lower):
 
 
 class Pair:
-    __slots__ = ("lower", "upper")
+    __slots__ = ("lower", "upper", "count", "vu0")
 
-    def __init__(self, lower, upper):
+    def __init__(self, lower, upper, count=PAIRS, vu0=False):
         self.lower = lower
         self.upper = upper
+        self.count = count  # pairs in the code image
+        self.vu0 = vu0
 
     @property
     def immediate(self):
@@ -88,17 +95,27 @@ class Pair:
 
     @property
     def supported(self):
-        return upper_supported(self.upper) and (self.immediate or lower_supported(self.lower))
+        if not upper_supported(self.upper) or not (self.immediate or lower_supported(self.lower)):
+            return False
+        if self.vu0 and not self.immediate and self.lower >> 25 == 0x40 and (self.lower & 0x3F) >= 0x3C \
+                and lower_special(self.lower) in VU1_ONLY_SPECIAL:
+            return False
+        return True
 
     @property
     def word(self):
         return self.lower | (self.upper << 32)
 
-    def branch_target(self, index):
+    def branch_offset(self):
         offset = self.lower & 0x7FF
-        if offset & 0x400:
-            offset -= 0x800
-        return (index + 1 + offset) & (PAIRS - 1)
+        return offset - 0x800 if offset & 0x400 else offset
+
+    def branch_target(self, index):
+        return (index + 1 + self.branch_offset()) & (self.count - 1)
+
+    def branch_wraps(self, index):
+        """Compiled routines keep VU1's 16 KiB PC wrap; VU0 branches across its 4 KiB edge stay interpreted."""
+        return not 0 <= index + 1 + self.branch_offset() < self.count
 
     def stall_bound(self):
         """Cycles the pair can take, stalls included, ignoring PATH1 waits."""
@@ -131,11 +148,16 @@ def load_images(directories, parser):
             except (IndexError, ValueError):
                 parser.error(f"{listing}:{number}: expected '<hash> <pc>'")
             if name not in images:
-                data = (directory / f"vu1-{name}.code").read_bytes()
-                if len(data) != CODE_SIZE:
-                    parser.error(f"{directory}/vu1-{name}.code: expected a 16 KiB VU1 code image")
-                images[name] = [Pair(*struct.unpack_from("<II", data, i)) for i in range(0, CODE_SIZE, 8)]
-            if pc % 8 or pc >= CODE_SIZE:
+                unit = next((u for u in CODE_SIZES if (directory / f"{u}-{name}.code").is_file()), None)
+                if unit is None:
+                    parser.error(f"{listing}:{number}: no vu0-{name}.code or vu1-{name}.code")
+                size = CODE_SIZES[unit]
+                data = (directory / f"{unit}-{name}.code").read_bytes()
+                if len(data) != size:
+                    parser.error(f"{directory}/{unit}-{name}.code: expected a {size // 1024} KiB {unit.upper()} code image")
+                images[name] = [Pair(*struct.unpack_from("<II", data, i), size // 8, unit == "vu0")
+                                for i in range(0, size, 8)]
+            if pc % 8 or pc >= len(images[name]) * 8:
                 parser.error(f"{listing}:{number}: invalid entry {pc:#x}")
             entries.append((name, pc // 8))
     return images, entries
@@ -174,7 +196,7 @@ def constant_target(pairs, block_start, jump_index):
         if writes != reg:
             continue
         if op == 0x08 and (lower >> 11) & 15 == 0:
-            return ((lower & 0x7FF) | ((lower >> 10) & 0x7800)) & (PAIRS - 1)
+            return ((lower & 0x7FF) | ((lower >> 10) & 0x7800)) & (len(pairs) - 1)
         return None
     return None
 
@@ -190,11 +212,14 @@ class Routine:
     def terminates(self, index):
         """Why the straight line from index cannot simply continue, if at all."""
         pair = self.pairs[index]
-        if not pair.supported or index + 1 >= PAIRS:
+        count = len(self.pairs)
+        if not pair.supported or index + 1 >= count:
+            return ("leave",)
+        if pair.vu0 and pair.op in (0x20, 0x21) + tuple(CONDITIONAL) and pair.branch_wraps(index):
             return ("leave",)
         if pair.branch or pair.ebit:
             delay = self.pairs[index + 1]
-            if not delay.supported or delay.branch or delay.ebit or index + 2 > PAIRS:
+            if not delay.supported or delay.branch or delay.ebit or index + 2 > count:
                 return ("leave",)
         return None
 
@@ -225,7 +250,7 @@ class Routine:
                 if pair.ebit:
                     break
                 index += 1
-                if index >= PAIRS:
+                if index >= len(self.pairs):
                     break
         pending = sorted(leaders)
         while pending:
@@ -287,7 +312,7 @@ class Routine:
         return sorted(indices)
 
     def key(self):
-        return (self.entry, tuple((i, self.pairs[i].word) for i in self.footprint()))
+        return (self.entry, self.pairs[0].vu0, tuple((i, self.pairs[i].word) for i in self.footprint()))
 
 
 def fnv(values):
@@ -299,7 +324,8 @@ def fnv(values):
 
 
 def pc(index):
-    return f"0x{(index * 8) & (CODE_SIZE - 1):04X}u"
+    # Routine footprints never wrap (Routine.terminates), so no unit mask is needed.
+    return f"0x{(index * 8) & 0x3FFF:04X}u"
 
 
 def successors(terminator):
@@ -527,7 +553,7 @@ def main():
         work, seen = [entry], set()
         while work:
             start = work.pop()
-            if start in seen or start >= PAIRS:
+            if start in seen or start >= len(pairs):
                 continue
             seen.add(start)
             routine = Routine(pairs, start)
@@ -536,9 +562,9 @@ def main():
 
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
-    header = "// Generated from local VU1 microcode; do not distribute game data.\n"
-    ordered = sorted(routines.items(), key=lambda item: (item[0][0], fnv(w for _, w in item[0][1])))
-    names = [f"r_{fnv(w for _, w in key[1]):016x}_{i}" for i, (key, _) in enumerate(ordered)]
+    header = "// Generated from local VU microcode; do not distribute game data.\n"
+    ordered = sorted(routines.items(), key=lambda item: (item[0][0], item[0][1], fnv(w for _, w in item[0][2])))
+    names = [f"r_{fnv(w for _, w in key[2]):016x}_{i}" for i, (key, _) in enumerate(ordered)]
 
     registry = [header]
     externs = [header, "namespace ps2_vu_program::generated\n{\n"]
@@ -557,8 +583,9 @@ def main():
         externs.append(f"extern const uint16_t {name}_pairs[];\n")
         externs.append(f"extern const uint64_t {name}_words[];\n")
         externs.append(f"uint32_t {name}(Run &, uint64_t);\n")
+        unit = ", Unit::VU0" if routine.pairs[0].vu0 else ""
         registry.append(f"{{{pc(routine.entry)}, {len(footprint)}u, generated::{name}_pairs, "
-                        f"generated::{name}_words, &generated::{name}}},\n")
+                        f"generated::{name}_words, &generated::{name}{unit}}},\n")
         shard = shards[assigned[name]]
         shard.append(f"extern const uint16_t {name}_pairs[] = {{"
                      + ", ".join(str(i) for i in footprint) + "};\n")
