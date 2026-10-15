@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. This project aims at a faithful native version of the game, so a few rules matter more than speed. Read the [README](README.md) for building and [docs/STATUS.md](docs/STATUS.md) for where things stand.
+Thanks for helping. This project aims at a faithful native version of the game, so a few rules matter more than speed. Read the [README](README.md) and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for building and [docs/STATUS.md](docs/STATUS.md) for where things stand.
 
 ## Ground rules
 
