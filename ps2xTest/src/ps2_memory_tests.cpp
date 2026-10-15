@@ -985,6 +985,47 @@ void register_ps2_memory_tests()
             t.IsTrue(secondOk, "second queued PATH3 packet should flush in-order");
         });
 
+        tc.Run("PATH3 unmask window lets one GIF packet through before the mask returns", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+
+            std::vector<uint8_t> emitted;
+            mem.setGifPacketCallback([&](const uint8_t *data, uint32_t sizeBytes)
+            {
+                emitted.insert(emitted.end(), data, data + sizeBytes);
+            });
+
+            // Three IMAGE packets of 4 qwords each (tag NLOOP 4, EOP, FLG IMAGE).
+            const auto imagePacket = [](uint8_t marker)
+            {
+                std::vector<uint8_t> packet(5u * 16u, marker);
+                const uint64_t tag = 4u | (1ull << 15) | (2ull << 58);
+                std::memcpy(packet.data(), &tag, sizeof(tag));
+                std::memset(packet.data() + 8, 0, 8);
+                return packet;
+            };
+            const uint32_t setMask = makeVifCmd(0x06u, 0u, 0x8000u);
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&setMask), sizeof(setMask));
+            for (uint8_t marker : {0xA1u, 0xB2u, 0xC3u})
+            {
+                const auto packet = imagePacket(marker);
+                mem.submitGifPacket(GifPathId::Path3, packet.data(), static_cast<uint32_t>(packet.size()));
+            }
+            t.Equals(emitted.size(), static_cast<size_t>(0u), "masked PATH3 packets wait");
+
+            // MSKPATH3 0, two NOPs, MSKPATH3 1: the window is shorter than one packet.
+            const uint32_t window[] = {makeVifCmd(0x06u, 0u, 0x0000u), 0u, 0u, makeVifCmd(0x06u, 0u, 0x8000u)};
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(window), sizeof(window));
+            t.Equals(emitted.size(), static_cast<size_t>(80u), "the packet in progress completes, the others wait");
+            t.IsTrue(emitted.size() == 80u && emitted[16] == 0xA1u, "the first packet goes first");
+
+            const uint32_t clearMask = makeVifCmd(0x06u, 0u, 0x0000u);
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&clearMask), sizeof(clearMask));
+            t.Equals(emitted.size(), static_cast<size_t>(240u), "a stream ending unmasked lets the rest through");
+            t.IsTrue(emitted.size() == 240u && emitted[96] == 0xB2u && emitted[176] == 0xC3u, "in order");
+        });
+
         tc.Run("GIF arbiter prioritizes PATH1 then PATH2 then PATH3", [](TestCase &t)
         {
             std::vector<uint8_t> order;

@@ -1302,6 +1302,29 @@ void register_ps2_gs_tests()
                 switch (kind)
                 {
                 case 'I':
+                    // BDR_PGS_REPLAY_TEX=tbp,tbw,psm,cbp,w,h: a PSMT8 (19) or PSMT4 (20) texture of
+                    // the initial VRAM through its CSM1 CT32 CLUT, as replay_texture.ppm.
+                    if (const char *tex = std::getenv("BDR_PGS_REPLAY_TEX"))
+                    {
+                        unsigned tbp = 0, tbw = 0, psm = 0, cbp = 0, w = 0, h = 0;
+                        std::sscanf(tex, "%u,%u,%u,%u,%u,%u", &tbp, &tbw, &psm, &cbp, &w, &h);
+                        if (FILE *out = std::fopen("replay_texture.ppm", "wb"))
+                        {
+                            std::fprintf(out, "P6\n%u %u\n255\n", w, h);
+                            for (uint32_t y = 0; y < h; ++y)
+                                for (uint32_t x = 0; x < w; ++x)
+                                {
+                                    const uint32_t i = psm == 20u ? GSMem::ReadP4(data.data(), tbp, tbw, x, y)
+                                                                  : GSMem::ReadP8(data.data(), tbp, tbw, x, y);
+                                    const uint32_t cx = psm == 20u ? (i & 7u) : ((i & 7u) | ((i & 0x10u) >> 1));
+                                    const uint32_t cy = psm == 20u ? (i >> 3) : (((i & 0xE0u) >> 4) | ((i & 8u) >> 3));
+                                    const uint32_t v = GSMem::ReadCT32(data.data(), cbp, 1, cx, cy);
+                                    const unsigned char rgb[3] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16)};
+                                    std::fwrite(rgb, 1, 3, out);
+                                }
+                            std::fclose(out);
+                        }
+                    }
                     initialVram = data;
                     std::memcpy(cpuVram.data(), data.data(), std::min<size_t>(size, cpuVram.size()));
                     cpu.init(cpuVram.data(), static_cast<uint32_t>(cpuVram.size()), &cpuRegs);
@@ -1443,6 +1466,32 @@ void register_ps2_gs_tests()
                     break;
             }
             std::fclose(file);
+            // BDR_PGS_REPLAY_TEXEND=tbp,tbw,psm,cbp,w,h: that PSMT8/PSMT4 texture at the end of the
+            // replay, CPU rasterizer left and paraLLEl-GS right, as replay_texture_end.ppm.
+            if (const char *tex = std::getenv("BDR_PGS_REPLAY_TEXEND"); tex && cpuReady)
+            {
+                gpu->Flush();
+                gpu->SnapshotVram(gpuVram);
+                unsigned tbp = 0, tbw = 0, psm = 0, cbp = 0, w = 0, h = 0;
+                std::sscanf(tex, "%u,%u,%u,%u,%u,%u", &tbp, &tbw, &psm, &cbp, &w, &h);
+                if (FILE *out = std::fopen("replay_texture_end.ppm", "wb"))
+                {
+                    std::fprintf(out, "P6\n%u %u\n255\n", w * 2u, h);
+                    for (uint32_t y = 0; y < h; ++y)
+                        for (int side = 0; side < 2; ++side)
+                            for (uint32_t x = 0; x < w; ++x)
+                            {
+                                uint8_t *vram = side ? gpuVram.data() : cpuVram.data();
+                                const uint32_t i = psm == 20u ? GSMem::ReadP4(vram, tbp, tbw, x, y) : GSMem::ReadP8(vram, tbp, tbw, x, y);
+                                const uint32_t cx = psm == 20u ? (i & 7u) : ((i & 7u) | ((i & 0x10u) >> 1));
+                                const uint32_t cy = psm == 20u ? (i >> 3) : (((i & 0xE0u) >> 4) | ((i & 8u) >> 3));
+                                const uint32_t v = GSMem::ReadCT32(vram, cbp, 1, cx, cy);
+                                const unsigned char rgb[3] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16)};
+                                std::fwrite(rgb, 1, 3, out);
+                            }
+                    std::fclose(out);
+                }
+            }
             std::printf("[replay] %llu records, %u presentations\n", static_cast<unsigned long long>(records), presents);
         });
 

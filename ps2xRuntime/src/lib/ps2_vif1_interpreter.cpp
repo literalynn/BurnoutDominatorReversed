@@ -336,6 +336,17 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         uint8_t num = (cmd >> 16) & 0xFF;
         const bool irq = (cmd & 0x80000000u) != 0u;
 
+        // In a PATH3 unmask window PATH3 advances about one qword per VIF1 command; a
+        // command other than NOP or MSKPATH3 first lets out the packets due so far.
+        if (m_path3Window && !m_path3Masked)
+        {
+            ++m_path3WindowBudget;
+            if (opcode == VIF_FLUSHA)
+                flushMaskedPath3Packets(); // waits for PATH3 to go idle
+            else if (opcode != VIF_NOP && opcode != VIF_MSKPATH3)
+                releasePath3Window();
+        }
+
         // BDR_TRACE_VIF1=first,count: every VIF1 code of VSync ticks first..first+count,
         // with the TOPS/ITOPS/BASE/OFST state it runs with.
         static const std::pair<uint64_t, uint64_t> traceWindow = []
@@ -410,9 +421,23 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             // VIF command docs: MSKPATH3 uses IMMEDIATE bit 15.
             const bool wasMasked = m_path3Masked;
-            m_path3Masked = (imm & 0x8000u) != 0u;
-            if (wasMasked && !m_path3Masked)
-                flushMaskedPath3Packets();
+            const bool masked = (imm & 0x8000u) != 0u;
+            if (wasMasked && !masked)
+            {
+                // PATH3 resumes; it runs until masked again (see the window above).
+                m_path3Masked = false;
+                m_path3Window = true;
+                m_path3WindowReleased = false;
+                m_path3WindowBudget = 0;
+            }
+            else if (!wasMasked && masked)
+            {
+                // The mask takes effect at the end of the GIF packet in progress.
+                if (m_path3Window)
+                    releasePath3Window();
+                m_path3Window = false;
+                m_path3Masked = true;
+            }
             continue;
         }
         else if (opcode == VIF_MARK)
@@ -843,5 +868,12 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             continue;
         }
+    }
+
+    // A VIF1 stream that ends with PATH3 unmasked leaves PATH3 running to the end of its queue.
+    if (m_path3Window && !m_path3Masked)
+    {
+        m_path3Window = false;
+        flushMaskedPath3Packets();
     }
 }

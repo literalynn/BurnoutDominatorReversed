@@ -365,6 +365,7 @@ bool PS2Memory::initialize(size_t ramSize)
     }
     m_codeRegions.clear();
     m_path3Masked = false;
+    m_path3Window = false;
     m_path3MaskedFifo.clear();
     m_vif1PendingPath2ImageQwc = 0u;
     m_vif1PendingPath2DirectHl = false;
@@ -1273,6 +1274,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 m_vif1PendingPath2ImageQwc = 0u;
                 m_vif1PendingPath2DirectHl = false;
                 m_path3Masked = false;
+                m_path3Window = false;
                 if (wasPath3Masked)
                     flushMaskedPath3Packets();
             }
@@ -2055,6 +2057,62 @@ void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
         m_gifArbiter->drain();
 }
 
+uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
+{
+    if (m_path3Masked || m_path3MaskedFifo.empty() || budgetQwords == 0u)
+        return 0u;
+
+    std::vector<uint8_t> bytes;
+    for (const auto &packet : m_path3MaskedFifo)
+        bytes.insert(bytes.end(), packet.begin(), packet.end());
+    m_path3MaskedFifo.clear();
+
+    // Walk GIF tags; a packet ends after the data of a tag with EOP. A packet
+    // still incomplete (its DMA data not queued yet) stays queued.
+    const size_t qwords = bytes.size() / 16u;
+    size_t q = 0u, cut = 0u;
+    while (q < qwords && cut < budgetQwords)
+    {
+        bool eop = false;
+        while (!eop && q < qwords)
+        {
+            uint64_t tag = 0;
+            std::memcpy(&tag, bytes.data() + q * 16u, sizeof(tag));
+            const uint64_t nloop = tag & 0x7FFFu;
+            const uint32_t flg = static_cast<uint32_t>((tag >> 58) & 3u);
+            uint64_t nreg = (tag >> 60) & 0xFu;
+            if (nreg == 0u)
+                nreg = 16u;
+            eop = ((tag >> 15) & 1u) != 0u;
+            q += 1u + static_cast<size_t>(flg == 0u ? nloop * nreg : flg == 1u ? (nloop * nreg + 1u) / 2u : nloop);
+        }
+        if (!eop || q > qwords)
+            break;
+        cut = q;
+    }
+
+    if (cut != 0u)
+    {
+        if (m_gifArbiter)
+            m_gifArbiter->submit(GifPathId::Path3, bytes.data(), static_cast<uint32_t>(cut * 16u), false);
+        else if (m_gifPacketCallback)
+            m_gifPacketCallback(bytes.data(), static_cast<uint32_t>(cut * 16u));
+    }
+    if (cut * 16u < bytes.size())
+        m_path3MaskedFifo.emplace_back(bytes.begin() + static_cast<std::ptrdiff_t>(cut * 16u), bytes.end());
+    return static_cast<uint32_t>(cut);
+}
+
+void PS2Memory::releasePath3Window()
+{
+    const int64_t due = m_path3WindowReleased ? m_path3WindowBudget : std::max<int64_t>(m_path3WindowBudget, 1);
+    if (due <= 0)
+        return;
+    const uint32_t released = releaseMaskedPath3Packets(static_cast<uint32_t>(due));
+    m_path3WindowBudget -= released;
+    m_path3WindowReleased = m_path3WindowReleased || released != 0u;
+}
+
 void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool drainImmediately, bool path2DirectHl)
 {
     if (!data || sizeBytes < 16)
@@ -2062,7 +2120,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
 
     if (pathId == GifPathId::Path3)
     {
-        if (m_path3Masked)
+        // During an unmask window queued packets keep their place: the window releases them.
+        if (m_path3Masked || (m_path3Window && !m_path3MaskedFifo.empty()))
         {
             m_path3MaskedFifo.emplace_back(data, data + sizeBytes);
             return;

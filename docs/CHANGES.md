@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## PATH3 unmask windows (October 15, 2026)
+
+- `ps2_vif1_interpreter.cpp`, `ps2_memory.cpp`: an MSKPATH3 unmask used to send every queued PATH3 packet at once. On the console PATH3 runs while unmasked and a new mask takes effect at the end of the GIF packet in progress (EOP). Burnout Dominator re-uploads its textures every frame through a small VRAM cache, one texture per window of `MSKPATH3 0`, 96 NOPs, `MSKPATH3 1` between draw batches; releasing every upload at the first window left each VRAM slot holding the last texture of the frame, so most draws sampled another texture and palette (multicoloured track). The VIF1 interpreter now counts about one PATH3 qword per VIF1 command in a window, lets whole packets out when a command other than NOP runs or the mask returns (at least the packet in progress), releases everything on FLUSHA and when the stream ends unmasked. Test: `PATH3 unmask window lets one GIF packet through before the mask returns`.
+- `ps2_gs_tests.cpp` (paraLLEl-GS replay): `BDR_PGS_REPLAY_TEX` dumps a PSMT8/PSMT4 texture of the recording's initial VRAM through its CLUT, `BDR_PGS_REPLAY_TEXEND` the same texture at the end of the replay for both rasterizers.
+
 ## EE floating point: no Inf, NaN or denormals (October 15, 2026)
 
 - `ps2xRuntime/include/ps2_float.h` (new): the EE FPU and the VUs have no infinities, NaNs or denormals. An exponent of 255 is an ordinary value, overflow saturates to +-FLT_MAX, denormals are zero, a zero divisor gives +-FLT_MAX (0/0 included) and square roots take the absolute value (PCSX2 `FPU.cpp` and VU clamping). `FPU_ADD_S`, `FPU_SUB_S`, `FPU_MUL_S`, `FPU_DIV_S`, `FPU_SQRT_S` and the COP2 macro `PS2_VADD`/`PS2_VSUB`/`PS2_VMUL` now follow these rules; host IEEE arithmetic produced Inf, then NaN (Inf * 0), which spread through game state. In Burnout Dominator the post-processing strength became NaN during the race, a strip count derived from it was 0, and the `do { n--; } while (n)` loop of 0x1ba7f8 wrote GIF data past the scratchpad into the timer callback table, so the next timer interrupt jumped to 0x80000000.

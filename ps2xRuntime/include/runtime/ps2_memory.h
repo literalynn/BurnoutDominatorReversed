@@ -339,6 +339,11 @@ public:
 
     bool isPath3Masked() const { return m_path3Masked; }
     void flushMaskedPath3Packets(bool drainImmediately = true);
+    // Releases whole queued PATH3 GIF packets (to EOP) until at least budgetQwords went out;
+    // returns the qwords released.
+    uint32_t releaseMaskedPath3Packets(uint32_t budgetQwords);
+    // Releases what the current PATH3 unmask window has let through so far (at least one packet).
+    void releasePath3Window();
 
     void submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool drainImmediately = true, bool path2DirectHl = false);
     void processGIFPacket(uint32_t srcPhysAddr, uint32_t qwCount);
@@ -417,6 +422,11 @@ public:
     bool m_vif1PendingPath2DirectHl = false;
     bool m_gifPathsKeepTagState = false;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
+    // An MSKPATH3 unmask window inside a VIF1 stream: PATH3 advances about one qword
+    // per VIF1 command and stops at the end of its current GIF packet when masked again.
+    bool m_path3Window = false;
+    bool m_path3WindowReleased = false;
+    int64_t m_path3WindowBudget = 0;
 
     struct PendingTransfer
     {
