@@ -13,6 +13,7 @@
 #endif
 
 #include "ps2_runtime.h"
+#include "ps2_float.h"
 
 static inline int32_t Ps2ExtractEpi32(__m128i v, int index)
 {
@@ -141,11 +142,11 @@ static inline uint32_t ps2_plzcw32(uint32_t x)
 #define PS2_PNOR(a, b) _mm_xor_si128(_mm_or_si128((__m128i)(a), (__m128i)(b)), _mm_set1_epi32(0xFFFFFFFF))
 
 // PS2 VU (Vector Unit) operations
-#define PS2_VADD(a, b) _mm_add_ps((__m128)(a), (__m128)(b))
-#define PS2_VSUB(a, b) _mm_sub_ps((__m128)(a), (__m128)(b))
-#define PS2_VMUL(a, b) _mm_mul_ps((__m128)(a), (__m128)(b))
+#define PS2_VADD(a, b) ps2_vadd((__m128)(a), (__m128)(b))
+#define PS2_VSUB(a, b) ps2_vsub((__m128)(a), (__m128)(b))
+#define PS2_VMUL(a, b) ps2_vmul((__m128)(a), (__m128)(b))
 #define PS2_VDIV(a, b) _mm_div_ps((__m128)(a), (__m128)(b))
-#define PS2_VMULQ(a, q) _mm_mul_ps((__m128)(a), _mm_set1_ps(q))
+#define PS2_VMULQ(a, q) ps2_vmul((__m128)(a), _mm_set1_ps(q))
 #define PS2_VBLEND(a, b, mask) PS2_BLENDV_PS((__m128)(a), (__m128)(b), (__m128)(mask))
 
 // Memory access helpers - Hybrid Fast/Slow Path
@@ -549,11 +550,11 @@ inline __m128i ps2_ppacb(__m128i rs, __m128i rt)
 
 // FPU (COP1) operations
 #define FPU_SET_ACC(ctx, res) (ctx->f_acc = res)
-#define FPU_ADD_S(a, b) ((float)(a) + (float)(b))
-#define FPU_SUB_S(a, b) ((float)(a) - (float)(b))
-#define FPU_MUL_S(a, b) ((float)(a) * (float)(b))
-#define FPU_DIV_S(a, b) ((float)(a) / (float)(b))
-#define FPU_SQRT_S(a) sqrtf((float)(a))
+#define FPU_ADD_S(a, b) ps2_fadd((float)(a), (float)(b))
+#define FPU_SUB_S(a, b) ps2_fsub((float)(a), (float)(b))
+#define FPU_MUL_S(a, b) ps2_fmul((float)(a), (float)(b))
+#define FPU_DIV_S(a, b) ps2_fdiv((float)(a), (float)(b))
+#define FPU_SQRT_S(a) ps2_fsqrt((float)(a))
 #define FPU_ABS_S(a) fabsf((float)(a))
 #define FPU_MOV_S(a) ((float)(a))
 #define FPU_NEG_S(a) (-(float)(a))
@@ -680,8 +681,8 @@ inline __m128i ps2_qfsrv(__m128i rs, __m128i rt, uint32_t sa)
 #define PS2_PCPYLD(rs, rt) _mm_unpacklo_epi64(rt, rs)
 
 // Additional VU0 operations
-#define PS2_VSQRT(x) sqrtf(x)
-#define PS2_VRSQRT(x) (1.0f / sqrtf(x))
+#define PS2_VSQRT(x) ps2_fsqrt(x)
+#define PS2_VRSQRT(x) ps2_frsqrt(1.0f, x)
 
 #define GPR_U32(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0U : static_cast<uint32_t>(PS2_EXTRACT_EPI32_0(ctx_ptr->r[reg_idx])))
 #define GPR_S32(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0 : PS2_EXTRACT_EPI32_0(ctx_ptr->r[reg_idx]))

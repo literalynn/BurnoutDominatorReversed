@@ -329,6 +329,21 @@ void register_ps2_runtime_expansion_tests()
 {
     MiniTest::Case("PS2RuntimeExpansion", [](TestCase &tc)
     {
+        tc.Run("EE float semantics: no Inf, NaN or denormals", [](TestCase &t)
+        {
+            const float fmax = 3.40282347e38f;
+            t.IsTrue(FPU_DIV_S(1.0f, 0.0f) == fmax && FPU_DIV_S(-1.0f, 0.0f) == -fmax, "x/0 is +-FLT_MAX");
+            t.IsTrue(FPU_DIV_S(0.0f, 0.0f) == fmax, "0/0 is FLT_MAX, not NaN");
+            t.IsTrue(FPU_MUL_S(fmax, 2.0f) == fmax && FPU_ADD_S(-fmax, -fmax) == -fmax, "overflow saturates");
+            t.IsTrue(FPU_MUL_S(INFINITY, 0.0f) == 0.0f, "an exponent-255 operand is a finite value");
+            t.IsTrue(FPU_SQRT_S(-4.0f) == 2.0f, "sqrt uses the absolute value");
+            t.IsTrue(ps2_frsqrt(2.0f, 4.0f) == 1.0f && ps2_frsqrt(-1.0f, 0.0f) == -fmax, "RSQRT is fs / sqrt(ft)");
+            t.IsTrue(FPU_MUL_S(1e-30f, 1e-30f) == 0.0f, "denormal results flush to zero");
+            alignas(16) float lanes[4];
+            _mm_store_ps(lanes, PS2_VMUL(_mm_set_ps(1.0f, INFINITY, 0.0f, 2.0f), _mm_set_ps(1.0f, 0.0f, NAN, fmax)));
+            t.IsTrue(lanes[0] == fmax && lanes[1] == 0.0f && lanes[2] == 0.0f && lanes[3] == 1.0f, "VU multiply clamps lanes");
+        });
+
         tc.Run("CVT.W.S truncates toward zero and saturates", [](TestCase &t)
         {
             t.Equals(FPU_CVT_W_S(0.99999f), 0, "0.99999 truncates to 0");

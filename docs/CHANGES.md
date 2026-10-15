@@ -2,6 +2,14 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## EE floating point: no Inf, NaN or denormals (October 15, 2026)
+
+- `ps2xRuntime/include/ps2_float.h` (new): the EE FPU and the VUs have no infinities, NaNs or denormals. An exponent of 255 is an ordinary value, overflow saturates to +-FLT_MAX, denormals are zero, a zero divisor gives +-FLT_MAX (0/0 included) and square roots take the absolute value (PCSX2 `FPU.cpp` and VU clamping). `FPU_ADD_S`, `FPU_SUB_S`, `FPU_MUL_S`, `FPU_DIV_S`, `FPU_SQRT_S` and the COP2 macro `PS2_VADD`/`PS2_VSUB`/`PS2_VMUL` now follow these rules; host IEEE arithmetic produced Inf, then NaN (Inf * 0), which spread through game state. In Burnout Dominator the post-processing strength became NaN during the race, a strip count derived from it was 0, and the `do { n--; } while (n)` loop of 0x1ba7f8 wrote GIF data past the scratchpad into the timer callback table, so the next timer interrupt jumped to 0x80000000.
+- `fpu_translator.cpp`: DIV.S sets D/SD (I/SI for 0/0) instead of a non-EE bit and returns +-FLT_MAX; RSQRT.S computes `fs / sqrt(ft)` instead of `1 / sqrt(fs)`.
+- `vu_translation_helpers.cpp`: VDIV returned 0 for a zero divisor, VSQRT 0 for a negative input, and VRSQRT ignored its numerator (`Q = 1 / sqrt(ft)` instead of `fs / sqrt(ft)`); they now use `ps2_fdiv`, `ps2_fsqrt`, `ps2_frsqrt`.
+- Rounding stays round-to-nearest; the EE rounds toward zero. Test: `EE float semantics: no Inf, NaN or denormals`.
+- `EeScheduler.cpp`: `BDR_WATCH_WORD` reports also print the GPRs; `BDR_WATCH_DUMP=file` saves EE RAM at the first report.
+
 ## CVT.W.S truncates (October 15, 2026)
 
 - `ps2_runtime_macros.h`: `FPU_CVT_W_S` rounded to nearest (`nearbyintf`); the EE truncates toward zero and saturates out-of-range values to INT32_MIN/INT32_MAX (PCSX2 `FPU.cpp`). Burnout Dominator's boost gauge (0x21d960) steps a length down with `len = step * cvt((len - 0.001) / step)`: rounding 0.99999 up to 1 left `len` unchanged, the loop never ended and the race stayed frozen at the start with the clock stopped. Test: `CVT.W.S truncates toward zero and saturates`.

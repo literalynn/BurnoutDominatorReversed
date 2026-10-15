@@ -126,7 +126,18 @@ namespace
         {
             std::cerr << " 0x" << watch.history[(watch.next + i) % 32u];
         }
+        std::cerr << "\n  gpr:";
+        for (int r = 1; r < 32; ++r)
+            std::cerr << ' ' << r << "=0x" << getRegU32(&context, r);
         std::cerr << std::dec << std::endl;
+        // BDR_WATCH_DUMP=file: EE RAM at the first report.
+        static const char *dumpPath = std::getenv("BDR_WATCH_DUMP");
+        if (dumpPath && watch.reports == 1u)
+            if (FILE *file = std::fopen(dumpPath, "wb"))
+            {
+                std::fwrite(rdram, 1, PS2_RAM_SIZE, file);
+                std::fclose(file);
+            }
     }
     constexpr int KE_OK = 0;
     constexpr int KE_ERROR = -1;
