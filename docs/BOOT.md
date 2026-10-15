@@ -172,7 +172,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_TRACE_VIF1=first,count` | every VIF1 command of VSync ticks `first` to `first+count`, with TOPS/ITOPS/BASE/OFST/DBF/CYCLE/MODE |
 | `BDR_WATCH_DUMP=file` | with `BDR_WATCH_WORD`: EE RAM at the first report (reports also list the GPRs) |
 | `BDR_RDRAM_DUMP=vsync,file` | EE RAM (32 MiB) at that VSync tick |
-| `BDR_TRACE_VIF1_DATA=1` | with `BDR_TRACE_VIF1`: the first qword of each V4-32 UNPACK of 1 to 5 qwords (microcode parameters) |
+| `BDR_TRACE_VIF1_DATA=1` | with `BDR_TRACE_VIF1`: the first qword of each V4-32 UNPACK of 1 to 5 qwords (microcode parameters); `=2` the first qword of every UNPACK, `=3` also up to 8 more qwords of V4-32 UNPACKs |
 | `BDR_VU_BADKICK_DIR=dir` | VU1 data, code and registers and EE RAM at the first XGKICK whose first GIF tag has only NLOOP/EOP and a non-zero REGS word, or whose PACKED data runs past VU1 qword 1006; VU1 data and registers at the last kick before it |
 | `BDR_PROFILE_STACKS=N` | with `BDR_PROFILE_SECONDS`: prints N call stacks of the profiled thread, 200 ms apart |
 | `BDR_PROFILE_SECONDS=N` | with `BDR_PROFILE=1`: after N seconds of sampling, prints the report and the sampled thread's call stack, even if that thread never returns (hangs) |
