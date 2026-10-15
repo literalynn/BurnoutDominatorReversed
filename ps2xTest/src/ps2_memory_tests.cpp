@@ -740,6 +740,30 @@ void register_ps2_memory_tests()
             t.IsTrue(mem.vif1_regs.row[0] == 7u && mem.vif1_regs.row[3] == 10u, "mode 3 should store the data in ROW");
         });
 
+        tc.Run("VIF0 UNPACK decodes 16-bit and V4-5 data like VIF1", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU0Data(), 0, PS2_VU0_DATA_SIZE);
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+            appendU32(packet, makeVifCmd(0x61u, 1u, 2u)); // UNPACK S-16 -> addr 2
+            appendU32(packet, 0x0000FC0Cu);                // -1012, padded to a word
+            appendU32(packet, makeVifCmd(0x6Fu, 1u, 3u)); // UNPACK V4-5 -> addr 3
+            appendU32(packet, 0x0000FFFFu);
+            mem.processVIF0Data(packet.data(), static_cast<uint32_t>(packet.size()));
+            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+
+            for (const uint8_t *vu : {static_cast<const uint8_t *>(mem.getVU0Data()), static_cast<const uint8_t *>(mem.getVU1Data())})
+            {
+                uint32_t q[4][4] = {};
+                std::memcpy(q, vu, sizeof(q));
+                t.IsTrue(q[2][0] == 0xFFFFFC0Cu && q[2][3] == 0xFFFFFC0Cu, "S-16 should sign-extend into x y z w");
+                t.IsTrue(q[3][0] == 0xF8u && q[3][2] == 0xF8u && q[3][3] == 0x80u, "V4-5 should scale to 8 bits with A in bit 7");
+            }
+        });
+
         tc.Run("VIF fill write uses STMASK and STROW when WL>CL", [](TestCase &t)
         {
             PS2Memory mem;

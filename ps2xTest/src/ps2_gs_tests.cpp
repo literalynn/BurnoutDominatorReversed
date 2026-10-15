@@ -1411,6 +1411,35 @@ void register_ps2_gs_tests()
                 default:
                     break;
                 }
+                // BDR_PGS_REPLAY_TEXAT=record: the BDR_PGS_REPLAY_TEX texture (psm 0 also: PSMCT32) of paraLLEl-GS's VRAM
+                // right after that record, as replay_texture_at.ppm.
+                if (const char *at = std::getenv("BDR_PGS_REPLAY_TEXAT"); at && records == std::strtoull(at, nullptr, 10))
+                    if (const char *tex = std::getenv("BDR_PGS_REPLAY_TEX"))
+                    {
+                        unsigned tbp = 0, tbw = 0, psm = 0, cbp = 0, w = 0, h = 0;
+                        std::sscanf(tex, "%u,%u,%u,%u,%u,%u", &tbp, &tbw, &psm, &cbp, &w, &h);
+                        gpu->Flush();
+                        gpu->SnapshotVram(gpuVram);
+                        if (std::getenv("BDR_PGS_REPLAY_TEXAT_CPU")) // the CPU rasterizer's VRAM instead
+                            gpuVram = cpuVram;
+                        if (FILE *out = std::fopen("replay_texture_at.ppm", "wb"))
+                        {
+                            std::fprintf(out, "P6\n%u %u\n255\n", w, h);
+                            for (uint32_t y = 0; y < h; ++y)
+                                for (uint32_t x = 0; x < w; ++x)
+                                {
+                                    const uint32_t i = psm == 20u ? GSMem::ReadP4(gpuVram.data(), tbp, tbw, x, y)
+                                                                  : GSMem::ReadP8(gpuVram.data(), tbp, tbw, x, y);
+                                    const uint32_t cx = psm == 20u ? (i & 7u) : ((i & 7u) | ((i & 0x10u) >> 1));
+                                    const uint32_t cy = psm == 20u ? (i >> 3) : (((i & 0xE0u) >> 4) | ((i & 8u) >> 3));
+                                    const uint32_t v = psm == 0u ? GSMem::ReadCT32(gpuVram.data(), tbp, tbw, x, y) // PSMCT32: the texel itself
+                                                                 : GSMem::ReadCT32(gpuVram.data(), cbp, 1, cx, cy);
+                                    const unsigned char rgb[3] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16)};
+                                    std::fwrite(rgb, 1, 3, out);
+                                }
+                            std::fclose(out);
+                        }
+                    }
                 // BDR_PGS_REPLAY_FIRST=1: stop at the first record after which the
                 // two VRAM images differ, and print it.
                 if (cpuReady && kind != 'P' && std::getenv("BDR_PGS_REPLAY_FIRST"))

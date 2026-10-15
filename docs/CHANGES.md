@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## VIF0 UNPACK shares the VIF1 decoder; V4-5 scaling (October 15, 2026)
+
+- `ps2_vif1_interpreter.cpp`: VIF0 UNPACK only handled 32-bit formats and ignored masking, ROW/COL, STMOD and the S/V2/V3 layouts, so 16-bit, 8-bit and V4-5 data never reached VU0 memory. The VIF1 UNPACK body becomes `unpackToVu` (VU1: 1024 qwords and TOPS; VU0: 256 qwords, addresses wrap, no TOPS) and both VIFs use it. V4-5 now scales each 5-bit field to 8 bits and puts bit 15 in bit 7 of A, as the console does (PCSX2 `UNPACK_V4_5`), instead of storing the raw 5-bit values. Test: `VIF0 UNPACK decodes 16-bit and V4-5 data like VIF1`.
+- `ps2_gs_tests.cpp` (paraLLEl-GS replay): `BDR_PGS_REPLAY_TEXAT=record` dumps the `BDR_PGS_REPLAY_TEX` texture (PSMCT32 also) as it is right after that record; `BDR_PGS_REPLAY_TEXAT_CPU=1` reads it from the CPU rasterizer. A replay starts from paraLLEl-GS's zeroed registers (PRMODECONT.AC = 0), not the game's, so draws that rely on earlier register writes can differ from the live run.
+
 ## SQRT.S reads ft; VF0 in every context (October 15, 2026)
 
 - `fpu_translator.cpp`: the R5900 encodes `SQRT.S fd, ft` with the operand in the ft field and fs = 0 (unlike MIPS IV, PCSX2 `SQRT_S`); the translation read fs, so every square root in the game returned sqrt(f0). In Burnout Dominator all 778 SQRT.S read f0: vector normalizations failed, car orientation matrices were built from unnormalized rotations (rows of length 0.02 to 0.2, the up row their cross product, so the car bodies were squashed flat and only wheels and lights showed) and distances fed to the camera were wrong. A negative operand now also sets I/SI. Test: `SQRT.S reads its operand from ft`.
