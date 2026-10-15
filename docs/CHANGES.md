@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## VU0 microprograms run to their end (October 15, 2026)
+
+- `PS2Runtime::executeVU0Microprogram` (`ps2_runtime.cpp`): a VCALLMS program ran at most 4096 VU cycles and was then dropped half done, its partial registers copied back to the EE. The EE waits for VU0 until the program ends, so the program now runs to its E bit, with a cap of 2^24 cycles that only stops a program that never ends (reported on stderr). Burnout Dominator's VU0 programs all end within 4096 cycles; programs with longer loops were cut short.
+
 ## Save states (October 15, 2026)
 
 - `ps2xIOP/include/ps2x/state_archive.h` (new): `ps2x::StateArchive`, a binary archive where one `serialize()` function per component both writes and reads, with section tags that turn a layout mismatch into an error.

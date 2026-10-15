@@ -1499,10 +1499,15 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
 
     m_vu0.reset();
     copyVu0ContextToState(ctx, m_vu0.state());
+    // The EE waits for VU0 (VPU_STAT, QMFC2.I) until the microprogram ends, so it runs to its
+    // E bit here. The cap only stops a program that never ends.
+    constexpr uint32_t kVu0CycleCap = 1u << 24;
     m_vu0.execute(vu0Code, PS2_VU0_CODE_SIZE,
                   vu0Data, PS2_VU0_DATA_SIZE,
                   m_gs, &m_memory,
-                  startPC, 0u, ctx->vu0_itop, 4096);
+                  startPC, 0u, ctx->vu0_itop, kVu0CycleCap);
+    if (m_vu0.state().cycles >= kVu0CycleCap)
+        std::cerr << "[vu0] microprogram 0x" << std::hex << startPC << std::dec << " did not end" << std::endl;
     copyVu0StateToContext(m_vu0.state(), ctx);
 }
 
