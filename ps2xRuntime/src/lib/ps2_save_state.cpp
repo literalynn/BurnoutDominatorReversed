@@ -91,6 +91,12 @@ void PS2Memory::serialize(ps2x::StateArchive &archive)
     archive.value(m_path3Masked);
     archive.value(m_vif1PendingPath2ImageQwc);
     archive.value(m_vif1PendingPath2DirectHl);
+    if (!archive.loading() && m_path3FifoHead != 0u && !m_path3MaskedFifo.empty())
+    {
+        auto &first = m_path3MaskedFifo.front();
+        first.erase(first.begin(), first.begin() + static_cast<std::ptrdiff_t>(m_path3FifoHead));
+    }
+    m_path3FifoHead = 0u;
     archive.sequence(m_path3MaskedFifo, [](ps2x::StateArchive &a, std::vector<uint8_t> &packet) { a.vector(packet); });
     archive.value(m_path3Window);
     archive.value(m_path3WindowReleased);

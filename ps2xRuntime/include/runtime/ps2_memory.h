@@ -428,6 +428,7 @@ public:
     bool m_vif1PendingPath2DirectHl = false;
     bool m_gifPathsKeepTagState = false;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
+    size_t m_path3FifoHead = 0; // bytes of the first queued chunk already sent
     // An MSKPATH3 unmask window inside a VIF1 stream: PATH3 advances about one qword
     // per VIF1 command and stops at the end of its current GIF packet when masked again.
     bool m_path3Window = false;

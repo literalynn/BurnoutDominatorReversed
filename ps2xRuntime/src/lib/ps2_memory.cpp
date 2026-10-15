@@ -367,6 +367,7 @@ bool PS2Memory::initialize(size_t ramSize)
     m_path3Masked = false;
     m_path3Window = false;
     m_path3MaskedFifo.clear();
+    m_path3FifoHead = 0;
     m_vif1PendingPath2ImageQwc = 0u;
     m_vif1PendingPath2DirectHl = false;
     resetEeTimers();
@@ -2082,12 +2083,15 @@ void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
             m_gifPacketCallback(packetData, packetSize);
     };
 
-    for (const auto &packet : m_path3MaskedFifo)
+    for (size_t i = 0; i < m_path3MaskedFifo.size(); ++i)
     {
-        if (packet.size() >= 16u)
-            emit(packet.data(), static_cast<uint32_t>(packet.size()));
+        const auto &packet = m_path3MaskedFifo[i];
+        const size_t head = i == 0u ? m_path3FifoHead : 0u;
+        if (packet.size() >= head + 16u)
+            emit(packet.data() + head, static_cast<uint32_t>(packet.size() - head));
     }
     m_path3MaskedFifo.clear();
+    m_path3FifoHead = 0;
 
     if (m_gifArbiter && drainImmediately)
         m_gifArbiter->drain();
@@ -2098,22 +2102,38 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
     if (m_path3Masked || m_path3MaskedFifo.empty() || budgetQwords == 0u)
         return 0u;
 
-    std::vector<uint8_t> bytes;
+    // The queued DMA chunks are read in place (the first from m_path3FifoHead); only the
+    // released bytes are copied, as a frame can open a hundred windows on a 300 KiB queue.
+    size_t queued = 0u;
     for (const auto &packet : m_path3MaskedFifo)
-        bytes.insert(bytes.end(), packet.begin(), packet.end());
-    m_path3MaskedFifo.clear();
+        queued += packet.size();
+    queued -= m_path3FifoHead;
+    const auto readTag = [&](size_t q)
+    {
+        size_t offset = m_path3FifoHead + q * 16u;
+        uint64_t tag = 0;
+        for (const auto &packet : m_path3MaskedFifo)
+        {
+            if (offset < packet.size())
+            {
+                std::memcpy(&tag, packet.data() + offset, std::min<size_t>(sizeof(tag), packet.size() - offset));
+                break;
+            }
+            offset -= packet.size();
+        }
+        return tag;
+    };
 
     // Walk GIF tags; a packet ends after the data of a tag with EOP. A packet
     // still incomplete (its DMA data not queued yet) stays queued.
-    const size_t qwords = bytes.size() / 16u;
+    const size_t qwords = queued / 16u;
     size_t q = 0u, cut = 0u;
     while (q < qwords && cut < budgetQwords)
     {
         bool eop = false;
         while (!eop && q < qwords)
         {
-            uint64_t tag = 0;
-            std::memcpy(&tag, bytes.data() + q * 16u, sizeof(tag));
+            const uint64_t tag = readTag(q);
             const uint64_t nloop = tag & 0x7FFFu;
             const uint32_t flg = static_cast<uint32_t>((tag >> 58) & 3u);
             uint64_t nreg = (tag >> 60) & 0xFu;
@@ -2127,6 +2147,21 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
         cut = q;
     }
 
+    std::vector<uint8_t> bytes;
+    bytes.reserve(cut * 16u);
+    while (bytes.size() < cut * 16u)
+    {
+        auto &packet = m_path3MaskedFifo.front();
+        const size_t take = std::min(packet.size() - m_path3FifoHead, cut * 16u - bytes.size());
+        bytes.insert(bytes.end(), packet.begin() + static_cast<std::ptrdiff_t>(m_path3FifoHead),
+                     packet.begin() + static_cast<std::ptrdiff_t>(m_path3FifoHead + take));
+        m_path3FifoHead += take;
+        if (m_path3FifoHead == packet.size())
+        {
+            m_path3MaskedFifo.erase(m_path3MaskedFifo.begin());
+            m_path3FifoHead = 0u;
+        }
+    }
     if (cut != 0u)
     {
         // A packet PATH3 has started ends before the GIF serves PATH2 (continuous mode): it
@@ -2139,8 +2174,6 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
         else if (m_gifPacketCallback)
             m_gifPacketCallback(bytes.data(), static_cast<uint32_t>(cut * 16u));
     }
-    if (cut * 16u < bytes.size())
-        m_path3MaskedFifo.emplace_back(bytes.begin() + static_cast<std::ptrdiff_t>(cut * 16u), bytes.end());
     return static_cast<uint32_t>(cut);
 }
 

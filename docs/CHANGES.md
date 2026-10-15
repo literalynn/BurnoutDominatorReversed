@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## PATH3 queue read in place (October 15, 2026)
+
+- `ps2_memory.cpp`, `ps2_memory.h` (`m_path3FifoHead`): each MSKPATH3 window concatenated the whole masked PATH3 queue to find its GIF packets and queued the remainder again, so a frame with a hundred windows over a 300 KiB texture queue copied tens of MiB. The queue is now read in place from a head offset and only released bytes are copied (about 8% more VSyncs per second in the race, identical RDRAM after 1,100 VSyncs). Save states store the queue without the consumed bytes, so their format is unchanged.
+
 ## DMA chains are no longer cut at 4096 tags (October 15, 2026)
 
 - `ps2_memory.cpp`: a source chain stopped after 4096 DMA tags and the rest was dropped as if the chain had ended. Burnout Dominator's VIF1 display list passes 4096 tags at high speed in the race, so the end of the frame (texture uploads included) was lost and every other frame showed the track with wrong textures and colours. The DMAC has no such limit; the guard against a chain that loops forever is now 2^20 tags or 64 MiB of data, and reaching it is reported on stderr.
