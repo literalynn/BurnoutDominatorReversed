@@ -59,7 +59,12 @@ namespace ps2recomp
                                    "ctx->f[{}] = FPU_DIV_S(ctx->f[{}], ctx->f[{}]); }}",
                                    ft, fs, fd, fs, ft);
             case COP1_S_SQRT:
-                return fmt::format("ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]);", fd, fs);
+                // The R5900 encodes SQRT.S fd, ft: the source is the ft field (fs is 0).
+                // A negative operand sets I/SI and gives sqrt(|ft|).
+                return fmt::format("{{ if ((ps2_float_bits(ctx->f[{}]) & 0x80000000u) != 0u && (ps2_float_bits(ctx->f[{}]) & 0x7F800000u) != 0u) "
+                                   "ctx->fcr31 |= 0x20040u; "
+                                   "ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]); }}",
+                                   ft, ft, fd, ft);
             case COP1_S_ABS:
                 return fmt::format("ctx->f[{}] = FPU_ABS_S(ctx->f[{}]);", fd, fs);
             case COP1_S_MOV:

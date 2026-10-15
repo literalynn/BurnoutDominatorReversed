@@ -157,6 +157,7 @@ struct alignas(16) R5900Context
 
         // Initialize VU0 registers
         vu0_q = 1.0f; // Q register usually initialized to 1.0
+        vu0_vf[0] = _mm_set_ps(1.0f, 0.0f, 0.0f, 0.0f); // VF0 is hardwired to (0, 0, 0, 1)
 
         // Reset COP0 registers
         cop0_random = 47; // Start at maximum value

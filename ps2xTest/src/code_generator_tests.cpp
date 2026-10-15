@@ -1048,6 +1048,23 @@ void register_code_generator_tests()
             t.IsTrue(ctc1Code.find("ignored") == std::string::npos, "CTC1 FCR31 should not be ignored");
         });
 
+        tc.Run("SQRT.S reads its operand from ft", [](TestCase &t) {
+            CodeGenerator gen({}, {});
+
+            Instruction sqrt{};
+            sqrt.opcode = OPCODE_COP1;
+            sqrt.rs = COP1_S;
+            sqrt.function = COP1_S_SQRT;
+            sqrt.rt = 6;
+            sqrt.rd = 0;
+            sqrt.sa = 2;
+
+            std::string code = gen.translateInstruction(sqrt);
+            printGeneratedCode("SQRT.S reads its operand from ft", code);
+            t.IsTrue(code.find("ctx->f[2] = FPU_SQRT_S(ctx->f[6])") != std::string::npos, "SQRT.S fd, ft must read f[ft]");
+            t.IsTrue(code.find("ctx->f[0]") == std::string::npos, "SQRT.S must not read the fs field");
+        });
+
         tc.Run("VU CFC2/CTC2 access VI registers directly", [](TestCase& t)
             {
                 CodeGenerator gen({}, {});

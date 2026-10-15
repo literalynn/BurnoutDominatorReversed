@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## SQRT.S reads ft; VF0 in every context (October 15, 2026)
+
+- `fpu_translator.cpp`: the R5900 encodes `SQRT.S fd, ft` with the operand in the ft field and fs = 0 (unlike MIPS IV, PCSX2 `SQRT_S`); the translation read fs, so every square root in the game returned sqrt(f0). In Burnout Dominator all 778 SQRT.S read f0: vector normalizations failed, car orientation matrices were built from unnormalized rotations (rows of length 0.02 to 0.2, the up row their cross product, so the car bodies were squashed flat and only wheels and lights showed) and distances fed to the camera were wrong. A negative operand now also sets I/SI. Test: `SQRT.S reads its operand from ft`.
+- `ps2_runtime.h`: `R5900Context` starts with VF0 = (0, 0, 0, 1), its hardwired value, so threads started by `StartThread` and interrupt handlers no longer see VF0.w = 0.
+
 ## VU0 microprograms run to their end (October 15, 2026)
 
 - `PS2Runtime::executeVU0Microprogram` (`ps2_runtime.cpp`): a VCALLMS program ran at most 4096 VU cycles and was then dropped half done, its partial registers copied back to the EE. The EE waits for VU0 until the program ends, so the program now runs to its E bit, with a cap of 2^24 cycles that only stops a program that never ends (reported on stderr). Burnout Dominator's VU0 programs all end within 4096 cycles; programs with longer loops were cut short.
