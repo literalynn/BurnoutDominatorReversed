@@ -81,6 +81,9 @@ namespace ps2_stubs
         {
             std::string currentDir = "/";
             bool formatted = true;
+            // sceMcGetDir search: a call with mode 0 starts it, a non-zero mode continues it.
+            std::string dirQuery;
+            size_t dirCursor = 0u;
         };
 
         std::mutex g_mcStateMutex;
@@ -743,6 +746,7 @@ namespace ps2_stubs
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string rawPath = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
+        const uint32_t mode = getRegU32(ctx, 7);
         const int32_t maxEntries = static_cast<int32_t>(getRegU32(ctx, 8));
         const uint32_t tableAddr = getRegU32(ctx, 9);
 
@@ -760,8 +764,12 @@ namespace ps2_stubs
                 else
                 {
                     ensureMcRootExists(port);
-                    const std::string guestQuery =
-                        normalizeGuestMcPathLocked(port, rawPath.empty() ? "." : rawPath);
+                    if (mode == 0u || state.dirQuery.empty())
+                    {
+                        state.dirQuery = normalizeGuestMcPathLocked(port, rawPath.empty() ? "." : rawPath);
+                        state.dirCursor = 0u;
+                    }
+                    const std::string guestQuery = state.dirQuery;
                     // MCMAN matches the last path component against its parent directory, with or
                     // without wildcards: a directory name returns that directory's own entry.
                     const std::filesystem::path queryRel =
@@ -842,10 +850,14 @@ namespace ps2_stubs
                             entries.push_back(tableEntry);
                         }
 
+                        // MCMAN returns the entries after those of the previous calls of the same search.
+                        entries.erase(entries.begin(),
+                                      entries.begin() + static_cast<std::ptrdiff_t>(std::min(state.dirCursor, entries.size())));
                         // MCSERV passes a negative count to MCMAN with no table: it returns the number of entries.
                         const size_t entryCount =
                             maxEntries < 0 ? entries.size()
                                            : std::min(entries.size(), static_cast<size_t>(maxEntries));
+                        state.dirCursor += entryCount;
                         if (entryCount == 0u || tableAddr == 0u || maxEntries < 0)
                         {
                             result = static_cast<int32_t>(entryCount);
@@ -865,8 +877,8 @@ namespace ps2_stubs
 
             setMcCommandResultLocked(kMcCmdGetDir, result);
         }
-        RUNTIME_LOG("[MC] GetDir port=" << port << " '" << rawPath
-                                        << "' maxent=" << maxEntries << " -> result=" << result);
+        RUNTIME_LOG("[MC] GetDir port=" << port << " '" << rawPath << "' mode=" << mode
+                                        << " maxent=" << maxEntries << " -> result=" << result);
         setReturnS32(ctx, 0);
     }
 
@@ -1617,5 +1629,6 @@ namespace ps2_stubs
             archive.value(port.formatted);
         }
         archive.value(g_cvMcFileCursor);
+        // shortcut: the sceMcGetDir search cursor is not saved; a state saved during a search restarts it.
     }
 }

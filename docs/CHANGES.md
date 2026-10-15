@@ -2,9 +2,9 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
-## sceMcGetDir: negative count and directory names (October 15, 2026)
+## sceMcGetDir: negative count, directory names and search mode (October 15, 2026)
 
-- `Stubs/MemoryCard.cpp`: MCSERV forwards a negative entry count to MCMAN with no table (`MCSERV.IRX`, GETDIR handler at 0xAD0), and MCMAN (0x80FC) then counts the matching entries without writing any. The runtime clamped a negative count to 0 and returned 0, so after a race Burnout Dominator found no save directory and asked for the original memory card forever. A path without wildcards also matched the directory's contents instead of the directory itself (MCMAN matches the last path component in its parent directory): the game's free-space walk then changed into `.`, `..` and the save files. Tests: `sceMcGetDir with a negative count returns the entry count without a table`, `sceMcGetDir on a directory name returns that directory's entry`.
+- `Stubs/MemoryCard.cpp`: MCSERV forwards a negative entry count to MCMAN with no table (`MCSERV.IRX`, GETDIR handler at 0xAD0), and MCMAN (0x80FC) then counts the matching entries without writing any. The runtime clamped a negative count to 0 and returned 0, so after a race Burnout Dominator found no save directory and asked for the original memory card forever. A path without wildcards also matched the directory's contents instead of the directory itself (MCMAN matches the last path component in its parent directory): the game's free-space walk then changed into `.`, `..` and the save files. The mode argument was ignored: a non-zero mode continues the previous search after the entries already returned (MCMAN keeps a cursor), and the game reads its save directory one entry at a time with it, so it got the first entry forever and stayed on "Checking memory card" after a race. The cursor is not part of save states. Tests: `sceMcGetDir with a negative count returns the entry count without a table`, `sceMcGetDir on a directory name returns that directory's entry`, `sceMcGetDir with a non-zero mode continues the previous search`.
 
 ## PATH3 queue read in place (October 15, 2026)
 

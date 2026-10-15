@@ -654,6 +654,43 @@ void register_ps2_runtime_io_tests()
             t.Equals(static_cast<int>(table[0]), 0xAB, "a negative count should not write the table");
         });
 
+        tc.Run("sceMcGetDir with a non-zero mode continues the previous search", [](TestCase &t)
+        {
+            TestContext test;
+
+            std::filesystem::create_directories(test.paths.mcRoot / "SAVEDATA");
+            std::ofstream(test.paths.mcRoot / "SAVEDATA" / "game.dat", std::ios::binary) << "x";
+
+            const uint32_t patternAddr = GUEST_STRING_AREA_START + 0x700;
+            writeGuestString(test.rdram.data(), patternAddr, "/SAVEDATA/*");
+            const auto *entries = reinterpret_cast<const SceMcTblGetDir *>(test.rdram.data() + GUEST_MC_TABLE_ADDR);
+
+            const char *expected[] = {".", "..", "game.dat"};
+            for (uint32_t call = 0u; call < 4u; ++call)
+            {
+                clearContext(test.ctx);
+                setRegU32(test.ctx, 4, 0u);
+                setRegU32(test.ctx, 5, 0u);
+                setRegU32(test.ctx, 6, patternAddr);
+                setRegU32(test.ctx, 7, call == 0u ? 0u : 1u);
+                setRegU32(test.ctx, 8, 1u);
+                setRegU32(test.ctx, 9, GUEST_MC_TABLE_ADDR);
+                ps2_stubs::sceMcGetDir(test.rdram.data(), &test.ctx, nullptr);
+
+                int32_t cmd = 0;
+                const int32_t count = syncMc(test.rdram, &cmd);
+                if (call < 3u)
+                {
+                    t.Equals(count, 1, "each call should return the next entry");
+                    t.Equals(std::string(entries[0].entryName), std::string(expected[call]), "entries should come in order");
+                }
+                else
+                {
+                    t.Equals(count, 0, "the search should end after the last entry");
+                }
+            }
+        });
+
         tc.Run("sceMcGetDir on a directory name returns that directory's entry", [](TestCase &t)
         {
             TestContext test;
