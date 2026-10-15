@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## sceMcGetDir: negative count and directory names (October 15, 2026)
+
+- `Stubs/MemoryCard.cpp`: MCSERV forwards a negative entry count to MCMAN with no table (`MCSERV.IRX`, GETDIR handler at 0xAD0), and MCMAN (0x80FC) then counts the matching entries without writing any. The runtime clamped a negative count to 0 and returned 0, so after a race Burnout Dominator found no save directory and asked for the original memory card forever. A path without wildcards also matched the directory's contents instead of the directory itself (MCMAN matches the last path component in its parent directory): the game's free-space walk then changed into `.`, `..` and the save files. Tests: `sceMcGetDir with a negative count returns the entry count without a table`, `sceMcGetDir on a directory name returns that directory's entry`.
+
 ## PATH3 queue read in place (October 15, 2026)
 
 - `ps2_memory.cpp`, `ps2_memory.h` (`m_path3FifoHead`): each MSKPATH3 window concatenated the whole masked PATH3 queue to find its GIF packets and queued the remainder again, so a frame with a hundred windows over a 300 KiB texture queue copied tens of MiB. The queue is now read in place from a head offset and only released bytes are copied (about 8% more VSyncs per second in the race, identical RDRAM after 1,100 VSyncs). Save states store the queue without the consumed bytes, so their format is unchanged.

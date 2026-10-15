@@ -627,6 +627,59 @@ void register_ps2_runtime_io_tests()
                      "sceMcGetDir file entries should carry the closed-file attribute");
         });
 
+        tc.Run("sceMcGetDir with a negative count returns the entry count without a table", [](TestCase &t)
+        {
+            TestContext test;
+
+            std::filesystem::create_directories(test.paths.mcRoot / "SAVEDATA");
+            std::ofstream(test.paths.mcRoot / "SAVEDATA" / "game.dat", std::ios::binary) << "x";
+
+            const uint32_t patternAddr = GUEST_STRING_AREA_START + 0x700;
+            writeGuestString(test.rdram.data(), patternAddr, "/SAVEDATA/*");
+            uint8_t *table = test.rdram.data() + GUEST_MC_TABLE_ADDR;
+            std::memset(table, 0xAB, 64);
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 4, 0u);
+            setRegU32(test.ctx, 5, 0u);
+            setRegU32(test.ctx, 6, patternAddr);
+            setRegU32(test.ctx, 7, 0u);
+            setRegU32(test.ctx, 8, 0xFFFFFFFFu);
+            setRegU32(test.ctx, 9, GUEST_MC_TABLE_ADDR);
+
+            ps2_stubs::sceMcGetDir(test.rdram.data(), &test.ctx, nullptr);
+
+            int32_t cmd = 0;
+            t.Equals(syncMc(test.rdram, &cmd), 3, "a negative count should report '.', '..' and the file");
+            t.Equals(static_cast<int>(table[0]), 0xAB, "a negative count should not write the table");
+        });
+
+        tc.Run("sceMcGetDir on a directory name returns that directory's entry", [](TestCase &t)
+        {
+            TestContext test;
+
+            std::filesystem::create_directories(test.paths.mcRoot / "SAVEDATA");
+            std::ofstream(test.paths.mcRoot / "SAVEDATA" / "game.dat", std::ios::binary) << "x";
+
+            const uint32_t pathAddr = GUEST_STRING_AREA_START + 0x700;
+            writeGuestString(test.rdram.data(), pathAddr, "SAVEDATA");
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 4, 0u);
+            setRegU32(test.ctx, 5, 0u);
+            setRegU32(test.ctx, 6, pathAddr);
+            setRegU32(test.ctx, 7, 0u);
+            setRegU32(test.ctx, 8, 8u);
+            setRegU32(test.ctx, 9, GUEST_MC_TABLE_ADDR);
+
+            ps2_stubs::sceMcGetDir(test.rdram.data(), &test.ctx, nullptr);
+
+            int32_t cmd = 0;
+            t.Equals(syncMc(test.rdram, &cmd), 1, "a directory name should match only that directory");
+            const auto *entries = reinterpret_cast<const SceMcTblGetDir *>(test.rdram.data() + GUEST_MC_TABLE_ADDR);
+            t.Equals(std::string(entries[0].entryName), std::string("SAVEDATA"), "the entry should be the directory");
+        });
+
         tc.Run("sceMcGetInfo reports formatted and unformatted states", [](TestCase &t)
         {
             TestContext test;
