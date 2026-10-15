@@ -321,7 +321,8 @@ void register_ps2_vu1_tests()
     {
         // BDR_VU_REPLAY=stem: replays a PS2_VU_CAPTURE_DIR capture (stem.code, .data, .state) on the
         // VU1 interpreter one step at a time; BDR_VU_REPLAY_PCS=pc,pc,... prints VF/VI registers
-        // (BDR_VU_REPLAY_VF=n,n,...) each time execution reaches one of those addresses. A debugging aid.
+        // (BDR_VU_REPLAY_VF=n,n,...) each time execution reaches one of those addresses, and
+        // BDR_VU_REPLAY_OUT=file receives VU data memory at the end. A debugging aid.
         tc.Run("VU capture replay", [](TestCase &t)
         {
             const char *stem = std::getenv("BDR_VU_REPLAY");
@@ -369,10 +370,10 @@ void register_ps2_vu1_tests()
                 const VU1State &s = vu.state();
                 if (std::find(pcs.begin(), pcs.end(), s.pc) != pcs.end())
                 {
-                    std::printf("[vu-replay] pc=%04x q=%g", s.pc, s.q);
+                    std::printf("[vu-replay] pc=%04x cycles=%llu q=%g", s.pc, static_cast<unsigned long long>(s.cycles), s.q);
                     for (uint32_t r : vfs)
                         std::printf(" vf%u=(%g %g %g %g)", r, s.vf[r & 31][0], s.vf[r & 31][1], s.vf[r & 31][2], s.vf[r & 31][3]);
-                    std::printf(" vi2=%d vi3=%d vi5=%d vi14=%d", s.vi[2], s.vi[3], s.vi[5], s.vi[14]);
+                    std::printf(" vi1=%d vi2=%d vi3=%d vi5=%d vi14=%d p=%g", s.vi[1], s.vi[2], s.vi[3], s.vi[5], s.vi[14], s.p);
                     std::printf(" vi4=%d vi7=%d vi8=%d\n", s.vi[4], s.vi[7], s.vi[8]);
                 }
                 const uint32_t before = s.pc;
@@ -380,6 +381,34 @@ void register_ps2_vu1_tests()
                 if (vu.state().pc == before && vu.state().ebit)
                     break;
             }
+            if (const char *out = std::getenv("BDR_VU_REPLAY_OUT"))
+                if (FILE *file = std::fopen(out, "wb"))
+                {
+                    std::fwrite(f.data, 1, PS2_VU1_DATA_SIZE, file);
+                    std::fclose(file);
+                }
+        });
+
+        tc.Run("MR32 waits only for the source lanes it rotates in", [](TestCase &t)
+        {
+            // MR32.w vf3, vf2 reads vf2.x: a pending write of vf2.z must not stall it (PCSX2
+            // _vuRegsMR32). Burnout Dominator's car reflection loop is scheduled on this.
+            const auto run = [&](uint8_t source)
+            {
+                Vu1Fixture f;
+                t.IsTrue(f.initialize(), "fixture initializes");
+                writeVuInstructionPair(f.code, 0u, makeVuLowerSpecial(0x31u, 1u, 2u, 0u, 2u), kVuUpperNop);
+                writeVuInstructionPair(f.code, 8u, makeVuLowerSpecial(0x31u, source, 3u, 0u, 1u), kVuUpperNop);
+                writeVuInstructionPair(f.code, 16u, 0x8000033cu, kVuUpperNop | 0x40000000u);
+                writeVuInstructionPair(f.code, 24u, 0x8000033cu, kVuUpperNop);
+                VU1Interpreter vu(VU1Interpreter::Unit::VU1);
+                vu.setCompiledExecutionEnabled(false);
+                vu.state().vf[2][0] = 7.0f;
+                vu.execute(f.code, PS2_VU1_CODE_SIZE, f.data, PS2_VU1_DATA_SIZE, f.gs, &f.mem, 0u, 0u, 0u, 1000u);
+                t.Equals(vu.state().vf[3][3], source == 2u ? 7.0f : 0.0f, "MR32.w takes the source x lane");
+                return vu.state().cycles;
+            };
+            t.Equals(run(2u), run(4u), "MR32.w after MR32.z of its source does not stall");
         });
 
         tc.Run("retained loops carry independent Q and CLIP timelines through DIV stalls", [](TestCase &t)

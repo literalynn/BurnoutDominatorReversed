@@ -1099,7 +1099,8 @@ constexpr VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint
     case 0x31:
         usage.pipeline = PipelineFmac;
         usage.latency = 4u;
-        addVfRead(usage, vfS, special == 0x31u ? 0xFu : dest);
+        // MR32 writes fs.yzwx: each destination lane reads the next source lane (w reads x).
+        addVfRead(usage, vfS, special == 0x31u ? static_cast<uint8_t>((dest >> 1) | ((dest & 1u) << 3)) : dest);
         addVfWrite(usage, vfT, dest);
         break;
     case 0x34:
