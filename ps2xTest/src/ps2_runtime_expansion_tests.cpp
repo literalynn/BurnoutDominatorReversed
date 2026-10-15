@@ -344,6 +344,17 @@ void register_ps2_runtime_expansion_tests()
             t.IsTrue(lanes[0] == fmax && lanes[1] == 0.0f && lanes[2] == 0.0f && lanes[3] == 1.0f, "VU multiply clamps lanes");
         });
 
+        tc.Run("VU0 macro VMAX and VMINI keep raw bit patterns", [](TestCase &t)
+        {
+            alignas(16) uint32_t lanes[4];
+            _mm_store_ps(reinterpret_cast<float *>(lanes), ps2_vmax(_mm_castsi128_ps(_mm_set_epi32(0, 0, static_cast<int>(0xC0000000u), 0x412)),
+                                                                    _mm_castsi128_ps(_mm_set_epi32(0, 0, static_cast<int>(0xBF800000u), 0))));
+            t.IsTrue(lanes[0] == 0x412u && lanes[1] == 0xBF800000u, "VMAX keeps a denormal and orders negatives by magnitude");
+            _mm_store_ps(reinterpret_cast<float *>(lanes), ps2_vmin(_mm_castsi128_ps(_mm_set_epi32(0, 0, static_cast<int>(0xC0000000u), 0x412)),
+                                                                    _mm_castsi128_ps(_mm_set_epi32(0, 0, static_cast<int>(0xBF800000u), 0))));
+            t.IsTrue(lanes[0] == 0u && lanes[1] == 0xC0000000u, "VMINI");
+        });
+
         tc.Run("CVT.W.S truncates toward zero and saturates", [](TestCase &t)
         {
             t.Equals(FPU_CVT_W_S(0.99999f), 0, "0.99999 truncates to 0");

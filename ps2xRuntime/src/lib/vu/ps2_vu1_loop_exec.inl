@@ -161,8 +161,7 @@
                 if constexpr (source == 0u)
                     return entryI;
                 else
-                    return ps2_vu_detail::upper::normalizeOperand(
-                        std::bit_cast<float>(decodedRegion[source - 1u].lower));
+                    return std::bit_cast<float>(decodedRegion[source - 1u].lower); // raw LOI bits
             };
             const auto readQ = [&]<uint16_t source, uint16_t offset>() PS2_VU_INLINE_LAMBDA {
                 if constexpr (source != 0u)

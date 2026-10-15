@@ -3041,6 +3041,31 @@ void register_ps2_vu1_tests()
             }
         });
 
+        tc.Run("MAXi keeps the raw bits of a denormal I", [](TestCase &t)
+        {
+            // Burnout Dominator's car microcode builds the GIF REGS word 0x412 with
+            // LOI 0x412 and MAXi.z vf1, vf0, I; flushing the denormal lost the car.
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+            uint8_t *vuCode = mem.getVU1Code();
+            std::memset(vuCode, 0, PS2_VU1_CODE_SIZE);
+            const uint32_t program[] = {
+                0x00000412u, 0x800002FFu, // LOI 0x412 | NOP (I bit)
+                0x8000033Cu, 0x0040005Du, // NOP | MAXi.z vf1, vf0, I
+                0x8000033Cu, 0x400002FFu, // NOP | NOP with E bit
+                0x8000033Cu, 0x000002FFu,
+            };
+            std::memcpy(vuCode, program, sizeof(program));
+            VU1Interpreter vu1;
+            vu1.execute(vuCode, PS2_VU1_CODE_SIZE, mem.getVU1Data(), PS2_VU1_DATA_SIZE, gs, &mem, 0u, 0u, 0u, 64u);
+            uint32_t z = 0;
+            std::memcpy(&z, &vu1.state().vf[1][2], sizeof(z));
+            t.Equals(z, 0x412u, "vf1.z should hold the bits of I");
+        });
+
         tc.Run("XGKICK sends a FLG 3 GIF packet like an IMAGE one", [](TestCase &t)
         {
             // The GS manual defines FLG 3 ("disable") as working like IMAGE;

@@ -89,4 +89,20 @@ static inline __m128 ps2_vadd(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_add_
 static inline __m128 ps2_vsub(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_sub_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
 static inline __m128 ps2_vmul(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_mul_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
 
+// VU MAX/MINI compare raw bit patterns as sign-magnitude integers (exact on
+// denormals and exponent 255) and return an operand unchanged (PCSX2 fp_max/fp_min).
+static inline __m128 ps2_vminmax(__m128 a, __m128 b, bool takeMax)
+{
+    const __m128i ia = _mm_castps_si128(a), ib = _mm_castps_si128(b);
+    const __m128i bothNegative = _mm_srai_epi32(_mm_and_si128(ia, ib), 31);
+    const __m128i greater = _mm_cmpgt_epi32(ia, ib), less = _mm_cmpgt_epi32(ib, ia);
+    // Two negatives order in reverse: the larger integer is the smaller float.
+    const __m128i aIsMax = _mm_or_si128(_mm_and_si128(bothNegative, less), _mm_andnot_si128(bothNegative, greater));
+    const __m128i aIsMin = _mm_or_si128(_mm_and_si128(bothNegative, greater), _mm_andnot_si128(bothNegative, less));
+    const __m128i pickA = takeMax ? aIsMax : aIsMin;
+    return _mm_castsi128_ps(_mm_or_si128(_mm_and_si128(pickA, ia), _mm_andnot_si128(pickA, ib)));
+}
+static inline __m128 ps2_vmax(__m128 a, __m128 b) { return ps2_vminmax(a, b, true); }
+static inline __m128 ps2_vmin(__m128 a, __m128 b) { return ps2_vminmax(a, b, false); }
+
 #endif // PS2_FLOAT_H

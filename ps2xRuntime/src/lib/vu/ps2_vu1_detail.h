@@ -40,4 +40,26 @@ inline constexpr int16_t IMM15(uint32_t i)
     return (int16_t)(int32_t)((int32_t)(raw << 17) >> 17);
 }
 
+// MAX and MINI compare the raw bit patterns as sign-magnitude integers, so they
+// are exact on denormals and exponent-255 values and return an operand unchanged
+// (PCSX2 fp_max/fp_min). Games load constants such as GIF REGS words through MAXi.
+#include <cstring>
+namespace ps2_vu_detail
+{
+PS2_VU_FORCE_INLINE float maxBits(float a, float b)
+{
+    int32_t ia, ib;
+    std::memcpy(&ia, &a, sizeof(ia));
+    std::memcpy(&ib, &b, sizeof(ib));
+    return (ia < 0 && ib < 0) ? (ia < ib ? a : b) : (ia > ib ? a : b);
+}
+PS2_VU_FORCE_INLINE float minBits(float a, float b)
+{
+    int32_t ia, ib;
+    std::memcpy(&ia, &a, sizeof(ia));
+    std::memcpy(&ib, &b, sizeof(ib));
+    return (ia < 0 && ib < 0) ? (ia > ib ? a : b) : (ia < ib ? a : b);
+}
+}
+
 #endif

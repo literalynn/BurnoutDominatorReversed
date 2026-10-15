@@ -779,7 +779,7 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
         float value;
         constexpr uint32_t bits = Lower;
         std::memcpy(&value, &bits, sizeof(value));
-        m_state.i = ps2_vu_detail::upper::normalizeOperand(value);
+        m_state.i = value; // raw bits, as LOI loads them
     }
     else
         lower<Pc, Lower>(lowerValue, viValue);
@@ -922,18 +922,13 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
     else // MAX and MINI with a broadcast, I or a whole vector
     {
         static_assert(!special, "unexpected upper instruction without FMAC flags");
-        const float32x4_t left = normalizeFmacOperands(vld1q_f32(m_state.vf[fs]));
-        float32x4_t right;
-        if constexpr (code <= 0x17u)
-            right = vld1q_dup_f32(&m_state.vf[ft][code & 3u]);
-        else if constexpr (code == 0x1Du || code == 0x1Fu)
-            right = vdupq_n_f32(m_state.i);
-        else
-            right = vld1q_f32(m_state.vf[ft]);
-        right = normalizeFmacOperands(right);
         constexpr bool max = code <= 0x13u || code == 0x1Du || code == 0x2Bu;
-        const uint32x4_t pick = max ? vcgtq_f32(left, right) : vcltq_f32(left, right);
-        vst1q_f32(value, vbslq_f32(pick, left, right));
+        for (uint32_t lane = 0u; lane < 4u; ++lane)
+        {
+            const float right = code <= 0x17u ? m_state.vf[ft][code & 3u]
+                                : (code == 0x1Du || code == 0x1Fu) ? m_state.i : m_state.vf[ft][lane];
+            value[lane] = max ? ps2_vu_detail::maxBits(m_state.vf[fs][lane], right) : ps2_vu_detail::minBits(m_state.vf[fs][lane], right);
+        }
     }
     return 0u;
 }
@@ -995,15 +990,15 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
         constexpr bool max = code <= 0x13u || code == 0x1Du || code == 0x2Bu;
         for (uint32_t lane = 0u; lane < 4u; ++lane)
         {
-            const float left = normalizeOperand(source[lane]);
+            const float left = source[lane];
             float right;
             if constexpr (code <= 0x17u)
-                right = normalizeOperand(m_state.vf[ft][code & 3u]);
+                right = m_state.vf[ft][code & 3u];
             else if constexpr (code == 0x1Du || code == 0x1Fu)
-                right = normalizeOperand(m_state.i);
+                right = m_state.i;
             else
-                right = normalizeOperand(m_state.vf[ft][lane]);
-            value[lane] = max ? (left > right ? left : right) : (left < right ? left : right);
+                right = m_state.vf[ft][lane];
+            value[lane] = max ? ps2_vu_detail::maxBits(left, right) : ps2_vu_detail::minBits(left, right);
         }
     }
     return 0u;

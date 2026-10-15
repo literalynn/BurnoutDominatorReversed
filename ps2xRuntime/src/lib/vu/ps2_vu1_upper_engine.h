@@ -565,9 +565,9 @@ PS2_VU_FORCE_INLINE void computeUpper(uint32_t instr, const Inputs &in, Sink &si
     case 0x12:
     case 0x13: // MAXbc
     {
-        float bc = vt(op & 3);
+        const float bc = in.ft(op & 3);
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) > bc) ? vs(c) : bc;
+            result[c] = ps2_vu_detail::maxBits(in.fs(c), bc);
         sink.vf(fd, dest, result);
         return;
     }
@@ -576,9 +576,9 @@ PS2_VU_FORCE_INLINE void computeUpper(uint32_t instr, const Inputs &in, Sink &si
     case 0x16:
     case 0x17: // MINIbc
     {
-        float bc = vt(op & 3);
+        const float bc = in.ft(op & 3);
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) < bc) ? vs(c) : bc;
+            result[c] = ps2_vu_detail::minBits(in.fs(c), bc);
         sink.vf(fd, dest, result);
         return;
     }
@@ -602,7 +602,7 @@ PS2_VU_FORCE_INLINE void computeUpper(uint32_t instr, const Inputs &in, Sink &si
         return;
     case 0x1D: // MAXi
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) > i()) ? vs(c) : i();
+            result[c] = ps2_vu_detail::maxBits(in.fs(c), in.i());
         sink.vf(fd, dest, result);
         return;
     case 0x1E: // MULi
@@ -613,7 +613,7 @@ PS2_VU_FORCE_INLINE void computeUpper(uint32_t instr, const Inputs &in, Sink &si
         return;
     case 0x1F: // MINIi
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) < i()) ? vs(c) : i();
+            result[c] = ps2_vu_detail::minBits(in.fs(c), in.i());
         sink.vf(fd, dest, result);
         return;
     case 0x20: // ADDq
@@ -684,7 +684,7 @@ PS2_VU_FORCE_INLINE void computeUpper(uint32_t instr, const Inputs &in, Sink &si
         return;
     case 0x2B: // MAX
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) > vt(c)) ? vs(c) : vt(c);
+            result[c] = ps2_vu_detail::maxBits(in.fs(c), in.ft(c));
         sink.vf(fd, dest, result);
         return;
     case 0x2C: // SUB
@@ -709,7 +709,7 @@ PS2_VU_FORCE_INLINE void computeUpper(uint32_t instr, const Inputs &in, Sink &si
         return;
     case 0x2F: // MINI
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) < vt(c)) ? vs(c) : vt(c);
+            result[c] = ps2_vu_detail::minBits(in.fs(c), in.ft(c));
         sink.vf(fd, dest, result);
         return;
 

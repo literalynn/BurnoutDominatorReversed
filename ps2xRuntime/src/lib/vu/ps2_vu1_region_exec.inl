@@ -148,8 +148,7 @@
                 if constexpr (source == 0u)
                     return entryI;
                 else
-                    return ps2_vu_detail::upper::normalizeOperand(
-                        std::bit_cast<float>(decodedRegion[source - 1u].lower));
+                    return std::bit_cast<float>(decodedRegion[source - 1u].lower); // raw LOI bits
             };
             const auto readClip = [&]<size_t index>() PS2_VU_INLINE_LAMBDA {
                 if constexpr (!decodedRegion[index].lowerUsage.readsClip)

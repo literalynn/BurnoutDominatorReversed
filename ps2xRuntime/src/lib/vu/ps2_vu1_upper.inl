@@ -173,9 +173,9 @@ PS2_VU_FORCE_INLINE void VU1Interpreter::execUpperInline(uint32_t instr)
     case 0x12:
     case 0x13: // MAXbc
     {
-        float bc = vt(op & 3);
+        const float bc = m_state.vf[ft][op & 3];
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) > bc) ? vs(c) : bc;
+            result[c] = ps2_vu_detail::maxBits(m_state.vf[fs][c], bc);
         applyDest(vd, result, dest);
         return;
     }
@@ -184,9 +184,9 @@ PS2_VU_FORCE_INLINE void VU1Interpreter::execUpperInline(uint32_t instr)
     case 0x16:
     case 0x17: // MINIbc
     {
-        float bc = vt(op & 3);
+        const float bc = m_state.vf[ft][op & 3];
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) < bc) ? vs(c) : bc;
+            result[c] = ps2_vu_detail::minBits(m_state.vf[fs][c], bc);
         applyDest(vd, result, dest);
         return;
     }
@@ -208,7 +208,7 @@ PS2_VU_FORCE_INLINE void VU1Interpreter::execUpperInline(uint32_t instr)
         return;
     case 0x1D: // MAXi
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) > i()) ? vs(c) : i();
+            result[c] = ps2_vu_detail::maxBits(m_state.vf[fs][c], m_state.i);
         applyDest(vd, result, dest);
         return;
     case 0x1E: // MULi
@@ -218,7 +218,7 @@ PS2_VU_FORCE_INLINE void VU1Interpreter::execUpperInline(uint32_t instr)
         return;
     case 0x1F: // MINIi
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) < i()) ? vs(c) : i();
+            result[c] = ps2_vu_detail::minBits(m_state.vf[fs][c], m_state.i);
         applyDest(vd, result, dest);
         return;
     case 0x20: // ADDq
@@ -278,7 +278,7 @@ PS2_VU_FORCE_INLINE void VU1Interpreter::execUpperInline(uint32_t instr)
         return;
     case 0x2B: // MAX
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) > vt(c)) ? vs(c) : vt(c);
+            result[c] = ps2_vu_detail::maxBits(m_state.vf[fs][c], m_state.vf[ft][c]);
         applyDest(vd, result, dest);
         return;
     case 0x2C: // SUB
@@ -300,7 +300,7 @@ PS2_VU_FORCE_INLINE void VU1Interpreter::execUpperInline(uint32_t instr)
         return;
     case 0x2F: // MINI
         for (int c = 0; c < 4; c++)
-            result[c] = (vs(c) < vt(c)) ? vs(c) : vt(c);
+            result[c] = ps2_vu_detail::minBits(m_state.vf[fs][c], m_state.vf[ft][c]);
         applyDest(vd, result, dest);
         return;
 

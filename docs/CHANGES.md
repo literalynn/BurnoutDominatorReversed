@@ -2,6 +2,13 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## VU MAX, MINI and LOI on raw bits (October 15, 2026)
+
+- `vu/ps2_vu1_upper.inl`, `vu/ps2_vu1_upper_engine.h`, `vu/ps2_vu1_program.h`: VU MAX and MINI (broadcast, I and vector forms) compared operands after flushing denormals to zero. The VUs compare the raw bit patterns as sign-magnitude integers and return an operand unchanged (PCSX2 `fp_max`/`fp_min`), which microcode uses to load integer constants: Burnout Dominator's car microcode builds the GIF REGS word 0x412 with `LOI 0x412` and `MAXi.z vf1, vf0, I`. With the denormal flushed REGS was 0, every car vertex was read as PRIM writes and the player's car was never drawn. `ps2_vu_detail::maxBits`/`minBits` (`ps2_vu1_detail.h`) implement the comparison.
+- `vu/ps2_vu1_exec.inl`, `ps2_vu1_program.h`, `ps2_vu1_loop_exec.inl`, `ps2_vu1_region_exec.inl`: LOI stores I as raw bits instead of normalizing it; arithmetic still normalizes I when it reads it.
+- `vu_translation_helpers.cpp`, `ps2_float.h`: the COP2 macro VMAX/VMINI use the same raw comparison (`ps2_vmax`, `ps2_vmin`) instead of `_mm_max_ps`/`_mm_min_ps`.
+- Tests: `MAXi keeps the raw bits of a denormal I`, `VU0 macro VMAX and VMINI keep raw bit patterns`.
+
 ## PATH3 unmask windows (October 15, 2026)
 
 - `ps2_vif1_interpreter.cpp`, `ps2_memory.cpp`: an MSKPATH3 unmask used to send every queued PATH3 packet at once. On the console PATH3 runs while unmasked and a new mask takes effect at the end of the GIF packet in progress (EOP). Burnout Dominator re-uploads its textures every frame through a small VRAM cache, one texture per window of `MSKPATH3 0`, 96 NOPs, `MSKPATH3 1` between draw batches; releasing every upload at the first window left each VRAM slot holding the last texture of the frame, so most draws sampled another texture and palette (multicoloured track). The VIF1 interpreter now counts about one PATH3 qword per VIF1 command in a window, lets whole packets out when a command other than NOP runs or the mask returns (at least the packet in progress), releases everything on FLUSHA and when the stream ends unmasked. Test: `PATH3 unmask window lets one GIF packet through before the mask returns`.

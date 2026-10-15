@@ -1377,7 +1377,7 @@ PS2_VU_FORCE_INLINE bool VU1Interpreter::runDecodedPair(const DecodedInstruction
         upper();
         float immediate = 0.0f;
         std::memcpy(&immediate, &decoded.lower, sizeof(immediate));
-        m_state.i = normalizeOperand(immediate);
+        m_state.i = immediate; // raw bits: MAXi/MINIi use them unchanged, arithmetic normalizes on read
     }
     else if (decoded.upperVfShadowReg != 0u)
     {
