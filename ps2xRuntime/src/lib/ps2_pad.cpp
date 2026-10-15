@@ -1,6 +1,10 @@
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
+#include "runtime/host_settings.h"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <utility>
 
 namespace
 {
@@ -38,56 +42,49 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
 
     uint16_t btns = 0xFFFFu;
-    constexpr int kGamepad = 0;
-    const bool useGamepad = IsGamepadAvailable(kGamepad);
     auto clearBit = [&btns](uint16_t mask)
     { btns &= ~mask; };
 
-    if (useGamepad)
-    {
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_UP))
-            clearBit(PAD_UP);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
-            clearBit(PAD_DOWN);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT))
-            clearBit(PAD_LEFT);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT))
-            clearBit(PAD_RIGHT);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))
-            clearBit(PAD_CROSS);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT))
-            clearBit(PAD_CIRCLE);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT))
-            clearBit(PAD_SQUARE);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP))
-            clearBit(PAD_TRIANGLE);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1))
-            clearBit(PAD_L1);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1))
-            clearBit(PAD_R1);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2))
-            clearBit(PAD_L2);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2))
-            clearBit(PAD_R2);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT))
-            clearBit(PAD_START);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_LEFT))
-            clearBit(PAD_SELECT);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_THUMB))
-            clearBit(PAD_L3);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_THUMB))
-            clearBit(PAD_R3);
+    // The first connected pad drives the DualShock 2 (Xbox, PlayStation 4/5 and other
+    // SDL_GameControllerDB pads); the keyboard works at the same time.
+    int gamepad = -1;
+    for (int index = 0; index < 4 && gamepad < 0; ++index)
+        if (IsGamepadAvailable(index))
+            gamepad = index;
 
-        float lx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_X);
-        float ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);
-        float rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
-        float ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
-        data[6] = static_cast<uint8_t>(128 + lx * 127);
-        data[7] = static_cast<uint8_t>(128 + ly * 127);
-        data[4] = static_cast<uint8_t>(128 + rx * 127);
-        data[5] = static_cast<uint8_t>(128 + ry * 127);
+    if (gamepad >= 0)
+    {
+        static constexpr std::pair<int, uint16_t> kButtons[] = {
+            {GAMEPAD_BUTTON_LEFT_FACE_UP, PAD_UP}, {GAMEPAD_BUTTON_LEFT_FACE_DOWN, PAD_DOWN},
+            {GAMEPAD_BUTTON_LEFT_FACE_LEFT, PAD_LEFT}, {GAMEPAD_BUTTON_LEFT_FACE_RIGHT, PAD_RIGHT},
+            {GAMEPAD_BUTTON_RIGHT_FACE_DOWN, PAD_CROSS}, {GAMEPAD_BUTTON_RIGHT_FACE_RIGHT, PAD_CIRCLE},
+            {GAMEPAD_BUTTON_RIGHT_FACE_LEFT, PAD_SQUARE}, {GAMEPAD_BUTTON_RIGHT_FACE_UP, PAD_TRIANGLE},
+            {GAMEPAD_BUTTON_LEFT_TRIGGER_1, PAD_L1}, {GAMEPAD_BUTTON_RIGHT_TRIGGER_1, PAD_R1},
+            {GAMEPAD_BUTTON_LEFT_TRIGGER_2, PAD_L2}, {GAMEPAD_BUTTON_RIGHT_TRIGGER_2, PAD_R2},
+            {GAMEPAD_BUTTON_MIDDLE_RIGHT, PAD_START}, {GAMEPAD_BUTTON_MIDDLE_LEFT, PAD_SELECT},
+            {GAMEPAD_BUTTON_LEFT_THUMB, PAD_L3}, {GAMEPAD_BUTTON_RIGHT_THUMB, PAD_R3}};
+        for (const auto &[button, mask] : kButtons)
+            if (IsGamepadButtonDown(gamepad, button))
+                clearBit(mask);
+
+        // Radial dead zone, then the remaining range spread over 0..255.
+        const float deadzone = ps2x::hostSettings().stickDeadzone;
+        auto stick = [&](int axisX, int axisY, uint8_t &outX, uint8_t &outY)
+        {
+            float x = GetGamepadAxisMovement(gamepad, axisX);
+            float y = GetGamepadAxisMovement(gamepad, axisY);
+            const float length = std::sqrt(x * x + y * y);
+            const float scale = length <= deadzone ? 0.0f
+                                                   : std::min(1.0f, (length - deadzone) / (1.0f - deadzone)) / length;
+            auto toByte = [](float v)
+            { return static_cast<uint8_t>(std::clamp(std::lround(128.0f + v * 127.5f), 0l, 255l)); };
+            outX = toByte(x * scale);
+            outY = toByte(y * scale);
+        };
+        stick(GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, data[6], data[7]);
+        stick(GAMEPAD_AXIS_RIGHT_X, GAMEPAD_AXIS_RIGHT_Y, data[4], data[5]);
     }
-    else
+
     {
         if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
             clearBit(PAD_UP);
@@ -113,7 +110,7 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
             clearBit(PAD_L2);
         if (IsKeyDown(KEY_RIGHT_SHIFT))
             clearBit(PAD_R2);
-        if (IsKeyDown(KEY_ENTER))
+        if (IsKeyDown(KEY_ENTER) && !IsKeyDown(KEY_LEFT_ALT) && !IsKeyDown(KEY_RIGHT_ALT))
             clearBit(PAD_START);
         if (IsKeyDown(KEY_TAB))
             clearBit(PAD_SELECT);

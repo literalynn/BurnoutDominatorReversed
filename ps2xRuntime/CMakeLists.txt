@@ -400,6 +400,7 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_vfs.cpp
     src/lib/ps2_runtime.cpp
     src/lib/ps2_save_state.cpp
+    src/lib/host_settings.cpp
     src/lib/ps2_vif1_interpreter.cpp
     src/lib/vu/ps2_vu1_core.cpp
     src/lib/vu/ps2_vu1_upper.cpp

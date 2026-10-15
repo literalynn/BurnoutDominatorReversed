@@ -7,6 +7,7 @@
 #include "ps2x/state_archive.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/ps2_gs_memory.h"
+#include "runtime/host_settings.h"
 #include "runtime/ps2_memory.h"
 #include "ps2_log.h"
 #include "gs_interface.hpp"
@@ -287,7 +288,9 @@ namespace
         explicit ParallelBackend(GSRegisters &registers) : priv(registers)
         {
             Lock lock(mutex);
-            if (!gs.init(&vulkan.device, ParallelGS::GSOptions{}))
+            ParallelGS::GSOptions options{};
+            options.super_sampling = ParallelGS::SuperSampling(ps2x::hostSettings().superSampling);
+            if (!gs.init(&vulkan.device, options))
                 throw std::runtime_error("paraLLEl-GS initialization failed");
             gs.set_signal_interface(this);
         }
@@ -448,6 +451,11 @@ namespace
             info.dst_stage = VK_PIPELINE_STAGE_2_COPY_BIT;
             info.dst_access = VK_ACCESS_2_TRANSFER_READ_BIT;
             info.crtc_offsets = true;
+            // Player setting: whole frames without field blending. paraLLEl-GS's high-resolution
+            // scan-out is not offered: Burnout copies its frame through post-processing passes, and
+            // the doubled scan-out came out duplicated side by side.
+            info.force_progressive = ps2x::hostSettings().progressiveScan;
+            info.anti_blur = ps2x::hostSettings().progressiveScan;
             if (std::getenv("BDR_PGS_TRACE"))
                 std::printf("[pgs-present] pmode=%llx smode1=%llx smode2=%llx dispfb1=%llx display1=%llx dispfb2=%llx display2=%llx bg=%llx\n",
                             (unsigned long long)request.pmode, (unsigned long long)priv.smode1, (unsigned long long)request.smode2,

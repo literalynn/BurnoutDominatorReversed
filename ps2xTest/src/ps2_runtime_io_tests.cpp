@@ -2,6 +2,7 @@
 #include "ps2_runtime.h"
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "runtime/host_settings.h"
 
 #include <filesystem>
 #include <fstream>
@@ -715,6 +716,35 @@ void register_ps2_runtime_io_tests()
             t.Equals(syncMc(test.rdram, &cmd), 1, "a directory name should match only that directory");
             const auto *entries = reinterpret_cast<const SceMcTblGetDir *>(test.rdram.data() + GUEST_MC_TABLE_ADDR);
             t.Equals(std::string(entries[0].entryName), std::string("SAVEDATA"), "the entry should be the directory");
+        });
+
+        tc.Run("settings.ini round-trips and reports bad lines", [](TestCase &t)
+        {
+            const std::filesystem::path path = std::filesystem::temp_directory_path() / "bdr_settings_test.ini";
+            ps2x::HostSettings &settings = ps2x::hostSettings();
+            const ps2x::HostSettings saved = settings;
+            settings.superSampling = 8;
+            settings.aspect = "16:9";
+            t.IsTrue(ps2x::writeHostSettings(path), "defaults are written");
+            settings = ps2x::HostSettings{};
+            std::string errors;
+            t.IsTrue(ps2x::loadHostSettings(path, errors), "the written file loads");
+            t.Equals(errors, std::string(), "the written file has no bad line");
+            t.Equals(settings.superSampling, 8, "super_sampling round-trips");
+            t.Equals(settings.aspect, std::string("16:9"), "aspect round-trips");
+            {
+                std::ofstream file(path);
+                file << "window_width = 2560  # QHD\nsuper_sampling = 3\nunknown = 1\nfullscreen = yes\n";
+            }
+            errors.clear();
+            t.IsTrue(ps2x::loadHostSettings(path, errors), "the edited file loads");
+            t.Equals(settings.windowWidth, 2560, "comments after a value are ignored");
+            t.IsTrue(settings.fullscreen, "yes is true");
+            t.Equals(settings.superSampling, 8, "an invalid sample count is ignored");
+            t.IsTrue(errors.find(":2:") != std::string::npos && errors.find(":3:") != std::string::npos,
+                     "bad and unknown lines are reported");
+            std::filesystem::remove(path);
+            settings = saved;
         });
 
         tc.Run("sceMcGetInfo reports formatted and unformatted states", [](TestCase &t)

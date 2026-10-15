@@ -19,6 +19,7 @@
 #include "ps2_host_backend.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
+#include "runtime/host_settings.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -386,6 +387,19 @@ namespace
     }
 }
 
+// The frame texture follows the scanout size, which high-resolution scanout doubles.
+static void EnsureFrameTexture(Texture2D &tex, uint32_t width, uint32_t height)
+{
+    if (tex.id != 0 && uint32_t(tex.width) == width && uint32_t(tex.height) == height)
+        return;
+    if (tex.id != 0)
+        UnloadTexture(tex);
+    Image blank = GenImageColor(int(width), int(height), BLACK);
+    tex = LoadTextureFromImage(blank);
+    UnloadImage(blank);
+    SetTextureFilter(tex, ps2x::hostSettings().smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
+}
+
 static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
 {
     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
@@ -397,7 +411,6 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
     static uint32_t s_lastHeight = 0u;
     static bool s_hasUploadedFrame = false;
     static std::vector<uint8_t> s_scratch;
-    static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
 
     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
     const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
@@ -428,6 +441,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                    &usedPreferredDisplaySource))
     {
         Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, MAGENTA);
+        EnsureFrameTexture(tex, FB_WIDTH, FB_HEIGHT);
         UpdateTexture(tex, blank.data);
         UnloadImage(blank);
         outWidth = FB_WIDTH;
@@ -463,28 +477,11 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
     s_lastWidth = width;
     s_lastHeight = height;
 
-    std::fill(s_uploadBuffer.begin(), s_uploadBuffer.end(), 0u);
-    if (!s_scratch.empty() && width != 0u && height != 0u)
+    if (width != 0u && height != 0u && s_scratch.size() >= size_t(width) * height * 4u)
     {
-        const uint32_t copyWidth = std::min<uint32_t>(width, FB_WIDTH);
-        const uint32_t copyHeight = std::min<uint32_t>(height, FB_HEIGHT);
-        const size_t srcRowBytes = static_cast<size_t>(width) * 4u;
-        const size_t dstRowBytes = static_cast<size_t>(FB_WIDTH) * 4u;
-        const size_t copyRowBytes = static_cast<size_t>(copyWidth) * 4u;
-        for (uint32_t y = 0; y < copyHeight; ++y)
-        {
-            const size_t srcOffset = static_cast<size_t>(y) * srcRowBytes;
-            const size_t dstOffset = static_cast<size_t>(y) * dstRowBytes;
-            if (srcOffset + copyRowBytes > s_scratch.size() ||
-                dstOffset + copyRowBytes > s_uploadBuffer.size())
-            {
-                break;
-            }
-            std::memcpy(s_uploadBuffer.data() + dstOffset, s_scratch.data() + srcOffset, copyRowBytes);
-        }
+        EnsureFrameTexture(tex, width, height);
+        UpdateTexture(tex, s_scratch.data());
     }
-
-    UpdateTexture(tex, s_uploadBuffer.data());
     outWidth = width;
     outHeight = height;
     s_hasUploadedFrame = true;
@@ -768,12 +765,27 @@ bool PS2Runtime::initialize(const char *title)
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+        const ps2x::HostSettings &settings = ps2x::hostSettings();
+        SetConfigFlags(FLAG_WINDOW_RESIZABLE | (settings.vsync ? FLAG_VSYNC_HINT : 0u));
+        InitWindow(settings.windowWidth, settings.windowHeight, title);
+        if (settings.fullscreen)
+            ToggleBorderlessWindowed();
+        if (!settings.gamepadMappings.empty())
+        {
+            if (char *mappings = LoadFileText(settings.gamepadMappings.c_str()))
+            {
+                SetGamepadMappings(mappings);
+                UnloadFileText(mappings);
+            }
+        }
         InitAudioDevice();
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
 #endif
+#if defined(PLATFORM_VITA)
         SetTargetFPS(60);
+#else
+        SetTargetFPS(ps2x::hostSettings().fpsLimit);
+#endif
         if (m_debugUiInitCallback)
         {
             m_debugUiInitCallback(*this, m_debugUiUserData);
@@ -2807,9 +2819,13 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
         const float screenWidth = static_cast<float>(GetScreenWidth());
         const float screenHeight = static_cast<float>(GetScreenHeight());
-        const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
-        const float dstWidth = srcWidth * scale;
-        const float dstHeight = srcHeight * scale;
+        // The PS2 scans 640x512 out to a 4:3 (or, with in-game widescreen, 16:9) television.
+        const std::string &aspectSetting = ps2x::hostSettings().aspect;
+        const float aspect = aspectSetting == "16:9" ? 16.0f / 9.0f
+                             : aspectSetting == "stretch" ? screenWidth / std::max(1.0f, screenHeight)
+                                                          : 4.0f / 3.0f;
+        const float dstWidth = std::min(screenWidth, screenHeight * aspect);
+        const float dstHeight = dstWidth / aspect;
         const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
         const Rectangle dstRect{
             (screenWidth - dstWidth) * 0.5f,
@@ -2823,6 +2839,10 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         }
         EndDrawing();
 
+        if (IsKeyPressed(KEY_F11) || (IsKeyPressed(KEY_ENTER) && (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT))))
+        {
+            ToggleBorderlessWindowed();
+        }
         if (!options.stateFile.empty())
         {
             if (IsKeyPressed(KEY_F5))

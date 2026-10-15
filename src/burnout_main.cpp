@@ -1,6 +1,7 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
 #include "burnout_profile.h"
 #include "ps2_runtime.h"
+#include "runtime/host_settings.h"
 
 #include <chrono>
 #include <cstring>
@@ -17,6 +18,7 @@ namespace {
 struct Options {
     std::filesystem::path elf, iso, disc, saves, dumpFrames;
     std::filesystem::path state, loadState;  // save states: F5/F7 slot, state restored at start
+    std::filesystem::path settings;          // settings.ini (display, quality, gamepads)
     uint64_t saveStateAt = 0;                // VSync at which to save to the slot (headless use)
     std::vector<uint32_t> traceCalls, traceWatch;
     bool headless = false;
@@ -29,7 +31,7 @@ constexpr const char* kUsage =
     "Usage: burnout_dominator <ELF> [--iso <ISO>] --disc <directory> --save <directory>\n"
     "       [--headless] [--seconds N] [--status-ms N] [--dump-frames <directory> [--dump-every-ms N]]\n"
     "       [--trace-calls 0xADDR,...] [--trace-watch 0xADDR,...]\n"
-    "       [--state <file>] [--load-state <file>] [--save-state-at VSYNC]\n"
+    "       [--state <file>] [--load-state <file>] [--save-state-at VSYNC] [--settings <file>]\n"
     "Save states: F5 saves to --state (default <save>/../states/quick.bdrstate), F7 loads it.";
 
 int parseInt(const std::string& key, const char* text, int low, int high) {
@@ -59,6 +61,7 @@ Options parse(int argc, char** argv) {
         else if (key == "--dump-every-ms") options.dumpEveryMs = parseInt(key, argv[i], 16, 600000);
         else if (key == "--state") options.state = std::filesystem::absolute(argv[i]);
         else if (key == "--load-state") options.loadState = std::filesystem::absolute(argv[i]);
+        else if (key == "--settings") options.settings = std::filesystem::absolute(argv[i]);
         else if (key == "--save-state-at") options.saveStateAt = static_cast<uint64_t>(parseInt(key, argv[i], 1, 100000000));
         else if (key == "--trace-calls" || key == "--trace-watch") {
             auto& target = key == "--trace-calls" ? options.traceCalls : options.traceWatch;
@@ -70,6 +73,7 @@ Options parse(int argc, char** argv) {
     }
     if (options.headless && options.seconds == 0) options.seconds = 10;
     if (options.state.empty()) options.state = options.saves.parent_path() / "states" / "quick.bdrstate";
+    if (options.settings.empty()) options.settings = options.saves.parent_path() / "settings.ini";
     if (!options.loadState.empty() && !std::filesystem::is_regular_file(options.loadState))
         throw std::runtime_error("Save state not found: " + options.loadState.string());
     if (!std::filesystem::is_regular_file(options.elf))
@@ -148,6 +152,11 @@ int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
 int main(int argc, char** argv) {
     try {
         const auto options = parse(argc, argv);
+        // The window, the GS backend and the pad read these settings when they start.
+        std::string settingsErrors;
+        if (!ps2x::loadHostSettings(options.settings, settingsErrors) && !options.headless)
+            ps2x::writeHostSettings(options.settings);
+        std::cerr << settingsErrors;
         PS2Runtime runtime;
         runtime.setMissingFunctionPolicy(PS2Runtime::MissingFunctionPolicy::Stop);
         if (options.headless) {

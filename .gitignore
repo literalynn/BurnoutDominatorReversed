@@ -40,3 +40,6 @@ __pycache__/
 SLES_*
 SLUS_*
 /work.json
+
+# Player settings written by the game on first launch.
+/settings.ini

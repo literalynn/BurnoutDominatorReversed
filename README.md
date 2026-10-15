@@ -8,9 +8,9 @@ A static recompilation of **Burnout Dominator** for PlayStation 2 (European rele
 
 ## Status
 
-**Work in progress — not playable yet.** The game boots through the intro, the 50 Hz / 60 Hz choice and the title screen, creates and saves a profile on the emulated memory card, and reaches the World Tour menus with the emulated DualShock 2 (PC gamepad or keyboard). With the GS emulated on the graphics card (paraLLEl-GS, Vulkan), it reaches the first race at about 16 frames per second: road, scenery, traffic and HUD are drawn, but many textures have wrong colours. Menus run at 35 to 52 frames per second out of 50.
+**Work in progress.** The game runs from boot through the menus, World Tour, car select and full races with the right graphics, and saves the profile on the emulated memory card after each event. It is still slow: about 20 to 30 frames per second out of 50 in a race.
 
-Keyboard, when no gamepad is connected: arrows or WASD = D-pad, X or Space = Cross, C or Esc = Circle, Z = Square, V = Triangle, Q/E = L1/R1, left/right Shift = L2/R2, Enter = Start, Tab = Select.
+Gamepads: the first connected Xbox, PlayStation 4/5 or other SDL-compatible pad is the DualShock 2, and the keyboard works at the same time: arrows or WASD = D-pad, X or Space = Cross, C or Esc = Circle, Z = Square, V = Triangle, Q/E = L1/R1, left/right Shift = L2/R2, Enter = Start, Tab = Select. F11 or Alt+Enter toggles full screen; F5 saves the game state and F7 reloads it.
 
 A successful build is not proof of a faithful port. Verified results, run history and current blockers are in [docs/STATUS.md](docs/STATUS.md) and [docs/BOOT.md](docs/BOOT.md).
 
@@ -41,7 +41,7 @@ explorer BurnoutDominatorReversed
 
 In the folder that opens, **drop your ISO onto `Installer.bat`**. The first installation takes 30 to 90 minutes. If something is missing, the message says what to install: install it and run `Installer.bat` again. To put the large files on another drive, run instead `python tools\install.py --iso "<path to the ISO>" --work-dir D:\bdr-work` (a path without accents).
 
-**Play:** double-click **`Play.bat`**. Close the window to stop. The console then prints the last lines of the log and its location after `Log:` (normally `C:\bdr-work\local\logs\run.log`). Attach that file when you report a problem.
+**Play:** double-click **`Play.bat`**. Close the window to stop. The first launch writes `settings.ini` next to `Play.bat`: window size, full screen, vsync, frame-rate cap, picture shape (4:3 or 16:9), smoothing, anti-aliasing (`super_sampling`), progressive scan and gamepad dead zone, each explained in the file. The console then prints the last lines of the log and its location after `Log:` (normally `C:\bdr-work\local\logs\run.log`). Attach that file when you report a problem.
 
 **Update:** `cd $HOME\BurnoutDominatorReversed`, `git pull`, then run `Installer.bat` again (just press Enter when it asks for the ISO). Only the needed steps are redone: the tools are rebuilt for the changed files, and the game is translated again only if the recompiler, the function map or the game executable changed.
 

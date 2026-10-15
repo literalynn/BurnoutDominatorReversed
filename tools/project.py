@@ -354,6 +354,8 @@ def launch(args) -> None:
     if not args.no_iso:
         command += ["--iso", str(verified_iso())]
     command += ["--disc", str(LOCAL / "disc"), "--save", str(LOCAL / "saves")]
+    # Player settings next to Play.bat; the game writes the defaults on first launch.
+    command += ["--settings", str(ROOT / "settings.ini")]
     seconds = args.seconds or args.smoke_seconds
     if args.headless or args.smoke_seconds:
         command.append("--headless")

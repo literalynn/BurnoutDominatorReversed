@@ -7,6 +7,7 @@
 #include "ps2x/state_archive.h"
 #include "Kernel/Syscalls/Helpers/State.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -341,6 +342,10 @@ void EeScheduler::serialize(ps2x::StateArchive &archive)
             a.value(scheduled.deadlineCycle);
             int64_t remainingNs = std::chrono::duration_cast<std::chrono::nanoseconds>(scheduled.hostDeadline - now).count();
             a.value(remainingNs);
+            // A state saved by a deterministic run (no pacing) can hold deadlines minutes ahead of
+            // real time: loaded in a paced run, the game would wait for them.
+            if (a.loading())
+                remainingNs = std::clamp<int64_t>(remainingNs, 0, 1'000'000'000);
             scheduled.hostDeadline = now + std::chrono::nanoseconds(remainingNs);
             a.value(scheduled.event);
             a.value(scheduled.sequence);
