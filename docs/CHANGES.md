@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## CVT.W.S truncates (October 15, 2026)
+
+- `ps2_runtime_macros.h`: `FPU_CVT_W_S` rounded to nearest (`nearbyintf`); the EE truncates toward zero and saturates out-of-range values to INT32_MIN/INT32_MAX (PCSX2 `FPU.cpp`). Burnout Dominator's boost gauge (0x21d960) steps a length down with `len = step * cvt((len - 0.001) / step)`: rounding 0.99999 up to 1 left `len` unchanged, the loop never ended and the race stayed frozen at the start with the clock stopped. Test: `CVT.W.S truncates toward zero and saturates`.
+
 ## MMI semantics (October 15, 2026)
 
 An audit of the MMI translation against the EE Core Instruction Set Manual and PCSX2's interpreter (`pcsx2/MMI.cpp`) found most HI/LO and permutation instructions wrong: the parallel multiplies and divides (PMULTW, PMULTUW, PMADDW, PMSUBW, PMADDUW, PDIVW, PDIVUW, PDIVBW, PMULTH, PMADDH, PMSUBH, PHMADH, PHMSBH) summed every product into one scalar instead of filling the 128-bit HI/LO pair; PMFHI, PMFLO, PMTHI, PMTLO, PMFHL and PMTHL moved 32 or 64 bits instead of 128 (HI1/LO1 are `hi1`/`lo1`); PEXEH, PEXEW, PROT3W, PREVH, PEXCH, PEXCW, PINTH and PINTEH used wrong element orders; PSLLVW, PSRLVW and PSRAVW shifted rs by rt on four lanes instead of words 0 and 2 of rt by rs with 64-bit sign extension; PADDUH and PSUBUH did not saturate; PSLLH, PSRLH and PSRAH used five bits of sa instead of four.

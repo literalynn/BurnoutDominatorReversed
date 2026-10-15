@@ -329,6 +329,15 @@ void register_ps2_runtime_expansion_tests()
 {
     MiniTest::Case("PS2RuntimeExpansion", [](TestCase &tc)
     {
+        tc.Run("CVT.W.S truncates toward zero and saturates", [](TestCase &t)
+        {
+            t.Equals(FPU_CVT_W_S(0.99999f), 0, "0.99999 truncates to 0");
+            t.Equals(FPU_CVT_W_S(-1.7f), -1, "-1.7 truncates to -1");
+            t.Equals(FPU_CVT_W_S(2.5f), 2, "2.5 truncates to 2");
+            t.Equals(FPU_CVT_W_S(3.0e9f), INT32_MAX, "large positive saturates");
+            t.Equals(FPU_CVT_W_S(-3.0e9f), INT32_MIN, "large negative saturates");
+        });
+
         tc.Run("MMI instructions use the 128-bit HI/LO pair and EE element orders", [](TestCase &t)
         {
             R5900Context ctx{};
