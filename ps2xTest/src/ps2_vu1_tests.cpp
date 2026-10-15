@@ -10,6 +10,9 @@
 #include "../../ps2xRuntime/src/lib/vu/ps2_vu1_loop_plan.h"
 
 #include <cfenv>
+#include <string>
+#include <cstdio>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -316,6 +319,69 @@ void register_ps2_vu1_tests()
 {
     MiniTest::Case("PS2VU1", [](TestCase &tc)
     {
+        // BDR_VU_REPLAY=stem: replays a PS2_VU_CAPTURE_DIR capture (stem.code, .data, .state) on the
+        // VU1 interpreter one step at a time; BDR_VU_REPLAY_PCS=pc,pc,... prints VF/VI registers
+        // (BDR_VU_REPLAY_VF=n,n,...) each time execution reaches one of those addresses. A debugging aid.
+        tc.Run("VU capture replay", [](TestCase &t)
+        {
+            const char *stem = std::getenv("BDR_VU_REPLAY");
+            if (!stem)
+                return;
+            Vu1Fixture f;
+            t.IsTrue(f.initialize(), "fixture initializes");
+            const auto load = [&](const char *suffix, void *dst, size_t size)
+            {
+                FILE *file = std::fopen((std::string(stem) + suffix).c_str(), "rb");
+                if (!file)
+                    return false;
+                const size_t got = std::fread(dst, 1, size, file);
+                std::fclose(file);
+                return got == size;
+            };
+            VU1State state{};
+            if (!load(".code", f.code, PS2_VU1_CODE_SIZE) || !load(".data", f.data, PS2_VU1_DATA_SIZE) || !load(".state", &state, sizeof(state)))
+            {
+                t.IsTrue(false, "capture files load");
+                return;
+            }
+            f.mem.markVU1CodeModified();
+            const auto parseList = [](const char *text)
+            {
+                std::vector<uint32_t> values;
+                for (const char *cursor = text; cursor && *cursor;)
+                {
+                    char *end = nullptr;
+                    values.push_back(static_cast<uint32_t>(std::strtoul(cursor, &end, 0)));
+                    if (end == cursor)
+                        break;
+                    cursor = *end == ',' ? end + 1 : end;
+                }
+                return values;
+            };
+            const std::vector<uint32_t> pcs = parseList(std::getenv("BDR_VU_REPLAY_PCS"));
+            const std::vector<uint32_t> vfs = parseList(std::getenv("BDR_VU_REPLAY_VF"));
+            VU1Interpreter vu(VU1Interpreter::Unit::VU1);
+            vu.setCompiledExecutionEnabled(false);
+            vu.state() = state;
+            vu.execute(f.code, PS2_VU1_CODE_SIZE, f.data, PS2_VU1_DATA_SIZE, f.gs, &f.mem, state.pc, state.top, state.itop, 1u);
+            for (unsigned step = 0; step < 200000u && !vu.state().ebit; ++step)
+            {
+                const VU1State &s = vu.state();
+                if (std::find(pcs.begin(), pcs.end(), s.pc) != pcs.end())
+                {
+                    std::printf("[vu-replay] pc=%04x q=%g", s.pc, s.q);
+                    for (uint32_t r : vfs)
+                        std::printf(" vf%u=(%g %g %g %g)", r, s.vf[r & 31][0], s.vf[r & 31][1], s.vf[r & 31][2], s.vf[r & 31][3]);
+                    std::printf(" vi2=%d vi3=%d vi5=%d vi14=%d", s.vi[2], s.vi[3], s.vi[5], s.vi[14]);
+                    std::printf(" vi4=%d vi7=%d vi8=%d\n", s.vi[4], s.vi[7], s.vi[8]);
+                }
+                const uint32_t before = s.pc;
+                vu.resume(f.code, PS2_VU1_CODE_SIZE, f.data, PS2_VU1_DATA_SIZE, f.gs, &f.mem, s.top, s.itop, 1u);
+                if (vu.state().pc == before && vu.state().ebit)
+                    break;
+            }
+        });
+
         tc.Run("retained loops carry independent Q and CLIP timelines through DIV stalls", [](TestCase &t)
         {
             for (auto unit : {VU1Interpreter::Unit::VU0, VU1Interpreter::Unit::VU1})

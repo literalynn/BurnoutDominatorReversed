@@ -170,6 +170,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_PGS_RECORD_FROM=N`, `BDR_PGS_RECORD_VSYNCS=M` | with `BDR_PGS_RECORD`: records only VSync ticks N to N+M, starting with the VRAM of tick N |
 | `BDR_TRACE_DMA_CHAIN=N` | prints the tags (address, id, QWC, ADDR) of up to N DMA chains whose data exceeds 512 KiB |
 | `BDR_TRACE_DMA_KICKS=first,count` | every GIF, VIF0 and VIF1 DMA start of VSync ticks first..first+count, with the bytes it queued, what each channel still has queued and the PATH3 mask |
+| `BDR_VU_REPLAY=stem` (ps2x_tests) | replays a `PS2_VU_CAPTURE_DIR` capture (`stem.code/.data/.state`) on the VU1 interpreter step by step; `BDR_VU_REPLAY_PCS=pc,...` prints `BDR_VU_REPLAY_VF=n,...` registers and some VI registers whenever execution reaches those addresses |
 | `BDR_TRACE_VIF1=first,count` | every VIF1 command of VSync ticks `first` to `first+count`, with TOPS/ITOPS/BASE/OFST/DBF/CYCLE/MODE |
 | `BDR_WATCH_DUMP=file` | with `BDR_WATCH_WORD`: EE RAM at the first report (reports also list the GPRs) |
 | `BDR_RDRAM_DUMP=vsync,file` | EE RAM (32 MiB) at that VSync tick |
