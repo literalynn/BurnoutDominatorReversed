@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## DMA chains are no longer cut at 4096 tags (October 15, 2026)
+
+- `ps2_memory.cpp`: a source chain stopped after 4096 DMA tags and the rest was dropped as if the chain had ended. Burnout Dominator's VIF1 display list passes 4096 tags at high speed in the race, so the end of the frame (texture uploads included) was lost and every other frame showed the track with wrong textures and colours. The DMAC has no such limit; the guard against a chain that loops forever is now 2^20 tags or 64 MiB of data, and reaching it is reported on stderr.
+
 ## PATH3 packets released by a window go out before the DIRECT that follows (October 15, 2026)
 
 - `ps2_memory.cpp` (`releaseMaskedPath3Packets`): the PATH3 packets an unmask window lets out were queued in the GIF arbiter without draining it, so a VIF1 DIRECT later in the same window was sorted ahead of them by path priority. A PATH3 packet the GIF has started ends before PATH2 is served (continuous mode); the released packets now go out at once. Burnout Dominator draws each piece of its front-end images as `MSKPATH3 0`, texture upload on PATH3, `DIRECT` draw, `MSKPATH3 1`: the first piece was drawn before its texture arrived, so the 50/60 Hz screen showed stale VRAM and the title logo read "RNORNOUT OMINAOMINATOR".

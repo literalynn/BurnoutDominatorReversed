@@ -1393,7 +1393,10 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     uint32_t asr1 = m_ioRegisters[channelBase + 0x50];
                     uint32_t asp = (chcr >> 4) & 0x3u;
                     const bool tieEnabled = (chcr & (1u << 7)) != 0u;
-                    const int kMaxChainTags = 4096;
+                    // The DMAC has no tag limit; these only stop a chain that loops forever. Burnout
+                    // Dominator's VIF1 display lists pass 4096 tags (about 1.4 MiB) at speed.
+                    const int kMaxChainTags = 1 << 20;
+                    constexpr size_t kMaxChainBytes = 64u * 1024u * 1024u;
                     std::vector<uint8_t> chainBuf;
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
@@ -1456,7 +1459,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     static int traceBudget = std::getenv("BDR_TRACE_DMA_CHAIN") ? std::atoi(std::getenv("BDR_TRACE_DMA_CHAIN")) : 0;
                     std::vector<std::array<uint32_t, 4>> traceTags;
 
-                    while (tagsProcessed < kMaxChainTags)
+                    while (tagsProcessed < kMaxChainTags && chainBuf.size() < kMaxChainBytes)
                     {
                         const uint32_t currentTagAddr = tagAddr;
                         const bool tagInSPR = dmaScratchpad(tagAddr);
@@ -1587,6 +1590,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     m_ioRegisters[channelBase + 0x40] = asr0;
                     m_ioRegisters[channelBase + 0x50] = asr1;
                     chcr = (chcr & ~(0x3u << 4)) | ((asp & 0x3u) << 4);
+                    if (tagsProcessed >= kMaxChainTags || chainBuf.size() >= kMaxChainBytes)
+                    {
+                        static uint32_t reported = 0;
+                        if (reported++ < 8u)
+                            std::fprintf(stderr, "[dma] channel %08x chain stopped at its limit, %d tags (tadr=%08x)\n",
+                                         channelBase, tagsProcessed, tagAddr);
+                    }
                     chcr = (chcr & 0x0000FFFFu) | (lastTagUpper << 16);
                     m_ioRegisters[channelBase + 0x00] = chcr;
 
