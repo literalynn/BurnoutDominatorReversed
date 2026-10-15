@@ -10,6 +10,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop::detail
 {
     class IopMemory;
@@ -53,6 +58,7 @@ namespace ps2x::iop::detail
         explicit IopKernel(IopMemory &memory) noexcept;
 
         void reset();
+        void serialize(ps2x::StateArchive &archive);
 
         [[nodiscard]] bool dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle);
         [[nodiscard]] bool dispatchSemaphoreImport(uint16_t ordinal, IopCpuState &cpu);

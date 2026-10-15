@@ -1,4 +1,5 @@
 #include "Common.h"
+#include "ps2x/state_archive.h"
 #include "MemoryCard.h"
 
 namespace ps2_stubs
@@ -1613,5 +1614,29 @@ namespace ps2_stubs
     void mcWriteStartSaveFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         setReturnS32(ctx, 1);
+    }
+}
+
+namespace ps2_stubs
+{
+    void serializeMemoryCardState(ps2x::StateArchive &archive)
+    {
+        std::lock_guard<std::mutex> lock(g_mcStateMutex);
+        archive.tag("MCST");
+        uint64_t openFiles = g_mcFiles.size();
+        archive.value(openFiles);
+        // shortcut: open memory card files are host streams; saving waits until the game closes them.
+        if (openFiles != 0u)
+            throw std::runtime_error("a memory card file is open, save again in a moment");
+        archive.value(g_mcNextFd);
+        archive.value(g_mcLastCmd);
+        archive.value(g_mcCommandPending);
+        archive.value(g_mcLastResult);
+        for (McPortState &port : g_mcPorts)
+        {
+            archive.string(port.currentDir);
+            archive.value(port.formatted);
+        }
+        archive.value(g_cvMcFileCursor);
     }
 }

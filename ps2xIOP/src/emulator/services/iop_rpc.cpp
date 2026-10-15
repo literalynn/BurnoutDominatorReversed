@@ -1,4 +1,5 @@
 #include "iop_rpc.h"
+#include "ps2x/state_archive.h"
 
 #include "../core/iop_cpu.h"
 #include "../core/iop_kernel.h"
@@ -500,5 +501,24 @@ namespace ps2x::iop::detail
     {
         const auto server = m_servers.find(sid);
         return server != m_servers.end() && server->second.function != 0u;
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void IopRpcBridge::serialize(StateArchive &archive)
+    {
+        archive.tag("IRPC");
+        archive.podMap(m_servers);
+        archive.value(m_userCmdTable);
+        archive.value(m_userCmdCount);
+        archive.value(m_systemCmdTable);
+        archive.value(m_systemCmdCount);
+        archive.podMap(m_systemCmdHandlers);
+        archive.podMap(m_cmdHandlerGp);
+        archive.value(m_cmdReceiveBuffer);
+        archive.optional(m_pendingDmaCallback);
+        archive.value(m_nextDmaId);
+        archive.value(m_sifInitialized);
     }
 }

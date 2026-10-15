@@ -367,6 +367,12 @@ def launch(args) -> None:
         command += ["--trace-calls", args.trace_calls]
     if args.trace_watch:
         command += ["--trace-watch", args.trace_watch]
+    if args.state:
+        command += ["--state", str(args.state.resolve())]
+    if args.load_state:
+        command += ["--load-state", str(args.load_state.resolve())]
+    if args.save_state_at:
+        command += ["--save-state-at", str(args.save_state_at)]
     log = LOCAL / "logs" / (args.log or ("smoke.log" if "--headless" in command else "run.log"))
     log.parent.mkdir(parents=True, exist_ok=True)
     print("Running:", subprocess.list2cmdline(command), flush=True)
@@ -448,6 +454,12 @@ def main() -> int:
     p.add_argument("--tail", default=40, type=int, help="Log lines printed after the run")
     p.add_argument("--trace-calls", type=hex_list, help="Log calls and returns of these guest functions (0xADDR,...)")
     p.add_argument("--trace-watch", type=hex_list, help="32-bit guest words printed with each trace line (0xADDR,...)")
+    p.add_argument("--state", type=Path,
+                   help="Save state slot: F5 saves it, F7 loads it (default <work>/local/states/quick.bdrstate)")
+    p.add_argument("--load-state", type=Path, nargs="?", const=LOCAL / "states" / "quick.bdrstate",
+                   help="Restore this save state before the game runs (default: the quick slot)")
+    p.add_argument("--save-state-at", type=int, default=0, metavar="VSYNC",
+                   help="Save to the --state slot once this VSync is reached")
     p.add_argument("--vu-capture", action="store_true",
                    help="Record the VU1 programs the game runs into <work>/local/vu-programs; "
                         "configure and build then compile them")

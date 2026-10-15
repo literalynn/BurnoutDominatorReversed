@@ -1,4 +1,5 @@
 #include "iop_imports.h"
+#include "ps2x/state_archive.h"
 
 #include "../core/iop_memory.h"
 
@@ -198,5 +199,22 @@ namespace ps2x::iop::detail
             else
                 ++library;
         }
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void IopImportRegistry::serialize(StateArchive &archive)
+    {
+        archive.tag("IMPT");
+        archive.map(m_libraries, [](StateArchive &a, ExportLibrary &library)
+        {
+            a.value(library.tableAddress);
+            a.value(library.version);
+            a.string(library.name);
+            a.vector(library.functions);
+        });
+        if (archive.loading())
+            m_decodeCache.clear();
     }
 }

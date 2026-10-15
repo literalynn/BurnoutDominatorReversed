@@ -8,6 +8,11 @@
 #include <set>
 #include <unordered_map>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop
 {
     class IopHost;
@@ -64,6 +69,7 @@ namespace ps2x::iop::detail
         IopRpcBridge(IopHost &host, IopMemory &memory, IopKernel &kernel) noexcept;
 
         void reset();
+        void serialize(ps2x::StateArchive &archive);
         [[nodiscard]] bool dispatchSifManImport(uint16_t ordinal, IopCpuState &cpu);
         [[nodiscard]] std::optional<DmaCallback> takeDmaCallback() noexcept;
         [[nodiscard]] bool dispatchSifCmdImport(uint16_t ordinal, IopCpuState &cpu);

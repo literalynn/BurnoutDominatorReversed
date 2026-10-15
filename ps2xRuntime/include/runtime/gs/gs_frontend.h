@@ -10,6 +10,11 @@
 
 #include "runtime/gs/gs_backend.h"
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 struct GSDebugSnapshot
 {
     GSContext ctx[2]{};
@@ -105,6 +110,7 @@ public:
     void init(uint8_t *vram, uint32_t vramSize, struct GSRegisters *privRegs = nullptr);
     void reset();
     void setRasterBackend(std::unique_ptr<GSRasterBackend> backend);
+    void serialize(ps2x::StateArchive &archive);
 
     // path: 1 = VU1 XGKICK, 2 = VIF1, 3 = GIF DMA; a raw backend keeps one GIF tag state per path.
     void processGIFPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t path = 3);

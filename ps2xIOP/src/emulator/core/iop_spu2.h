@@ -7,6 +7,11 @@
 #include <mutex>
 #include <vector>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop::detail
 {
     // SPU2 sound processor: 2 MiB of sound RAM, two cores of 24 ADPCM voices, the register
@@ -60,6 +65,7 @@ namespace ps2x::iop::detail
         Spu2();
 
         void reset();
+        void serialize(ps2x::StateArchive &archive);
 
         [[nodiscard]] static constexpr bool owns(uint32_t physical) noexcept
         {

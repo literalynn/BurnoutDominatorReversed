@@ -4,6 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop::detail
 {
     struct IopCpuState;
@@ -13,6 +18,7 @@ namespace ps2x::iop::detail
     {
     public:
         void reset() noexcept;
+        void serialize(ps2x::StateArchive &archive);
 
         [[nodiscard]] bool dispatchImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle);
         void serviceDue(uint64_t currentCycle, IopGuestExecutor &executor);

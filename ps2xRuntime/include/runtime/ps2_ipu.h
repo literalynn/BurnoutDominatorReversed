@@ -4,6 +4,11 @@
 #include <functional>
 #include <memory>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 // Image Processing Unit of the EE: the MPEG-2 macroblock decoder and colour space
 // converter driven by Sony's libmpeg and libipu. Registers at 0x10002000-0x1000203F,
 // FIFO ports 0x10007000 (output) and 0x10007010 (input), DMA channel 3 (from the IPU)
@@ -39,6 +44,7 @@ public:
     Ps2Ipu &operator=(const Ps2Ipu &) = delete;
 
     void reset();
+    void serialize(ps2x::StateArchive &archive);
 
     [[nodiscard]] uint32_t read32(uint32_t address);
     [[nodiscard]] uint64_t read64(uint32_t address);

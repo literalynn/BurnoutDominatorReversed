@@ -1,4 +1,5 @@
 #include "Common.h"
+#include "ps2x/state_archive.h"
 #include "SIF.h"
 #include "../Syscalls/RPC.h"
 #include "../../ps2_iop_transport.h"
@@ -920,5 +921,24 @@ namespace ps2_stubs
     void sceSifWriteBackDCache(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         setReturnS32(ctx, 0);
+    }
+}
+
+namespace ps2_stubs
+{
+    void serializeSifState(ps2x::StateArchive &archive)
+    {
+        archive.tag("SIFS");
+        {
+            std::lock_guard<std::mutex> lock(g_sifDmaTransferMutex);
+            archive.value(g_nextSifDmaTransferId);
+        }
+        std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);
+        archive.podMap(g_sifRegs);
+        archive.podMap(g_sifSregs);
+        archive.podMap(g_sifCmdHandlers);
+        archive.value(g_sifCmdBuffer);
+        archive.value(g_sifSysCmdBuffer);
+        archive.value(g_sifCmdInitialized);
     }
 }

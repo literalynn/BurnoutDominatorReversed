@@ -1,4 +1,5 @@
 #include "iop_emulator.h"
+#include "ps2x/state_archive.h"
 #include "imports/iop_cdvd.h"
 #include "core/iop_cpu.h"
 #include "imports/iop_heaplib.h"
@@ -1222,4 +1223,72 @@ namespace ps2x::iop::detail
         return static_cast<uint32_t>(m_impl->rpc.serverCount());
     }
 
+}
+
+namespace ps2x::iop::detail
+{
+    bool IopEmulator::idle() const noexcept
+    {
+        const Impl &impl = *m_impl;
+        return impl.activeCpu == nullptr && impl.callDepth == 0u && !impl.servicingDmaInterrupts &&
+               !impl.servicingGuestCallbacks;
+    }
+
+    void IopEmulator::serialize(StateArchive &archive)
+    {
+        Impl &impl = *m_impl;
+        archive.tag("IEMU");
+        archive.map(impl.modules, [](StateArchive &a, Impl::Module &module)
+        {
+            a.value(module.id);
+            a.string(module.path);
+            a.string(module.name);
+            a.string(module.irxName);
+            a.value(module.base);
+            a.value(module.size);
+            a.value(module.entry);
+            a.value(module.gp);
+            a.value(module.resident);
+        });
+        archive.podMap(impl.pendingDmaInterrupts);
+        uint64_t callbacks = impl.pendingGuestCallbacks.size();
+        archive.value(callbacks);
+        if (archive.loading())
+        {
+            impl.pendingGuestCallbacks.clear();
+            for (uint64_t i = 0; i < callbacks; ++i)
+            {
+                uint64_t due = 0;
+                Impl::ScheduledGuestCallback callback;
+                archive.value(due);
+                archive.value(callback);
+                impl.pendingGuestCallbacks.emplace(due, callback);
+            }
+        }
+        else
+        {
+            for (auto &[due, callback] : impl.pendingGuestCallbacks)
+            {
+                uint64_t copy = due;
+                archive.value(copy);
+                archive.value(callback);
+            }
+        }
+        archive.value(impl.nextModuleId);
+        archive.value(impl.moduleCursor);
+        archive.value(impl.totalCycles);
+        archive.value(impl.totalInstructions);
+        archive.value(impl.eeCycleCarry);
+        archive.value(impl.secrMcCommandHandler);
+        archive.value(impl.secrMcDevIdHandler);
+        archive.value(impl.checkKelfPathCallback);
+        impl.memory.serialize(archive);
+        impl.kernel.serialize(archive);
+        impl.cdvd.serialize(archive);
+        impl.rpc.serialize(archive);
+        impl.intrman.serialize(archive);
+        impl.timrman.serialize(archive);
+        impl.ioman.serialize(archive);
+        impl.imports.serialize(archive);
+    }
 }

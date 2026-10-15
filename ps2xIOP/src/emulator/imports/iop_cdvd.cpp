@@ -1,4 +1,5 @@
 #include "iop_cdvd.h"
+#include "ps2x/state_archive.h"
 
 #include "../core/iop_cpu.h"
 #include "../core/iop_kernel.h"
@@ -365,6 +366,7 @@ namespace ps2x::iop::detail
         }
 
     private:
+        friend class IopCdvd; // serialize()
         // sceCdCLOCK: stat, second, minute, hour, pad, day, month, year (BCD).
         // The console RTC keeps Japan Standard Time (UTC+9), like the EE
         // sceCdReadClock handler of the runtime.
@@ -856,5 +858,24 @@ namespace ps2x::iop::detail
     std::optional<IopCdvd::CompletionCallback> IopCdvd::takeCompletionCallback() noexcept
     {
         return m_impl->takeCompletionCallback();
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    // The host side (disc image handle, virtual ISO index) belongs to this process and is kept.
+    void IopCdvd::serialize(StateArchive &archive)
+    {
+        archive.tag("CDVD");
+        Impl &impl = *m_impl;
+        archive.value(impl.callback);
+        archive.optional(impl.completionCallback);
+        archive.value(impl.initialized);
+        archive.value(impl.mediaMode);
+        archive.value(impl.currentLsn);
+        archive.value(impl.lastError);
+        archive.value(impl.streamFlag);
+        archive.value(impl.lastReadTimeout);
+        archive.value(impl.interruptEventFlagId);
     }
 }

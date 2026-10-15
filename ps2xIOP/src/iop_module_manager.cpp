@@ -1,4 +1,5 @@
 #include "iop_module_manager.h"
+#include "ps2x/state_archive.h"
 
 #include "ps2x/iop/ps2_path.h"
 
@@ -194,5 +195,22 @@ namespace ps2x::iop::detail
             --found->second;
         else
             m_loadedKeyReferences.erase(found);
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void IopModuleManager::serialize(StateArchive &archive)
+    {
+        archive.tag("IMOD");
+        archive.map(m_records, [](StateArchive &a, Record &record)
+        {
+            a.string(record.key);
+            a.value(record.references);
+            a.value(record.physical);
+        });
+        archive.podMap(m_hleIdsByKey);
+        archive.podMap(m_loadedKeyReferences);
+        archive.value(m_nextHleId);
     }
 }

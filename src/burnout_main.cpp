@@ -16,6 +16,8 @@
 namespace {
 struct Options {
     std::filesystem::path elf, iso, disc, saves, dumpFrames;
+    std::filesystem::path state, loadState;  // save states: F5/F7 slot, state restored at start
+    uint64_t saveStateAt = 0;                // VSync at which to save to the slot (headless use)
     std::vector<uint32_t> traceCalls, traceWatch;
     bool headless = false;
     int seconds = 0;          // 0: unbounded (windowed only)
@@ -26,7 +28,9 @@ struct Options {
 constexpr const char* kUsage =
     "Usage: burnout_dominator <ELF> [--iso <ISO>] --disc <directory> --save <directory>\n"
     "       [--headless] [--seconds N] [--status-ms N] [--dump-frames <directory> [--dump-every-ms N]]\n"
-    "       [--trace-calls 0xADDR,...] [--trace-watch 0xADDR,...]";
+    "       [--trace-calls 0xADDR,...] [--trace-watch 0xADDR,...]\n"
+    "       [--state <file>] [--load-state <file>] [--save-state-at VSYNC]\n"
+    "Save states: F5 saves to --state (default <save>/../states/quick.bdrstate), F7 loads it.";
 
 int parseInt(const std::string& key, const char* text, int low, int high) {
     std::size_t consumed = 0;
@@ -53,6 +57,9 @@ Options parse(int argc, char** argv) {
         else if (key == "--status-ms") options.statusMs = parseInt(key, argv[i], 10, 600000);
         else if (key == "--dump-frames") options.dumpFrames = std::filesystem::absolute(argv[i]);
         else if (key == "--dump-every-ms") options.dumpEveryMs = parseInt(key, argv[i], 16, 600000);
+        else if (key == "--state") options.state = std::filesystem::absolute(argv[i]);
+        else if (key == "--load-state") options.loadState = std::filesystem::absolute(argv[i]);
+        else if (key == "--save-state-at") options.saveStateAt = static_cast<uint64_t>(parseInt(key, argv[i], 1, 100000000));
         else if (key == "--trace-calls" || key == "--trace-watch") {
             auto& target = key == "--trace-calls" ? options.traceCalls : options.traceWatch;
             std::stringstream list(argv[i]);
@@ -62,6 +69,9 @@ Options parse(int argc, char** argv) {
         else throw std::runtime_error("Unknown option " + key + "\n" + kUsage);
     }
     if (options.headless && options.seconds == 0) options.seconds = 10;
+    if (options.state.empty()) options.state = options.saves.parent_path() / "states" / "quick.bdrstate";
+    if (!options.loadState.empty() && !std::filesystem::is_regular_file(options.loadState))
+        throw std::runtime_error("Save state not found: " + options.loadState.string());
     if (!std::filesystem::is_regular_file(options.elf))
         throw std::runtime_error("Original guest ELF must exist. Use tools/project.py to verify its identity.");
     // Without --iso, the runtime serves disc sectors from a virtual image of
@@ -169,6 +179,9 @@ int main(int argc, char** argv) {
         run.statusInterval = std::chrono::milliseconds(options.statusMs);
         run.frameDumpDirectory = options.dumpFrames;
         run.frameDumpInterval = std::chrono::milliseconds(options.dumpEveryMs);
+        run.stateFile = options.state;
+        run.loadStateFile = options.loadState;
+        run.saveStateAtVsync = options.saveStateAt;
         const auto result = options.headless ? runtime.runHeadless(run) : runtime.run(run);
         return exitCode(runtime, result);
     } catch (const std::exception& error) {

@@ -1,4 +1,5 @@
 #include "runtime/ps2_ipu.h"
+#include "ps2x/state_archive.h"
 
 #include <algorithm>
 #include <array>
@@ -1530,4 +1531,53 @@ void Ps2Ipu::onDmaStart(uint32_t channelBase)
 bool Ps2Ipu::busy() const
 {
     return m_state->busy;
+}
+
+void Ps2Ipu::serialize(ps2x::StateArchive &archive)
+{
+    State &state = *m_state;
+    archive.tag("IPU.");
+    const auto qwords = [](ps2x::StateArchive &a, std::deque<Qword> &fifo)
+    {
+        a.sequence(fifo, [](ps2x::StateArchive &b, Qword &qword) { b.value(qword); });
+    };
+    archive.value(state.command);
+    archive.value(state.data);
+    archive.value(state.busy);
+    archive.value(state.ctrl);
+    archive.value(state.top);
+    archive.value(state.topBusy);
+    qwords(archive, state.fifo);
+    archive.value(state.internal);
+    archive.value(state.fp);
+    archive.value(state.bp);
+    qwords(archive, state.snapshot.fifo);
+    archive.value(state.snapshot.internal);
+    archive.value(state.snapshot.fp);
+    archive.value(state.snapshot.bp);
+    archive.value(state.snapshot.dcPredictor);
+    archive.value(state.recording);
+    archive.vector(state.delivered);
+    std::vector<uint8_t> output;
+    if (!archive.loading())
+    {
+        ByteFifo copy = state.output;
+        output.resize(copy.size());
+        copy.pop(output.data(), output.size());
+    }
+    archive.vector(output);
+    if (archive.loading())
+    {
+        state.output.clear();
+        state.output.push(output.data(), output.size());
+    }
+    archive.value(state.intraMatrix);
+    archive.value(state.nonIntraMatrix);
+    archive.value(state.vqClut);
+    archive.value(state.threshold0);
+    archive.value(state.threshold1);
+    archive.value(state.dcPredictor);
+    archive.value(state.macroblocksDone);
+    archive.value(state.blockDecoded);
+    archive.value(state.toIpuFinished);
 }

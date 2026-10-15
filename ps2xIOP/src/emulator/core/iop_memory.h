@@ -15,6 +15,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop::detail
 {
     class IopMemory
@@ -47,6 +52,7 @@ namespace ps2x::iop::detail
         IopMemory();
 
         void reset();
+        void serialize(ps2x::StateArchive &archive);
 
         // Diagnostics: called with (address, merged 32-bit value) for every write to the
         // hardware register ranges. Survives reset().

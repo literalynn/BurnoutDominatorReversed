@@ -5,6 +5,11 @@
 #include <array>
 #include <cstdint>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop::detail
 {
     // DualShock 2 on a SIO2 port. The SIO2 answers the address byte (0x01) of
@@ -20,6 +25,7 @@ namespace ps2x::iop::detail
         static constexpr uint8_t ConfigMode = 0xF3u;
 
         void reset() noexcept;
+        void serialize(ps2x::StateArchive &archive);
         void beginPacket(const ControllerPadState &input) noexcept;
         [[nodiscard]] uint8_t exchange(uint8_t command) noexcept;
 

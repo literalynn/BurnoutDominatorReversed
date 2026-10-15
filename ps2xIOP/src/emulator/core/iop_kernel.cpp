@@ -1,4 +1,5 @@
 #include "iop_kernel.h"
+#include "ps2x/state_archive.h"
 
 #include "iop_memory.h"
 #include "../iop_emulator_const.h"
@@ -970,6 +971,32 @@ namespace ps2x::iop::detail
                 thread.state = IopThreadState::Dead;
                 m_deadThreadPending = true;
             }
+        }
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void IopKernel::serialize(StateArchive &archive)
+    {
+        archive.tag("IKRN");
+        archive.podMap(m_threads);
+        archive.vector(m_freeCallStacks);
+        archive.value(m_deadThreadPending);
+        archive.podMap(m_semaphores);
+        archive.podMap(m_eventFlags);
+        archive.value(m_nextThreadId);
+        archive.value(m_nextSemaphoreId);
+        archive.value(m_nextEventFlagId);
+        int current = 0;
+        for (auto &[id, thread] : m_threads)
+            if (&thread == m_currentThread)
+                current = id;
+        archive.value(current);
+        if (archive.loading())
+        {
+            const auto it = m_threads.find(current);
+            m_currentThread = it == m_threads.end() ? nullptr : &it->second;
         }
     }
 }

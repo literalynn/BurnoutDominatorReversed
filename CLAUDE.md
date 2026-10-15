@@ -16,7 +16,7 @@ python tools/install.py --iso <ISO>   # one-command install (Installer.bat on Wi
 python tools/project.py configure [--game] [--generator Ninja|"Visual Studio 18 2026" --arch x64] [--lto]
 python tools/project.py build [--game] --jobs N
 python tools/project.py generate --tool <ps2_recomp> --function-map <functions.ee.csv> --augment --regenerate
-python tools/project.py run --headless --seconds 30 --status-ms 1000 --log runN.log --tail 120 [--no-iso] [--trace-calls 0xA,0xB] [--trace-watch 0xC]
+python tools/project.py run --headless --seconds 30 --status-ms 1000 --log runN.log --tail 120 [--no-iso] [--trace-calls 0xA,0xB] [--trace-watch 0xC] [--load-state [FILE]] [--save-state-at VSYNC]
 python -m unittest discover -s tests/python
 ```
 

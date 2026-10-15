@@ -2464,6 +2464,12 @@ namespace
                 }
                 m_nextDump = now + m_options.frameDumpInterval;
             }
+            if (m_options.saveStateAtVsync != 0u && !m_stateSaved &&
+                runtime.eeScheduler().currentVSyncTick() >= m_options.saveStateAtVsync)
+            {
+                m_stateSaved = true;
+                runtime.requestSaveState(m_options.stateFile);
+            }
             if (m_options.timeLimit.count() > 0 && now - m_start >= m_options.timeLimit && !result.deadlineReached)
             {
                 result.deadlineReached = true;
@@ -2477,6 +2483,7 @@ namespace
         std::chrono::steady_clock::time_point m_start;
         std::chrono::steady_clock::time_point m_nextStatus;
         std::chrono::steady_clock::time_point m_nextDump;
+        bool m_stateSaved = false;
         uint32_t m_dumpIndex = 0;
     };
 
@@ -2699,6 +2706,10 @@ PS2Runtime::RunResult PS2Runtime::runHeadless(const RunOptions &options)
 {
     RunResult result;
     prepareGuestExecution();
+    if (!options.loadStateFile.empty())
+    {
+        requestLoadState(options.loadStateFile);
+    }
     std::atomic<bool> gameThreadFinished{false};
     std::atomic<bool> gameThreadFailed{false};
     std::thread gameThread = launchGuestThread(*this, gameThreadFinished, gameThreadFailed);
@@ -2731,6 +2742,10 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
 {
     RunResult result;
     prepareGuestExecution();
+    if (!options.loadStateFile.empty())
+    {
+        requestLoadState(options.loadStateFile);
+    }
 
     // A blank image to use as a framebuffer
     Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
@@ -2803,6 +2818,17 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         }
         EndDrawing();
 
+        if (!options.stateFile.empty())
+        {
+            if (IsKeyPressed(KEY_F5))
+            {
+                requestSaveState(options.stateFile);
+            }
+            if (IsKeyPressed(KEY_F7))
+            {
+                requestLoadState(options.stateFile);
+            }
+        }
         observer.poll(*this, result);
 
         if (WindowShouldClose())

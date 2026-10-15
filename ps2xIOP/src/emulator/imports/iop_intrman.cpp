@@ -1,4 +1,5 @@
 #include "iop_intrman.h"
+#include "ps2x/state_archive.h"
 
 #include "../core/iop_cpu.h"
 #include "../core/iop_memory.h"
@@ -109,5 +110,15 @@ namespace ps2x::iop::detail
                                                       handler->second.gp,
                                                       100000u);
         return true;
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void IopIntrman::serialize(StateArchive &archive)
+    {
+        archive.tag("INTR");
+        archive.podMap(m_handlers);
+        archive.podMap(m_enabled);
     }
 }

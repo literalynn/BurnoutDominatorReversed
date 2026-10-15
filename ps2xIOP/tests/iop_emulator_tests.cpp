@@ -1,4 +1,5 @@
 #include "ps2x/iop/iop_subsystem.h"
+#include "ps2x/state_archive.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1137,6 +1138,31 @@ int main()
                 "Registered RPC server count mismatch")) return 1;
     if (!expect(iop.canBindRpc(rpcSid),
                 "Emulator did not expose the SID registered by the IRX")) return 1;
+
+    {
+        // A save state restores the loaded module and its RPC server after a reset.
+        if (!expect(iop.idle(), "IOP must be idle between calls")) return 1;
+        ps2x::StateArchive saved = ps2x::StateArchive::writer();
+        iop.serialize(saved);
+        iop.reset();
+        if (!expect(!iop.canBindRpc(rpcSid), "Reset kept the RPC server")) return 1;
+        ps2x::StateArchive restored = ps2x::StateArchive::reader(saved.data());
+        iop.serialize(restored);
+        if (!expect(restored.atEnd(), "IOP save state was not read to its end")) return 1;
+        if (!expect(iop.canBindRpc(rpcSid), "IOP save state did not restore the RPC server")) return 1;
+        if (!expect(iop.debugSnapshot().emulatorLoadedModules == 1u, "IOP save state did not restore the module")) return 1;
+        bool rejected = false;
+        try
+        {
+            ps2x::StateArchive shifted = ps2x::StateArchive::reader({saved.data().begin() + 1, saved.data().end()});
+            shifted.tag("IOPS");
+        }
+        catch (const std::exception &)
+        {
+            rejected = true;
+        }
+        if (!expect(rejected, "A misaligned save state must be rejected")) return 1;
+    }
 
     iop.reset();
     if (!expect(!iop.canBindRpc(rpcSid),

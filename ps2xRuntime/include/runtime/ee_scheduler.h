@@ -16,6 +16,11 @@
 #include <variant>
 #include <vector>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 // This exception is the EE equivalent of a longjmp to the dispatcher.  It is
 // not an error and must only be caught at EeScheduler::run().
 struct EeDispatcherTransfer final
@@ -366,6 +371,10 @@ public:
 
     [[nodiscard]] EeKernelSnapshot snapshot() const;
     void publishSnapshot();
+    void serialize(ps2x::StateArchive &archive);
+    // True when the machine can be saved or restored: no guest callback, completion or
+    // IOP call is in flight. Otherwise reason names what is still running.
+    [[nodiscard]] bool stateQuiet(std::string &reason) const;
 
 private:
     struct ScheduledEvent

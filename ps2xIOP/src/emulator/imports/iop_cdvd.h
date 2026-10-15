@@ -4,6 +4,11 @@
 #include <memory>
 #include <optional>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop
 {
     class IopHost;
@@ -32,6 +37,7 @@ namespace ps2x::iop::detail
         IopCdvd &operator=(const IopCdvd &) = delete;
 
         void reset() noexcept;
+        void serialize(ps2x::StateArchive &archive);
 
         [[nodiscard]] bool dispatchImport(uint16_t ordinal, IopCpuState &cpu);
         [[nodiscard]] std::optional<CompletionCallback> takeCompletionCallback() noexcept;

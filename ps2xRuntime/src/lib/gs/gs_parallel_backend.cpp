@@ -4,6 +4,7 @@
 // scanout image back to host memory, so presentation, frame dumps and headless
 // runs go through the usual PresentationFrame pixels.
 #include "runtime/gs/gs_parallel_backend.h"
+#include "ps2x/state_archive.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/ps2_gs_memory.h"
 #include "runtime/ps2_memory.h"
@@ -565,6 +566,41 @@ namespace
         {
             Lock lock(mutex);
             return transfer;
+        }
+
+        void SerializeState(ps2x::StateArchive &archive) override
+        {
+            Lock lock(mutex);
+            archive.tag("PGS.");
+            std::vector<uint8_t> vram;
+            if (!archive.loading())
+            {
+                const auto *mapped = static_cast<const uint8_t *>(gs.map_vram_read(0, VramSize));
+                vram.assign(mapped, mapped + VramSize);
+            }
+            archive.vector(vram);
+            if (archive.loading() && vram.size() != VramSize)
+                throw std::runtime_error("save state has a different GS VRAM size");
+            archive.raw(&gs.get_register_state(), sizeof(ParallelGS::RegisterState));
+            archive.raw(&gs.get_priv_register_state(), sizeof(ParallelGS::PrivRegisterState));
+            for (uint32_t path = 0; path < 4; ++path)
+                archive.raw(&gs.get_gif_path(path), sizeof(ParallelGS::GIFPath));
+            archive.value(bitblt);
+            archive.value(trxreg);
+            archive.value(transfer);
+            archive.value(transferBytes);
+            archive.value(uploadedBytes);
+            archive.value(uploadTail);
+            archive.value(uploadTailSize);
+            archive.value(fifoTail);
+            archive.value(fifoOffset);
+            if (archive.loading())
+            {
+                std::memcpy(gs.map_vram_write(0, VramSize), vram.data(), VramSize);
+                gs.end_vram_write(0, VramSize);
+                gs.write_register(ParallelGS::RegisterAddr::TEXFLUSH, uint64_t(0));
+                gs.clobber_register_state();
+            }
         }
     };
 }

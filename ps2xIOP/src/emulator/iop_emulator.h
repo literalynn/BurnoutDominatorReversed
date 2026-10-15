@@ -9,6 +9,11 @@
 #include <string_view>
 #include <vector>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop::detail
 {
     class IopEmulator
@@ -21,6 +26,10 @@ namespace ps2x::iop::detail
         IopEmulator &operator=(const IopEmulator &) = delete;
 
         void reset();
+        // Saves or restores the whole IOP machine. Only valid while idle().
+        void serialize(ps2x::StateArchive &archive);
+        // No IOP code is running and no interrupt or callback is being serviced.
+        [[nodiscard]] bool idle() const noexcept;
         [[nodiscard]] ModuleLoadResult loadModule(std::string_view path, const void *arguments, uint32_t argumentSize);
         [[nodiscard]] ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize);
         [[nodiscard]] bool stopModule(int32_t moduleId, int32_t *result);

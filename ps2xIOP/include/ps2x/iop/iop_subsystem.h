@@ -8,6 +8,11 @@
 #include <string_view>
 #include <vector>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop
 {
     class IopSubsystem
@@ -22,6 +27,9 @@ namespace ps2x::iop
         IopSubsystem &operator=(IopSubsystem &&) noexcept;
 
         void reset();
+        // Whole-IOP save state. Only valid while idle().
+        void serialize(ps2x::StateArchive &archive);
+        [[nodiscard]] bool idle() const noexcept;
 
         [[nodiscard]] ModuleLoadResult loadModule(std::string_view path, const void *arguments = nullptr, uint32_t argumentSize = 0);
         [[nodiscard]] ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments = nullptr, uint32_t argumentSize = 0);

@@ -1,4 +1,5 @@
 #include "iop_spu2.h"
+#include "ps2x/state_archive.h"
 
 #include <algorithm>
 #include <cstring>
@@ -597,5 +598,28 @@ namespace ps2x::iop::detail
         m_audioHead = (m_audioHead + count) % kAudioCapacityFrames;
         m_audioCount -= count;
         return count;
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void Spu2::serialize(StateArchive &archive)
+    {
+        archive.tag("SPU2");
+        archive.vector(m_ram);
+        archive.value(m_raw);
+        archive.value(m_cores);
+        archive.value(m_spdifIrqInfo);
+        archive.value(m_activeVoices);
+        archive.value(m_enabledCores);
+        archive.value(m_nextSampleCycle);
+        archive.value(m_producedFrames);
+        if (archive.loading())
+        {
+            // Samples already mixed are host output, not machine state.
+            std::lock_guard<std::mutex> lock(m_audioMutex);
+            m_audioHead = 0;
+            m_audioCount = 0;
+        }
     }
 }

@@ -1,4 +1,5 @@
 #include "iop_timrman.h"
+#include "ps2x/state_archive.h"
 
 #include "../core/iop_cpu.h"
 #include "../services/iop_rpc.h"
@@ -472,5 +473,15 @@ namespace ps2x::iop::detail
             next = std::min(next, timer.overflowCycle);
         }
         return next;
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void IopTimrman::serialize(StateArchive &archive)
+    {
+        archive.tag("TIMR");
+        archive.value(m_timers);
+        archive.value(m_holdMode);
     }
 }

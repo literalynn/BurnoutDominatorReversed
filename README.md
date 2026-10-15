@@ -116,6 +116,11 @@ python tools/project.py run
 | `--trace-calls 0xADDR,…` | log calls and returns of these guest functions |
 | `--trace-watch 0xADDR,…` | guest memory words printed with each trace line |
 | `--no-iso` | serve sectors from a virtual image of the extracted files instead of the ISO (different sector numbers) |
+| `--load-state [FILE]` | restore a save state before the game runs (default: the quick slot `local/states/quick.bdrstate`) |
+| `--state FILE` | save state slot used by F5 (save) and F7 (load) in the window |
+| `--save-state-at VSYNC` | save to the slot once this VSync is reached (for scripted or headless runs) |
+
+Save states hold the whole machine (EE, VU, GS VRAM, IOP, SPU2 and the runtime's kernel), about 50 MB each. A save waits for a point where no callback or IOP call is in flight, usually a few milliseconds; the window prints `[state] saved …` once it is written. They belong to the build that wrote them: rebuild after a change to the runtime and older states may no longer load.
 
 Exit codes: `124` = time limit reached (an observation, not a pass), `3` = missing guest function, `1` = failure. More diagnostics are driven by environment variables (`BDR_STATUS_DETAIL`, `BDR_TRACE_SIF`, `BDR_TRACE_IPU`, `BDR_PROFILE`…), listed in [docs/BOOT.md §10](docs/BOOT.md#10-observation-tools).
 

@@ -9,6 +9,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 namespace ps2x::iop::detail
 {
     class IopMemory;
@@ -26,6 +31,7 @@ namespace ps2x::iop::detail
         explicit IopImportRegistry(IopMemory &memory) noexcept;
 
         void reset();
+        void serialize(ps2x::StateArchive &archive);
         [[nodiscard]] std::optional<IopImportCall> decode(uint32_t pc) const;
         [[nodiscard]] bool registerExportTable(uint32_t address);
         [[nodiscard]] bool releaseExportTable(uint32_t address);

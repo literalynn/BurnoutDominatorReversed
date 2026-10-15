@@ -4,6 +4,11 @@
 #include <array>
 #include <cstdint>
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 class GS;
 class PS2Memory;
 
@@ -52,6 +57,7 @@ public:
     explicit VU1Interpreter(Unit unit = Unit::VU1);
 
     void reset();
+    void serialize(ps2x::StateArchive &archive);
 
     void execute(uint8_t *vuCode, uint32_t codeSize,
                  uint8_t *vuData, uint32_t dataSize,

@@ -22,6 +22,11 @@
 #include <smmintrin.h> // For SSE4.1 instructions
 #endif
 
+namespace ps2x
+{
+    class StateArchive;
+}
+
 class GS;
 class Ps2Ipu;
 
@@ -314,6 +319,7 @@ public:
     uint32_t advanceEeTimers(uint64_t eeCycles) noexcept;
     [[nodiscard]] uint64_t cyclesUntilNextEeTimerInterrupt() const noexcept;
     void resetEeTimers() noexcept;
+    void serialize(ps2x::StateArchive &archive);
 
     using GifPacketCallback = std::function<void(const uint8_t *, uint32_t)>;
     void setGifPacketCallback(GifPacketCallback cb) { m_gifPacketCallback = std::move(cb); }

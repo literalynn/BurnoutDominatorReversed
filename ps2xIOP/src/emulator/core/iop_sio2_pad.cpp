@@ -1,4 +1,5 @@
 #include "iop_sio2_pad.h"
+#include "ps2x/state_archive.h"
 
 namespace ps2x::iop::detail
 {
@@ -171,5 +172,24 @@ namespace ps2x::iop::detail
             break;
         }
         return reply;
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void DualShock2::serialize(StateArchive &archive)
+    {
+        archive.tag("PAD2");
+        archive.value(m_input);
+        archive.value(m_mode);
+        archive.value(m_config);
+        archive.value(m_configAtStart);
+        archive.value(m_analogLocked);
+        archive.value(m_stage);
+        archive.value(m_command);
+        archive.value(m_position);
+        archive.value(m_responseMask);
+        archive.value(m_motorMap);
+        archive.value(m_motors);
     }
 }

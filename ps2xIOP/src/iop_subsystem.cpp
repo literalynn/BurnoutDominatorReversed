@@ -1,4 +1,5 @@
 #include "ps2x/iop/iop_subsystem.h"
+#include "ps2x/state_archive.h"
 
 #include "iop_service.h"
 #include "iop_module_manager.h"
@@ -293,5 +294,22 @@ namespace ps2x::iop
             snapshot.services.push_back(std::move(row));
         }
         return snapshot;
+    }
+}
+
+namespace ps2x::iop
+{
+    bool IopSubsystem::idle() const noexcept
+    {
+        return m_impl->emulator.idle();
+    }
+
+    void IopSubsystem::serialize(StateArchive &archive)
+    {
+        archive.tag("IOPS");
+        m_impl->moduleManager.serialize(archive);
+        m_impl->emulator.serialize(archive);
+        if (archive.loading())
+            m_impl->rebuildRoutes();
     }
 }

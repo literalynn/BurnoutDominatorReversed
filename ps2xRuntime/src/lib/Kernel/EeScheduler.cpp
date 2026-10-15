@@ -293,6 +293,16 @@ void EeScheduler::run()
 
     while (!m_stopRequested.load(std::memory_order_acquire))
     {
+        if (m_runtime.m_stateRequestPending.load(std::memory_order_acquire))
+        {
+            // The native stack is unwound here: all guest state is in thread contexts and memory.
+            m_runtime.serviceStateRequest();
+            if (m_stopRequested.load(std::memory_order_acquire))
+            {
+                break;
+            }
+        }
+
         processPendingEvents();
         if (m_stopRequested.load(std::memory_order_acquire))
         {

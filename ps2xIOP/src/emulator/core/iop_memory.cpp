@@ -1,4 +1,5 @@
 #include "iop_memory.h"
+#include "ps2x/state_archive.h"
 
 #include <algorithm>
 #include <cstring>
@@ -518,5 +519,34 @@ namespace ps2x::iop::detail
             result.push_back(ch);
         }
         return result;
+    }
+}
+
+namespace ps2x::iop::detail
+{
+    void IopMemory::serialize(StateArchive &archive)
+    {
+        archive.tag("IMEM");
+        archive.vector(m_ram);
+        archive.vector(m_owned);
+        archive.vector(m_scratch);
+        archive.podMap(m_hardware);
+        archive.vector(m_allocations);
+        archive.value(m_heapCursor);
+        archive.value(m_interruptStatus);
+        archive.value(m_interruptMask);
+        archive.value(m_interruptControl);
+        archive.optional(m_dmaStart);
+        m_spu.serialize(archive);
+        archive.sequence(m_sio2Output, [](StateArchive &a, uint8_t &b) { a.value(b); });
+        archive.value(m_sio2CommandIndex);
+        archive.value(m_sio2InputCount);
+        archive.value(m_sio2Ports);
+        archive.value(m_sio2Missing);
+        archive.value(m_sio2PadPacket);
+        for (auto &pad : m_pads)
+            pad.serialize(archive);
+        archive.vector(m_sio2Sent);
+        archive.vector(m_sio2Received);
     }
 }

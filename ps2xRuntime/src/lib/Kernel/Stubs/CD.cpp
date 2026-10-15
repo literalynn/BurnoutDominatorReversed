@@ -1,4 +1,5 @@
 #include "Common.h"
+#include "ps2x/state_archive.h"
 #include "CD.h"
 #include "MPEG.h"
 #include "runtime/ee_scheduler.h"
@@ -987,5 +988,20 @@ namespace ps2_stubs
             *status = 0;
         }
         setReturnS32(ctx, 1);
+    }
+}
+
+namespace ps2_stubs
+{
+    // Host-side indexes (disc files, pseudo LBNs) are rebuilt by this process as needed.
+    void serializeCdState(ps2x::StateArchive &archive)
+    {
+        archive.tag("CDST");
+        archive.value(g_cdInitialized);
+        archive.value(g_cdMode);
+        archive.value(g_lastCdError);
+        archive.value(g_cdStreamingLbn);
+        archive.value(g_cdStreamingEndLbn);
+        archive.value(g_cdStreamTiming);
     }
 }
