@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Gamepads through SDL2 (October 16, 2026)
+
+- `ps2_pad.cpp`: game controllers are read with SDL2's game controller API when it is available (Xbox, PlayStation 3/4/5, Switch and the SDL_GameControllerDB pads, over USB or Bluetooth, with or without Steam running), and with raylib's gamepads otherwise. SDL is initialised and pumped on the thread that reads the pad, with background events allowed so the pad works whatever window has the focus. The first connected pad and the keyboard both drive the DualShock 2 at any time. `[pad] gamepad: <name>` and `[pad] gamepad disconnected` go to the log. `gamepad_mappings` in `settings.ini` also feeds SDL.
+- `ps2xRuntime/CMakeLists.txt`: on Windows, links the SDL2 that the FFmpeg package already ships (`lib/SDL2.lib`, `SDL2.dll` staged with the FFmpeg DLLs) and defines `PS2X_HAS_SDL2`; elsewhere, uses `sdl2` from pkg-config when it is installed.
+
 ## Declared idle loops (October 16, 2026)
 
 - `ps2xRuntime/include/runtime/ee_idle_loops.h` (new), `Kernel/EeScheduler.cpp`: a game can declare a polling loop by its entry PC and a check (`ps2x::registerIdleLoop`). While the check says the loop only waits, each dispatch of that PC accounts the cycles up to the next scheduled event, at most one device batch (2,048 cycles), instead of the 8 of a dispatch. The loop still runs every pass and rereads memory; IOP, timers and events advance as they do for any 2,048 cycles. Test: `idle loops are found by their entry pc`.

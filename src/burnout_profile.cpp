@@ -42,7 +42,7 @@ HANDLE openGameThread() {
     for (BOOL ok = Thread32First(snapshot, &entry); ok && !found; ok = Thread32Next(snapshot, &entry)) {
         if (entry.th32OwnerProcessID != pid)
             continue;
-        HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION,
+        HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
                                    FALSE, entry.th32ThreadID);
         if (!thread)
             continue;
@@ -163,7 +163,8 @@ Sampler::Sampler() {
             // BDR_PROFILE_STACKS=N: N call stacks 200 ms apart instead of one.
             const char* stacks = std::getenv("BDR_PROFILE_STACKS");
             const int count = stacks ? std::max(1, std::atoi(stacks)) : 1;
-            for (int i = 0; i < count; ++i) {
+            // A thread that has exited cannot be walked any more: stop there.
+            for (int i = 0; i < count && WaitForSingleObject(target, 0) == WAIT_TIMEOUT; ++i) {
                 std::printf("[stack] --- %d\n", i);
                 printStack(target);
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));

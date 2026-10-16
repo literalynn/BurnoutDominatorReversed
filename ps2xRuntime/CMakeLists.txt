@@ -288,6 +288,7 @@ elseif(WIN32)
         "${FFMPEG_LIB_DIR}/avutil.lib"
         "${FFMPEG_LIB_DIR}/swresample.lib"
         "${FFMPEG_LIB_DIR}/swscale.lib"
+        "${FFMPEG_SOURCE_DIR}/lib/SDL2.lib"
     )
 
     # Link against the import libraries shipped with the Windows DLLs.
@@ -326,8 +327,18 @@ elseif(WIN32)
     )
     add_dependencies(ffmpeg_swscale ffmpeg_external)
 
+    # The package also ships SDL2 (FFmpeg's SDL output needs it); the pad reads game controllers with it.
+    add_library(ffmpeg_sdl2 STATIC IMPORTED GLOBAL)
+    set_target_properties(ffmpeg_sdl2 PROPERTIES
+        IMPORTED_LOCATION "${FFMPEG_SOURCE_DIR}/lib/SDL2.lib"
+        INTERFACE_INCLUDE_DIRECTORIES "${FFMPEG_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS PS2X_HAS_SDL2
+    )
+    add_dependencies(ffmpeg_sdl2 ffmpeg_external)
+
     add_library(ffmpeg INTERFACE)
     target_link_libraries(ffmpeg INTERFACE
+        ffmpeg_sdl2
         ffmpeg_avcodec
         ffmpeg_avformat
         ffmpeg_avutil
@@ -359,6 +370,12 @@ else()
 
     add_library(ffmpeg INTERFACE)
     target_link_libraries(ffmpeg INTERFACE PkgConfig::FFMPEG)
+    # Optional: game controllers through SDL2 when it is installed.
+    pkg_check_modules(SDL2 QUIET IMPORTED_TARGET GLOBAL sdl2)
+    if(SDL2_FOUND)
+        target_link_libraries(ffmpeg INTERFACE PkgConfig::SDL2)
+        target_compile_definitions(ffmpeg INTERFACE PS2X_HAS_SDL2)
+    endif()
 endif()
 
 function(ps2x_stage_ffmpeg_runtime_dlls target_name)
