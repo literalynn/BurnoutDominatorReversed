@@ -50,6 +50,11 @@ namespace
         static const bool ready = []
         {
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+            // Without SDL video nothing pumps window messages on this thread: SDL handles
+            // device and raw input messages on its own thread, and Xbox pads are polled
+            // through XInput instead of raw input.
+            SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
+            SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
             SDL_SetMainReady();
             if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0)
             {
@@ -98,6 +103,12 @@ namespace
         input.ly = axis(SDL_CONTROLLER_AXIS_LEFTY);
         input.rx = axis(SDL_CONTROLLER_AXIS_RIGHTX);
         input.ry = axis(SDL_CONTROLLER_AXIS_RIGHTY);
+        static bool reported = false;
+        if (!reported && input.pressed != 0u)
+        {
+            reported = true;
+            std::cerr << "[pad] gamepad buttons received" << std::endl;
+        }
         return true;
     }
 #else
