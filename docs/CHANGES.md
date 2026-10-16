@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Declared idle loops (October 16, 2026)
+
+- `ps2xRuntime/include/runtime/ee_idle_loops.h` (new), `Kernel/EeScheduler.cpp`: a game can declare a polling loop by its entry PC and a check (`ps2x::registerIdleLoop`). While the check says the loop only waits, each dispatch of that PC accounts the cycles up to the next scheduled event, at most one device batch (2,048 cycles), instead of the 8 of a dispatch. The loop still runs every pass and rereads memory; IOP, timers and events advance as they do for any 2,048 cycles. Test: `idle loops are found by their entry pc`.
+- `src/burnout_main.cpp` declares Burnout's frame-end wait (0x336318 in 0x336240). It rereads the DMA list words gp-0x7930/-0x792C and the flag gp-0x7938, set by interrupt handlers, and stores nothing; its per-pass callback (gp-0x7DD8) is unset or 0x1B49F0, which calls 0x1B4A10 to lower a minimum with the same argument every pass. In a race it made about 3 million passes per second, 99% of all dispatches; with the declaration a race runs at 42 to 51 frames per second of 50 instead of 27.
+
 ## Compiled VU0 microprograms (October 15, 2026)
 
 - `ps2_vu1_program.h`, `ps2_vu1_program.cpp`, `ps2_vu1_core.cpp`: the compiled-routine engine, VU1 only until now, also runs VU0 microprograms (VCALLMS). Routines carry their unit (`Entry::unit`, `find(..., unit)`), data addresses and register-jump targets are masked by the unit's memory size (4 KiB for VU0) instead of VU1's 16 KiB, the code generation is the unit's, and recordings name VU0 images `vu0-<hash>.code`. Burnout Dominator makes about 3,400 VU0 calls per frame in a race, each a few to a hundred cycles, and they all ran in the interpreter (a quarter of the game thread's time). With them compiled the race runs 49% faster; RAM after 1,000 race frames is identical to an interpreted run.

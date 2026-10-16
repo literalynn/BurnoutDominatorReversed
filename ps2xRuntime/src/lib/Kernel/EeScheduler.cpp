@@ -5,7 +5,10 @@
 #include "runtime/ee_unwind.h"
 #include "ps2_runtime_macros.h"
 
+#include "runtime/ee_idle_loops.h"
+
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -438,7 +441,16 @@ void EeScheduler::run()
         }
         PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
 
-        if (checkpointDue(kGuestDispatchCycles))
+        uint32_t dispatchCycles = kGuestDispatchCycles;
+        if (const ps2x::IdleCheck idle = ps2x::idleLoopAt(context.pc); idle && idle(m_rdram, context))
+        {
+            // A declared polling loop: skip to the next event, within one device batch.
+            const uint64_t next = m_nextDeadlineCycle.load(std::memory_order_acquire);
+            const uint64_t untilEvent = next == 0u ? kDeviceBatchCycles : next > m_eeCycle ? next - m_eeCycle : 0u;
+            dispatchCycles = static_cast<uint32_t>(
+                std::clamp<uint64_t>(untilEvent, kGuestDispatchCycles, kDeviceBatchCycles));
+        }
+        if (checkpointDue(dispatchCycles))
         {
             continue;
         }
@@ -2442,5 +2454,29 @@ void EeScheduler::publishIdleDebugContext()
     if (selected)
     {
         publishDebugContext(selected->activeContext());
+    }
+}
+
+namespace ps2x
+{
+    namespace
+    {
+        // Registered at start-up, before the game thread runs; read by it only.
+        std::array<std::pair<uint32_t, IdleCheck>, 8> g_idleLoops{};
+        size_t g_idleLoopCount = 0u;
+    }
+
+    void registerIdleLoop(uint32_t pc, IdleCheck idle)
+    {
+        if (g_idleLoopCount < g_idleLoops.size())
+            g_idleLoops[g_idleLoopCount++] = {pc, idle};
+    }
+
+    IdleCheck idleLoopAt(uint32_t pc)
+    {
+        for (size_t i = 0; i < g_idleLoopCount; ++i)
+            if (g_idleLoops[i].first == pc)
+                return g_idleLoops[i].second;
+        return nullptr;
     }
 }

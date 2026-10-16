@@ -1,6 +1,7 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
 #include "burnout_profile.h"
 #include "ps2_runtime.h"
+#include "runtime/ee_idle_loops.h"
 #include "runtime/host_settings.h"
 
 #include <chrono>
@@ -168,6 +169,17 @@ int main(int argc, char** argv) {
             throw std::runtime_error("ELF loading failed");
         g_watched = options.traceWatch;
         traceCalls(runtime, options.traceCalls);
+        // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
+        // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores
+        // nothing itself. Its per-pass callback gp-0x7DD8 is unset or, in races, 0x1B49F0,
+        // which only lowers a minimum (0x1B4A10: if (a1 < obj->min) obj->min = a1) with the
+        // same a1 every pass. Either way, passes after the first only wait for an event.
+        ps2x::registerIdleLoop(0x336318u, [](const uint8_t* rdram, const R5900Context& ctx) {
+            uint32_t callback = 0;
+            const uint32_t address = (getRegU32(&ctx, 28) - 0x7DD8u) & (PS2_RAM_SIZE - 1) & ~3u;
+            std::memcpy(&callback, rdram + address, sizeof(callback));
+            return callback == 0u || callback == 0x1B49F0u;
+        });
         // loadELF configures roots; apply our explicit mount afterwards.
         auto paths = PS2Runtime::getIoPaths();
         paths.cdImage = options.iso;

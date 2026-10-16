@@ -3,6 +3,7 @@
 #include "ps2_runtime_macros.h"
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "runtime/ee_idle_loops.h"
 #include "runtime/ee_scheduler.h"
 
 #include <array>
@@ -551,6 +552,14 @@ void register_ps2_runtime_kernel_tests()
 {
     MiniTest::Case("PS2RuntimeKernel", [](TestCase &tc)
     {
+        tc.Run("idle loops are found by their entry pc", [](TestCase &t)
+        {
+            const ps2x::IdleCheck check = [](const uint8_t *, const R5900Context &) { return true; };
+            ps2x::registerIdleLoop(0x00ABC120u, check);
+            t.IsTrue(ps2x::idleLoopAt(0x00ABC120u) == check, "the registered loop is found");
+            t.IsTrue(ps2x::idleLoopAt(0x00ABC124u) == nullptr, "other pcs are not idle loops");
+        });
+
         tc.Run("unsigned loads and ABI word writes extend independently", [](TestCase &t)
         {
             constexpr uint64_t kUpper = 0x1122334455667788ull;
