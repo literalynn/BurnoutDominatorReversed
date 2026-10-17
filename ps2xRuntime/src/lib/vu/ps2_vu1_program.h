@@ -627,6 +627,42 @@ private:
         return absolute > m_base ? static_cast<uint32_t>(absolute - m_base) : 0u;
     }
 
+    // VU memory helpers. Plain members, as a lambda MSVC leaves out of line
+    // takes the Frame's address and then every member lives in memory.
+    PS2_VU_FORCE_INLINE uint32_t address(int32_t qword) const
+    {
+        return (static_cast<uint32_t>(qword) * 16u) & m_dataMask;
+    }
+
+    template <uint8_t Dest>
+    PS2_VU_FORCE_INLINE void store(uint32_t addr, const uint32_t *words)
+    {
+        uint32_t lanes[4];
+        std::memcpy(lanes, m_data + addr, sizeof(lanes));
+        applyLanes<Dest>(lanes, words);
+        std::memcpy(m_data + addr, lanes, sizeof(lanes));
+    }
+
+    template <uint8_t Dest, uint8_t Reg>
+    PS2_VU_FORCE_INLINE void storeVector(uint32_t addr)
+    {
+        uint32_t words[4];
+        std::memcpy(words, m_state.vf[Reg], sizeof(words));
+        store<Dest>(addr, words);
+    }
+
+    static PS2_VU_FORCE_INLINE void broadcast(float *vfResult, float value)
+    {
+        vfResult[0] = vfResult[1] = vfResult[2] = vfResult[3] = value;
+    }
+
+    template <uint16_t Bits, size_t... Reg>
+    static PS2_VU_FORCE_INLINE uint32_t viReadyOf(const uint32_t *viReady, uint32_t ready, std::index_sequence<Reg...>)
+    {
+        ((((Bits >> Reg) & 1u) != 0u ? (ready = std::max(ready, viReady[Reg])) : 0u), ...);
+        return ready;
+    }
+
     template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled>
     PS2_VU_FORCE_INLINE bool issue(uint32_t nextPc);
 
@@ -720,9 +756,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::pairReady() const
     if constexpr (d.lowerUsage.vfReadCount > 1u && d.lowerUsage.vfRead[1].reg != 0u && (Settled & 8u) == 0u)
         ready = readyOf<d.lowerUsage.vfRead[1].lanes>(vfReady[d.lowerUsage.vfRead[1].reg].data(), ready);
     constexpr uint16_t viReads = (d.upperUsage.viRead | d.lowerUsage.viRead) & 0xFFFEu & ~(Settled >> 4u);
-    [&]<size_t... Reg>(std::index_sequence<Reg...>) PS2_VU_INLINE_LAMBDA {
-        ((((viReads >> Reg) & 1u) != 0u ? (ready = std::max(ready, m_run.m_viReady[Reg])) : 0u), ...);
-    }(std::make_index_sequence<16>{});
+    ready = viReadyOf<viReads>(m_run.m_viReady.data(), ready, std::make_index_sequence<16>{});
     constexpr auto lower = d.lowerUsage;
     if constexpr (lower.pipeline == Access::kFdiv || lower.waitQ)
     {
@@ -1244,31 +1278,14 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     constexpr int32_t imm11 = static_cast<int32_t>(Lower << 21u) >> 21;
     constexpr uint32_t pcMask = 0x3FFFu;
     constexpr uint32_t relativeTarget = (Pc + 8u + static_cast<uint32_t>(imm11 * 8)) & pcMask;
-    const auto address = [this](int32_t qword) PS2_VU_INLINE_LAMBDA {
-        return (static_cast<uint32_t>(qword) * 16u) & m_dataMask;
-    };
-    const auto store = [&](uint32_t addr, const uint32_t *words) PS2_VU_INLINE_LAMBDA {
-        uint32_t lanes[4];
-        std::memcpy(lanes, m_data + addr, sizeof(lanes));
-        applyLanes<dest>(lanes, words);
-        std::memcpy(m_data + addr, lanes, sizeof(lanes));
-    };
-    const auto storeVector = [&](uint32_t addr) PS2_VU_INLINE_LAMBDA {
-        uint32_t words[4];
-        std::memcpy(words, m_state.vf[vfS], sizeof(words));
-        store(addr, words);
-    };
     constexpr uint32_t integerLane = (dest & 8u) ? 0u : (dest & 4u) ? 1u : (dest & 2u) ? 2u : 3u;
-    const auto broadcast = [&](float value) PS2_VU_INLINE_LAMBDA {
-        vfResult[0] = vfResult[1] = vfResult[2] = vfResult[3] = value;
-    };
 
     if constexpr (Lower == 0u || Lower == 0x8000033Cu)
         return;
     else if constexpr (opcode == 0x00u) // LQ
         std::memcpy(vfResult, m_data + address(m_state.vi[viS] + imm11), 16u);
     else if constexpr (opcode == 0x01u) // SQ
-        storeVector(address(m_state.vi[viT] + imm11));
+        storeVector<dest, vfS>(address(m_state.vi[viT] + imm11));
     else if constexpr (opcode == 0x04u) // ILW
     {
         uint32_t value;
@@ -1279,7 +1296,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     {
         const uint32_t value = static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF);
         const uint32_t words[4] = {value, value, value, value};
-        store(address(m_state.vi[viS] + imm11), words);
+        store<dest>(address(m_state.vi[viS] + imm11), words);
     }
     else if constexpr (opcode == 0x08u || opcode == 0x09u) // IADDIU, ISUBIU
     {
@@ -1416,7 +1433,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
         }
         else if constexpr (special == 0x35u) // SQI
         {
-            storeVector(address(static_cast<uint16_t>(m_state.vi[viT])));
+            storeVector<dest, vfS>(address(static_cast<uint16_t>(m_state.vi[viT])));
             viResult = static_cast<int16_t>(m_state.vi[viT] + 1);
         }
         else if constexpr (special == 0x36u) // LQD
@@ -1429,7 +1446,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
         {
             const int32_t value = viT != 0u ? static_cast<int16_t>(m_state.vi[viT] - 1) : 0;
             viResult = value;
-            storeVector(address(static_cast<uint16_t>(value)));
+            storeVector<dest, vfS>(address(static_cast<uint16_t>(value)));
         }
         else if constexpr (special == 0x38u || special == 0x39u || special == 0x3Au) // DIV, SQRT, RSQRT
         {
@@ -1494,7 +1511,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
             const int32_t value = static_cast<int16_t>(m_state.vi[viS] & 0xFFFF);
             float bits;
             std::memcpy(&bits, &value, 4u);
-            broadcast(bits);
+            broadcast(vfResult, bits);
         }
         else if constexpr (special == 0x3Eu) // ILWR
         {
@@ -1506,12 +1523,12 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
         {
             const uint32_t value = static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF);
             const uint32_t words[4] = {value, value, value, value};
-            store(address(static_cast<uint16_t>(m_state.vi[viS])), words);
+            store<dest>(address(static_cast<uint16_t>(m_state.vi[viS])), words);
         }
         else if constexpr (special == 0x64u) // MFP
         {
             commitP();
-            broadcast(m_state.p);
+            broadcast(vfResult, m_state.p);
         }
         else if constexpr (special == 0x68u) // XTOP
             viResult = static_cast<int32_t>(m_state.top & 0x3FFu);

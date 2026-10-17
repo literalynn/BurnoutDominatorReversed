@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Compiled VU routines keep their state in registers (October 17, 2026)
+
+- `ps2_vu1_program.h`: `Frame::lower` built its VU memory helpers as lambdas that captured the Frame. MSVC left some of them out of line, so the Frame's address escaped and every member (cycle, flag queue tail, kick state, branch backup) lived on the stack for the whole routine: in the hottest race routine 27% of the instructions touched the stack frame. The helpers (`address`, `store`, `storeVector`, `broadcast`) and the VI readiness fold are plain force-inlined members now. That routine went from 32,896 to 28,284 instructions and from 8,762 to 1,377 stack accesses; an unpaced race from the same state reaches 3,469-3,523 VSyncs in 75 s against 2,926 (+19%). RAM at VSync 18,000 is identical except the SPU2 timing words and the kernel invocation stacks below 0x100000, which also differ between two runs of the same build.
+
 ## VIF1, VU1 and the GS on a second thread (October 17, 2026)
 
 - `ps2xRuntime/include/runtime/gs_worker.h`, `src/lib/gs_worker.cpp` (new): a worker thread that runs queued jobs in order, with `sync()` to wait for them and at most two queued presentations ahead of the game thread (`enqueuePresent` blocks beyond that). `PS2Memory` queues to it, when one is set, the VIF1 DMA data, VIF1 FIFO writes and VIF1 register writes (the register switch of `writeIORegister` became `applyVif1RegisterWrite`), the GIF PATH3 DMA data and the arbiter drains, all copied at queue time so the EE can reuse its buffers at once; the worker then runs `processVIF1Data`, `submitGifPacket` and `GifArbiter::drain` exactly as the game thread did. An EE access to VU1 memory (`mapVuMemory`) waits for the queue. The GIF DMA fast paths that read the arbiter are skipped with a worker. The VU1 MSCAL/MSCNT callbacks read the D/T enables from the main context copy and do not report the stop bits on the worker.
