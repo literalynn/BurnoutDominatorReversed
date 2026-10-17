@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## VBlank schedule lags the clock by one period at most (October 17, 2026)
+
+- `Kernel/EeScheduler.cpp`: the next VBlankStart was scheduled one period after the previous one's host deadline, so after a host stall (shader compilation, a state save, a disc read) the schedule sat far behind the clock and VBlanks fired in a burst until it caught up: the game stepped several frames at once and the car and camera jumped. The base of the next deadline is now at most one period behind the clock. Deterministic runs (`BDR_DETERMINISTIC=1`) ignore host deadlines and are unchanged.
+- `src/burnout_profile.cpp`: `BDR_PROFILE_STACKS` unwinds the suspended game thread with `RtlLookupFunctionEntry`/`RtlVirtualUnwind` and names the frames after resuming it. It used DbgHelp and `printf` while the thread was suspended, which deadlocked when the thread held the heap lock (the game froze with `vsync/s=0` until killed).
+
 ## Gamepads through SDL2 (October 16, 2026)
 
 - `ps2_pad.cpp`: game controllers are read with SDL2's game controller API when it is available (Xbox, PlayStation 3/4/5, Switch and the SDL_GameControllerDB pads, over USB or Bluetooth, with or without Steam running), and with raylib's gamepads otherwise. SDL is initialised and pumped on the thread that reads the pad, with background events allowed so the pad works whatever window has the focus. The first connected pad and the keyboard both drive the DualShock 2 at any time. `[pad] gamepad: <name>` and `[pad] gamepad disconnected` go to the log. `gamepad_mappings` in `settings.ini` also feeds SDL. SDL runs its joystick thread (`SDL_HINT_JOYSTICK_THREAD`) and reads Xbox pads through XInput rather than raw input (`SDL_HINT_JOYSTICK_RAWINPUT=0`): without SDL video nothing pumps window messages on the pad thread, and a virtual Xbox 360 pad (DSX, DS4Windows) was listed but sent no buttons.

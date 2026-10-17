@@ -61,39 +61,51 @@ HANDLE openGameThread() {
 
 // Prints the call stack of a thread, suspended while it is walked.
 void printStack(HANDLE thread) {
-    HANDLE process = GetCurrentProcess();
-    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
-    if (!SymInitialize(process, nullptr, TRUE))
-        return;
+    // Nothing may allocate or take a lock while the target is suspended (it may hold the
+    // heap or DbgHelp lock): unwind with the loaded modules' unwind tables only, then
+    // resume before naming the frames.
+    uint64_t pcs[48];
+    int depth = 0;
     if (SuspendThread(thread) != static_cast<DWORD>(-1)) {
         CONTEXT context{};
         context.ContextFlags = CONTEXT_FULL;
         if (GetThreadContext(thread, &context)) {
-            STACKFRAME64 frame{};
-            frame.AddrPC.Offset = context.Rip;
-            frame.AddrPC.Mode = AddrModeFlat;
-            frame.AddrFrame.Offset = context.Rbp;
-            frame.AddrFrame.Mode = AddrModeFlat;
-            frame.AddrStack.Offset = context.Rsp;
-            frame.AddrStack.Mode = AddrModeFlat;
-            alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 512];
-            for (int depth = 0; depth < 48 && StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread, &frame, &context, nullptr,
-                                                          SymFunctionTableAccess64, SymGetModuleBase64, nullptr); ++depth) {
-                auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
-                symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-                symbol->MaxNameLen = 511;
-                DWORD64 displacement = 0;
-                const bool named = SymFromAddr(process, frame.AddrPC.Offset, &displacement, symbol) != FALSE;
-                IMAGEHLP_LINE64 line{};
-                line.SizeOfStruct = sizeof(line);
-                DWORD lineDisplacement = 0;
-                const bool lined = SymGetLineFromAddr64(process, frame.AddrPC.Offset, &lineDisplacement, &line) != FALSE;
-                std::printf("[stack] %2d %s+0x%llx  %s:%lu\n", depth, named ? symbol->Name : "?",
-                            static_cast<unsigned long long>(displacement), lined ? line.FileName : "?",
-                            lined ? static_cast<unsigned long>(line.LineNumber) : 0ul);
+            for (; depth < 48 && context.Rip != 0; ++depth) {
+                pcs[depth] = context.Rip;
+                DWORD64 imageBase = 0;
+                RUNTIME_FUNCTION* function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+                if (!function) {
+                    // A leaf function: the return address is at the top of the stack.
+                    context.Rip = *reinterpret_cast<const uint64_t*>(context.Rsp);
+                    context.Rsp += 8;
+                    continue;
+                }
+                void* handlerData = nullptr;
+                DWORD64 establisherFrame = 0;
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function, &context, &handlerData,
+                                 &establisherFrame, nullptr);
             }
         }
         ResumeThread(thread);
+    }
+    HANDLE process = GetCurrentProcess();
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    if (!SymInitialize(process, nullptr, TRUE))
+        return;
+    alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 512];
+    for (int i = 0; i < depth; ++i) {
+        auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = 511;
+        DWORD64 displacement = 0;
+        const bool named = SymFromAddr(process, pcs[i], &displacement, symbol) != FALSE;
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof(line);
+        DWORD lineDisplacement = 0;
+        const bool lined = SymGetLineFromAddr64(process, pcs[i], &lineDisplacement, &line) != FALSE;
+        std::printf("[stack] %2d %s+0x%llx  %s:%lu\n", i, named ? symbol->Name : "?",
+                    static_cast<unsigned long long>(displacement), lined ? line.FileName : "?",
+                    lined ? static_cast<unsigned long>(line.LineNumber) : 0ul);
     }
     std::fflush(stdout);
     SymCleanup(process);

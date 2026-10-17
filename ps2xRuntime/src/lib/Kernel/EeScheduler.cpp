@@ -2146,8 +2146,13 @@ void EeScheduler::processDueDeadlines()
                               scheduled.hostDeadline + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
                 const bool pal = m_palVideoTiming.load(std::memory_order_relaxed);
+                const auto period = pal ? kPalVBlankPeriod : kVBlankPeriod;
+                // After a host stall the schedule would sit far behind the clock and VBlanks
+                // would fire in a burst until it caught up, so the game stepped several
+                // frames at once (the car and camera jumped). Let it lag one period at most.
+                const auto base = std::max(scheduled.hostDeadline, std::chrono::steady_clock::now() - period);
                 scheduleEvent(scheduled.deadlineCycle + (pal ? kPalVBlankPeriodCycles : kVBlankPeriodCycles),
-                              scheduled.hostDeadline + (pal ? kPalVBlankPeriod : kVBlankPeriod),
+                              base + period,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
             }
             processEvent(scheduled.event);
