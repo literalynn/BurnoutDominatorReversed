@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Flag commits in constant time (October 17, 2026)
+
+- `ps2_vu1_program.h`, `ps2_vu1_program.cpp`: a commit of the flag queue folded every due FMAC result to rebuild the sticky status bits, so a routine with 300 FMAC pairs and a dozen clip-flag reads walked its whole queue at every read (`commitFlags`, 7% of the worker thread). Each queued result now carries the running OR of every FMAC condition since the last FSSET (`PendingFlags::cum`, two ORs at push); a commit without an FSSET queued takes MAC and status from the last due FMAC result and CLIP from the last due CLIP result, walking back only as far as those. The hand-back passes the cumulative conditions, which only adds bits the status register already holds. With the previous entry, an unpaced race interleaved three times against the build before both: 3,263/3,445/3,484 VSyncs in 75 s against 3,105/3,413/3,105 (+6%); RAM at VSync 18,000 unchanged.
+
 ## Queued MAC flags in movemask order (October 17, 2026)
 
 - `ps2_vu1_program.h`, `ps2_vu1_program.cpp`: the flag queue kept FMAC results in the MAC register's lane order, which cost the fast path up to eight table lookups per FMAC pair to reverse the movemask bits. The queue now keeps lane x in the low bit of each group (`fast::layout`, NEON and SSE) and `reverseLanes` restores the register's order once per commit, on hand-back and for the exact path's results. The hottest race routine has 3% fewer instructions (28,284 to 27,385); RAM at VSync 18,000 is unchanged.

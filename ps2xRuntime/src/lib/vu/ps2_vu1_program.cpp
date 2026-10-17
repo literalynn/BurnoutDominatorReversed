@@ -276,61 +276,72 @@ Run::PendingFlags *Run::commitFlags(PendingFlags *head, PendingFlags *tail, uint
     if (end == head)
         return head;
 
-    // Usually every one is an FMAC result: the last sets MAC and the current
-    // status bits, and all of them add to the sticky bits. That loop vectorizes.
-    uint32_t conditions = 0u, other = 0u;
-    for (const PendingFlags *entry = head; entry != end; ++entry)
+    if (m_fssetQueued == 0u)
     {
-        conditions |= entry->value | entry->sticky;
-        other |= entry->writes ^ 3u;
-    }
-    if (other == 0u)
-    {
-        const uint32_t now = statusOf(end[-1].value);
-        m_state.mac = reverseLanes(end[-1].value);
-        m_state.status = (m_state.status & 0xFF0u) | now | ((now | statusOf(conditions)) << 6u);
-        return end;
-    }
-
-    // MAC and CLIP keep the last result; the sticky bits collect every FMAC
-    // result until an FSSET, so status is folded once per run of those.
-    uint32_t mac = m_state.mac, status = m_state.status, clip = m_state.clip;
-    uint32_t current = 0u;
-    conditions = 0u;
-    bool pending = false;
-    const auto fold = [&] {
-        const uint32_t now = statusOf(current);
-        status = (status & 0xFF0u) | now | ((now | statusOf(conditions)) << 6u);
-        conditions = 0u;
-        pending = false;
-    };
-    for (; head != end; ++head)
-    {
-        const PendingFlags &entry = *head;
-        if ((entry.writes & 1u) != 0u)
-            mac = reverseLanes(entry.value);
-        if ((entry.writes & 2u) != 0u)
+        // The last FMAC result sets MAC and the current status bits and its
+        // cum holds every sticky condition; the last CLIP result sets CLIP.
+        // Both are usually at the end, so this rarely walks far.
+        bool fmac = false, clip = m_clipQueued == 0u;
+        for (const PendingFlags *entry = end; entry != head && !(fmac && clip); )
         {
-            current = entry.value;
-            conditions |= entry.value | entry.sticky;
-            pending = true;
+            --entry;
+            if (!fmac && (entry->writes & 2u) != 0u)
+            {
+                fmac = true;
+                const uint32_t now = statusOf(entry->value);
+                m_state.mac = reverseLanes(entry->value);
+                m_state.status = (m_state.status & 0xFF0u) | now | ((now | statusOf(entry->cum)) << 6u);
+            }
+            if (!clip && (entry->writes & 8u) != 0u)
+            {
+                clip = true;
+                m_state.clip = entry->value;
+            }
         }
-        if ((entry.writes & 4u) != 0u)
-        {
-            if (pending)
-                fold();
-            status = (status & 0x03Fu) | (entry.value & 0xFC0u);
-            --m_fssetQueued;
-        }
-        if ((entry.writes & 8u) != 0u)
-            clip = entry.value;
     }
-    if (pending)
-        fold();
-    m_state.mac = mac;
-    m_state.status = status;
-    m_state.clip = clip;
-    return head;
+    else
+    {
+        // MAC and CLIP keep the last result; an FSSET rewrites the sticky bits,
+        // so status is folded once per run of FMAC results between them.
+        uint32_t mac = m_state.mac, status = m_state.status, clip = m_state.clip;
+        uint32_t current = 0u, conditions = 0u;
+        bool pending = false;
+        const auto fold = [&] {
+            const uint32_t now = statusOf(current);
+            status = (status & 0xFF0u) | now | ((now | statusOf(conditions)) << 6u);
+            pending = false;
+        };
+        for (const PendingFlags *entry = head; entry != end; ++entry)
+        {
+            if ((entry->writes & 1u) != 0u)
+                mac = reverseLanes(entry->value);
+            if ((entry->writes & 2u) != 0u)
+            {
+                current = entry->value;
+                conditions = entry->cum;
+                pending = true;
+            }
+            if ((entry->writes & 4u) != 0u)
+            {
+                if (pending)
+                    fold();
+                status = (status & 0x03Fu) | (entry->value & 0xFC0u);
+                --m_fssetQueued;
+            }
+            if ((entry->writes & 8u) != 0u)
+                clip = entry->value;
+        }
+        if (pending)
+            fold();
+        m_state.mac = mac;
+        m_state.status = status;
+        m_state.clip = clip;
+    }
+    uint32_t clipQueued = 0u;
+    for (const PendingFlags *entry = end; entry != tail; ++entry)
+        clipQueued += (entry->writes & 8u) != 0u ? 1u : 0u;
+    m_clipQueued = clipQueued;
+    return end;
 }
 
 Run::FlagRange Run::makeRoom(PendingFlags *head, PendingFlags *tail, uint32_t cycle)
@@ -393,7 +404,7 @@ void Run::handBack()
         const bool fmac = (entry.writes & 3u) != 0u;
         const uint32_t status = fmac ? statusOf(entry.value) : (entry.writes & 4u) != 0u ? entry.value : 0u;
         Access::pendFlags(m_vu, m_base + entry.issue, fmac ? reverseLanes(entry.value) : 0u, status,
-                          fmac ? statusOf(entry.sticky) : 0u, (entry.writes & 8u) != 0u ? entry.value : 0u,
+                          fmac ? statusOf(entry.cum) : 0u, (entry.writes & 8u) != 0u ? entry.value : 0u,
                           static_cast<uint8_t>(entry.writes));
     }
     for (uint8_t reg = 1u; reg < 32u; ++reg)

@@ -310,19 +310,19 @@ constexpr bool upperPublishesFlags(uint32_t upper)
 // per lane, but with lane x in the low bit of each group, as the vector
 // movemasks produce them; reverseLanes gives the register's order (x high).
 // Status bits are folded out on commit.
-constexpr uint32_t statusOf(uint32_t mac)
+PS2_VU_FORCE_INLINE constexpr uint32_t statusOf(uint32_t mac)
 {
     return ((mac & 0x000Fu) != 0u ? 1u : 0u) | ((mac & 0x00F0u) != 0u ? 2u : 0u) |
            ((mac & 0x0F00u) != 0u ? 4u : 0u) | ((mac & 0xF000u) != 0u ? 8u : 0u);
 }
 
-constexpr uint32_t spreadStatus(uint32_t status)
+PS2_VU_FORCE_INLINE constexpr uint32_t spreadStatus(uint32_t status)
 {
     return (status & 1u) | ((status & 2u) << 3u) | ((status & 4u) << 6u) | ((status & 8u) << 9u);
 }
 
 // Swaps each group between the queue's lane order and the MAC register's.
-constexpr uint32_t reverseLanes(uint32_t mac)
+PS2_VU_FORCE_INLINE constexpr uint32_t reverseLanes(uint32_t mac)
 {
     return ((mac & 0x1111u) << 3u) | ((mac & 0x2222u) << 1u) | ((mac & 0x4444u) >> 1u) | ((mac & 0x8888u) >> 3u);
 }
@@ -431,7 +431,11 @@ private:
         uint32_t issue;
         uint32_t writes; // 1 MAC, 2 status, 4 sticky (FSSET), 8 CLIP
         uint32_t value;  // the MAC flags (lane x low), FSSET's sticky bits or the CLIP flags
-        uint32_t sticky; // an FMAC's product conditions, laid out like MAC
+        // Every FMAC condition (result and product) since the last FSSET, this
+        // result's included: the sticky bits a commit up to here folds in. A
+        // superset of the queued range is fine, as earlier results are already
+        // in the status register and the sticky bits only accumulate.
+        uint32_t cum;
     };
     // Results queue in a flat buffer. Each block reserves room for two per
     // pair on entry, and compile_vu_programs.py keeps blocks short enough
@@ -485,6 +489,10 @@ private:
     UpperSink m_upper;
     // FSSET results in the queue. Only those have to land in order with Q.
     uint32_t m_fssetQueued = 0u;
+    // CLIP results in the queue, at least: FCSET cancels one without counting.
+    uint32_t m_clipQueued = 0u;
+    // The running FMAC conditions, as PendingFlags::cum.
+    uint32_t m_cum = 0u;
     // The Frame's state as of the last routine return.
     uint64_t m_pairs = 0u;
     uint32_t m_cycle = 0u;
@@ -512,8 +520,8 @@ public:
           m_pcMask(run.m_pcMask), m_base(run.m_base),
           m_limit(budgetEnd > run.m_base ? budgetEnd - run.m_base : 0u), m_pairs(run.m_pairs),
           m_cycle(run.m_cycle), m_flagHead(run.m_flagHead), m_flagTail(run.m_flagTail),
-          m_workingClip(run.m_workingClip), m_backupValue(run.m_backupValue), m_backupReg(run.m_backupReg),
-          m_kickActive(run.m_kickActive)
+          m_workingClip(run.m_workingClip), m_cum(run.m_cum), m_backupValue(run.m_backupValue),
+          m_backupReg(run.m_backupReg), m_kickActive(run.m_kickActive)
     {
     }
 
@@ -586,6 +594,7 @@ private:
         m_run.m_flagHead = m_flagHead;
         m_run.m_flagTail = m_flagTail;
         m_run.m_workingClip = m_workingClip;
+        m_run.m_cum = m_cum;
         m_run.m_backupValue = m_backupValue;
         m_run.m_backupReg = m_backupReg;
         m_run.m_kickActive = m_kickActive;
@@ -697,10 +706,17 @@ private:
     template <uint32_t Pc, uint32_t Lower>
     PS2_VU_FORCE_INLINE void lower(float *vfResult, int32_t &viResult);
 
-    // Room was reserved when the block was entered.
+    // Room was reserved when the block was entered. Every caller passes a
+    // constant writes, so the branches fold.
     PS2_VU_FORCE_INLINE void pushFlags(uint32_t writes, uint32_t value, uint32_t sticky)
     {
-        *m_flagTail++ = {m_cycle, writes, value, sticky};
+        if (writes == 3u)
+            m_cum |= value | sticky;
+        else if (writes == 4u)
+            m_cum = 0u;
+        else if (writes == 8u)
+            ++m_run.m_clipQueued;
+        *m_flagTail++ = {m_cycle, writes, value, m_cum};
     }
 
     PS2_VU_FORCE_INLINE void flagsAt()
@@ -743,6 +759,7 @@ private:
     Run::PendingFlags *m_flagHead;
     Run::PendingFlags *m_flagTail;
     uint32_t m_workingClip;
+    uint32_t m_cum;
     uint32_t m_jumpTarget = 0u;
     int32_t m_backupValue;
     uint32_t m_backupReg;
