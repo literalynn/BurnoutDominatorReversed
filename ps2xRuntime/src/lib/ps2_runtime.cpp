@@ -9,6 +9,7 @@
 #include "runtime/gs/gs_parallel_backend.h"
 #endif
 #include "runtime/ee_scheduler.h"
+#include "runtime/gs/gs_present_hint.h"
 #include "runtime/gs_worker.h"
 #include "runtime/ps2_wait_stats.h"
 #include "runtime/ee_unwind.h"
@@ -2284,7 +2285,10 @@ void PS2Runtime::queuePresentation()
     if (!m_gsWorker)
         return;
     m_gsWorker->enqueuePresent([this, request = m_gs.buildPresentationRequest()]
-                               { m_gs.latchHostPresentationFrame(request); });
+                               {
+                                   ps2x::setPresentBacklog(m_gsWorker->queuedPresents() > 1u);
+                                   m_gs.latchHostPresentationFrame(request);
+                               });
 }
 
 void PS2Runtime::requestStop()

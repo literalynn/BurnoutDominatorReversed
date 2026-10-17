@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -29,6 +30,8 @@ public:
     void enqueuePresent(Job job);
     // Returns once every job queued so far has run. A no-op on the worker thread.
     void sync();
+    // Presentations queued and not yet finished, the running one included.
+    uint32_t queuedPresents() const { return m_queuedPresents.load(std::memory_order_relaxed); }
 
 private:
     void run();
@@ -38,7 +41,7 @@ private:
     std::condition_variable m_pushed;
     std::condition_variable m_drained;
     std::deque<std::pair<Job, bool>> m_queue; // bool: a presentation
-    uint32_t m_queuedPresents = 0u;
+    std::atomic<uint32_t> m_queuedPresents{0u};
     bool m_busy = false;
     bool m_stop = false;
 };

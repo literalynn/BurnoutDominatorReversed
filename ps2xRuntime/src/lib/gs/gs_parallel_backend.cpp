@@ -3,6 +3,7 @@
 // version needs no window: it creates its own Vulkan device and reads the
 // scanout image back to host memory, so presentation, frame dumps and headless
 // runs go through the usual PresentationFrame pixels.
+#include "runtime/gs/gs_present_hint.h"
 #include "runtime/gs/gs_parallel_backend.h"
 #include "ps2x/state_archive.h"
 #include "runtime/gs/gs_frontend.h"
@@ -112,6 +113,8 @@ namespace
         }
     };
 
+    std::atomic<bool> g_presentBacklog{false};
+
     class ParallelBackend final : public GSRasterBackend, private ParallelGS::SignalInterface
     {
         // Every GSInterface and Device call is serialized, presentation included.
@@ -120,8 +123,8 @@ namespace
         mutable ParallelGS::GSInterface gs;
         GSRegisters &priv;
         // Scan-out readbacks alternate between two buffers: Present queues this frame's copy and
-        // returns the previous frame, whose fence has usually signalled by then, so the GPU does
-        // not stall the thread that presents (the GS worker).
+        // returns the previous frame if its fence has signalled, else the last frame again, so
+        // the GPU never stalls the thread that presents (the GS worker).
         struct Readback
         {
             Vulkan::BufferHandle buffer;
@@ -131,6 +134,11 @@ namespace
         };
         Readback readbacks[2];
         unsigned readbackIndex = 0;
+        PresentationFrame lastFrame; // shown again while no newer readback has landed
+        // How long a present without a backlog waits for its own readback before
+        // showing the previous frame. The GPU usually lands a frame within 2 ms.
+        const uint64_t presentWaitNs = std::getenv("BDR_PGS_PRESENT_WAIT_US") ? uint64_t(std::atoi(std::getenv("BDR_PGS_PRESENT_WAIT_US"))) * 1000u : 2000000u;
+        unsigned presents = 0, presentsLanded = 0;
 
         struct Lock
         {
@@ -504,9 +512,26 @@ namespace
             const uint32_t height = scanout.image->get_height();
             const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
             auto &device = vulkan.device;
+            // A readback that has not landed is picked up at a later present, and the last
+            // frame is shown meanwhile; see the wait bound below.
+            const auto copyOut = [&](Readback &ready) {
+                lastFrame.width = ready.width;
+                lastFrame.height = ready.height;
+                lastFrame.pixels.resize(size_t(ready.width) * ready.height * 4);
+                const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
+                std::memcpy(lastFrame.pixels.data(), mapped, lastFrame.pixels.size());
+                device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
+                for (size_t i = 3; i < lastFrame.pixels.size(); i += 4)
+                    lastFrame.pixels[i] = 0xff; // Scanout alpha is not a display value.
+                ready.pending = false;
+            };
             Readback &current = readbacks[readbackIndex];
             if (current.pending)
-                current.fence->wait(); // the GPU is more than a frame behind
+            {
+                if (!current.fence->wait_timeout(0))
+                    return lastFrame; // the GPU is two frames behind: this frame goes unread
+                copyOut(current);     // two presents old; replaced below if the newer one landed
+            }
             if (!current.buffer || current.buffer->get_create_info().size != bytes)
             {
                 Vulkan::BufferCreateInfo info{};
@@ -527,23 +552,29 @@ namespace
             current.height = height;
             current.pending = true;
 
-            // The previous frame, or this one when there is none yet.
+            // The previous frame if it has landed, then this one if it lands within the
+            // wait bound (no display lag on a GPU that keeps up), unless presentations are
+            // queuing up behind this one; the very first frame waits.
             Readback &previous = readbacks[readbackIndex ^ 1u];
-            Readback &ready = previous.pending ? previous : current;
             readbackIndex ^= 1u;
-            ready.fence->wait();
-            ready.pending = false;
-
-            PresentationFrame frame;
-            frame.width = ready.width;
-            frame.height = ready.height;
-            frame.pixels.resize(size_t(ready.width) * ready.height * 4);
-            const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
-            std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
-            device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
-            for (size_t i = 3; i < frame.pixels.size(); i += 4)
-                frame.pixels[i] = 0xff; // Scanout alpha is not a display value.
-            return frame;
+            if (previous.pending && previous.fence->wait_timeout(0))
+                copyOut(previous);
+            if (current.fence->wait_timeout(g_presentBacklog.load(std::memory_order_relaxed) ? 0u : presentWaitNs))
+            {
+                copyOut(current);
+                ++presentsLanded;
+            }
+            else if (!lastFrame)
+            {
+                current.fence->wait();
+                copyOut(current);
+            }
+            if (++presents % 500 == 0 && std::getenv("BDR_PGS_PRESENT_STATS"))
+                std::printf("[pgs-present] %u of the last 500 presents landed within %llu us\n", presentsLanded,
+                            (unsigned long long)(presentWaitNs / 1000u));
+            if (presents % 500 == 0)
+                presentsLanded = 0;
+            return lastFrame;
         }
 
         uint32_t ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const override
@@ -639,4 +670,9 @@ namespace
 std::unique_ptr<GSRasterBackend> CreateParallelGSBackend(GSRegisters &registers)
 {
     return std::make_unique<ParallelBackend>(registers);
+}
+
+void ps2x::setPresentBacklog(bool backlog)
+{
+    g_presentBacklog.store(backlog, std::memory_order_relaxed);
 }
