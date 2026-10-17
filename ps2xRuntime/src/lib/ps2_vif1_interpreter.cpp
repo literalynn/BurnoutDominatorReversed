@@ -93,6 +93,20 @@ namespace
         if (vuData && totalBytes > 0 && pos + totalBytes <= sizeBytes)
         {
             const uint8_t *srcBase = data + pos;
+            // V4-32 and V3-32 without mask or mode, the vertex streams: every write
+            // has its source vector (CL >= WL), copied whole. A V3's w takes the
+            // source word after z, or keeps its value when the data ends there.
+            if (vl == 0u && vn >= 2u && !maskEnable && (regs.mode & 3u) == 0u && cl >= wl)
+            {
+                for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+                {
+                    const uint32_t destVec = (vuAddr + (writeIndex / wl) * cl + writeIndex % wl) & qwordMask;
+                    const uint8_t *srcVec = srcBase + writeIndex * bytesPerVector;
+                    const bool whole = vn == 3u || static_cast<size_t>(srcVec - data) + 16u <= sizeBytes;
+                    std::memcpy(vuData + destVec * 16u, srcVec, whole ? 16u : 12u);
+                }
+                return totalBytes;
+            }
             uint32_t srcIndex = 0u;
             for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
             {
