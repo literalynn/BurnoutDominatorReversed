@@ -287,7 +287,7 @@ Run::PendingFlags *Run::commitFlags(PendingFlags *head, PendingFlags *tail, uint
     if (other == 0u)
     {
         const uint32_t now = statusOf(end[-1].value);
-        m_state.mac = end[-1].value;
+        m_state.mac = reverseLanes(end[-1].value);
         m_state.status = (m_state.status & 0xFF0u) | now | ((now | statusOf(conditions)) << 6u);
         return end;
     }
@@ -308,7 +308,7 @@ Run::PendingFlags *Run::commitFlags(PendingFlags *head, PendingFlags *tail, uint
     {
         const PendingFlags &entry = *head;
         if ((entry.writes & 1u) != 0u)
-            mac = entry.value;
+            mac = reverseLanes(entry.value);
         if ((entry.writes & 2u) != 0u)
         {
             current = entry.value;
@@ -392,7 +392,7 @@ void Run::handBack()
         const PendingFlags &entry = *pending;
         const bool fmac = (entry.writes & 3u) != 0u;
         const uint32_t status = fmac ? statusOf(entry.value) : (entry.writes & 4u) != 0u ? entry.value : 0u;
-        Access::pendFlags(m_vu, m_base + entry.issue, fmac ? entry.value : 0u, status,
+        Access::pendFlags(m_vu, m_base + entry.issue, fmac ? reverseLanes(entry.value) : 0u, status,
                           fmac ? statusOf(entry.sticky) : 0u, (entry.writes & 8u) != 0u ? entry.value : 0u,
                           static_cast<uint8_t>(entry.writes));
     }

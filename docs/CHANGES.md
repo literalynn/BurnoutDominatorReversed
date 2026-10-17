@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Queued MAC flags in movemask order (October 17, 2026)
+
+- `ps2_vu1_program.h`, `ps2_vu1_program.cpp`: the flag queue kept FMAC results in the MAC register's lane order, which cost the fast path up to eight table lookups per FMAC pair to reverse the movemask bits. The queue now keeps lane x in the low bit of each group (`fast::layout`, NEON and SSE) and `reverseLanes` restores the register's order once per commit, on hand-back and for the exact path's results. The hottest race routine has 3% fewer instructions (28,284 to 27,385); RAM at VSync 18,000 is unchanged.
+
 ## Compiled VU routines keep their state in registers (October 17, 2026)
 
 - `ps2_vu1_program.h`: `Frame::lower` built its VU memory helpers as lambdas that captured the Frame. MSVC left some of them out of line, so the Frame's address escaped and every member (cycle, flag queue tail, kick state, branch backup) lived on the stack for the whole routine: in the hottest race routine 27% of the instructions touched the stack frame. The helpers (`address`, `store`, `storeVector`, `broadcast`) and the VI readiness fold are plain force-inlined members now. That routine went from 32,896 to 28,284 instructions and from 8,762 to 1,377 stack accesses; an unpaced race from the same state reaches 3,469-3,523 VSyncs in 75 s against 2,926 (+19%). RAM at VSync 18,000 is identical except the SPU2 timing words and the kernel invocation stacks below 0x100000, which also differ between two runs of the same build.

@@ -306,8 +306,10 @@ constexpr bool upperPublishesFlags(uint32_t upper)
     return code != 0x2Fu && code != 0x30u;
 }
 
-// Queued FMAC conditions stay in the MAC register's layout, one bit per lane
-// in each of the Z, S, U and O groups; status bits are folded out on commit.
+// Queued FMAC conditions use the MAC register's groups (Z, S, U, O), one bit
+// per lane, but with lane x in the low bit of each group, as the vector
+// movemasks produce them; reverseLanes gives the register's order (x high).
+// Status bits are folded out on commit.
 constexpr uint32_t statusOf(uint32_t mac)
 {
     return ((mac & 0x000Fu) != 0u ? 1u : 0u) | ((mac & 0x00F0u) != 0u ? 2u : 0u) |
@@ -319,15 +321,21 @@ constexpr uint32_t spreadStatus(uint32_t status)
     return (status & 1u) | ((status & 2u) << 3u) | ((status & 4u) << 6u) | ((status & 8u) << 9u);
 }
 
+// Swaps each group between the queue's lane order and the MAC register's.
+constexpr uint32_t reverseLanes(uint32_t mac)
+{
+    return ((mac & 0x1111u) << 3u) | ((mac & 0x2222u) << 1u) | ((mac & 0x4444u) >> 1u) | ((mac & 0x8888u) >> 3u);
+}
+
 #if PS2_VU_PROGRAM_NEON
 namespace fast
 {
-// Lane conditions in the MAC register's layout, limited to the Dest lanes.
+// Lane conditions in the queue's layout (lane x low), limited to the Dest lanes.
 template <uint8_t Dest>
 PS2_VU_FORCE_INLINE uint32_t layout(uint32x4_t zero, uint32x4_t sign, uint32x4_t underflow)
 {
-    const uint32x4_t zeroBits = {(Dest & 8u) ? 0x8u : 0u, (Dest & 4u) ? 0x4u : 0u, (Dest & 2u) ? 0x2u : 0u,
-                                 (Dest & 1u) ? 0x1u : 0u};
+    const uint32x4_t zeroBits = {(Dest & 8u) ? 0x1u : 0u, (Dest & 4u) ? 0x2u : 0u, (Dest & 2u) ? 0x4u : 0u,
+                                 (Dest & 1u) ? 0x8u : 0u};
     const uint32x4_t bits = vorrq_u32(vandq_u32(zero, zeroBits), vandq_u32(sign, vshlq_n_u32(zeroBits, 4)));
     return vaddvq_u32(vorrq_u32(bits, vandq_u32(underflow, vshlq_n_u32(zeroBits, 8))));
 }
@@ -368,11 +376,12 @@ PS2_VU_FORCE_INLINE int mask(__m128i lanes)
     return _mm_movemask_ps(_mm_castsi128_ps(lanes));
 }
 
-// Lane masks in the MAC register's layout, limited to the Dest lanes.
+// Lane masks in the queue's layout, movemask order, limited to the Dest lanes.
 template <uint8_t Dest>
 PS2_VU_FORCE_INLINE uint32_t layout(int zero, int sign, int underflow)
 {
-    return (kReversed[zero] | kReversed[sign] << 4u | kReversed[underflow] << 8u) & (Dest * 0x111u);
+    return (static_cast<uint32_t>(zero) | static_cast<uint32_t>(sign) << 4u | static_cast<uint32_t>(underflow) << 8u) &
+           (static_cast<uint32_t>(kLanes<Dest>) * 0x111u);
 }
 
 // As the NEON version: infinity and NaN stay, and fail the range checks.
@@ -421,7 +430,7 @@ private:
     {
         uint32_t issue;
         uint32_t writes; // 1 MAC, 2 status, 4 sticky (FSSET), 8 CLIP
-        uint32_t value;  // the MAC flags, FSSET's sticky bits or the CLIP flags
+        uint32_t value;  // the MAC flags (lane x low), FSSET's sticky bits or the CLIP flags
         uint32_t sticky; // an FMAC's product conditions, laid out like MAC
     };
     // Results queue in a flat buffer. Each block reserves room for two per
@@ -917,7 +926,7 @@ PS2_VU_FORCE_INLINE void Frame::upper(float *value)
         const UpperSink &exact = m_run.m_upper;
         std::memcpy(value, exact.value, sizeof(exact.value));
         if (exact.hasFmac)
-            pushFlags(3u, exact.mac, spreadStatus(exact.sticky));
+            pushFlags(3u, reverseLanes(exact.mac), spreadStatus(exact.sticky));
     }
 }
 
