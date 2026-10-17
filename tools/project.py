@@ -78,6 +78,8 @@ def run(command: list[str], log_name: str, *, timeout: int | None = None) -> Non
         result = subprocess.run(command, cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT, timeout=timeout)
     print("Log:", log, flush=True)
     if result.returncode:
+        # The console may not encode every byte of a French MSBuild log.
+        sys.stdout.reconfigure(errors="replace")
         print(log.read_text(encoding="utf-8", errors="replace")[-12000:])
         raise RuntimeError(f"Command failed with exit code {result.returncode}")
 
