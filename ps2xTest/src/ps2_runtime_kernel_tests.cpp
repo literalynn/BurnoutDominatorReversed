@@ -4,6 +4,7 @@
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
 #include "runtime/ee_idle_loops.h"
+#include "runtime/gs_worker.h"
 #include "runtime/ee_scheduler.h"
 
 #include <array>
@@ -552,6 +553,29 @@ void register_ps2_runtime_kernel_tests()
 {
     MiniTest::Case("PS2RuntimeKernel", [](TestCase &tc)
     {
+        tc.Run("the GS worker runs jobs in order and sync waits for them", [](TestCase &t)
+        {
+            GsWorker worker;
+            std::vector<int> order;
+            std::atomic<int> presented{0};
+            worker.start();
+            t.IsTrue(worker.active(), "the worker thread starts");
+            for (int i = 0; i < 100; ++i)
+                worker.enqueue([&order, i] { order.push_back(i); });
+            worker.enqueuePresent([&presented] { ++presented; });
+            worker.sync();
+            t.Equals(static_cast<int>(order.size()), 100, "every job ran");
+            bool ordered = true;
+            for (int i = 0; i < 100; ++i)
+                ordered = ordered && order[static_cast<size_t>(i)] == i;
+            t.IsTrue(ordered, "jobs ran in queue order");
+            t.Equals(presented.load(), 1, "the presentation ran");
+            worker.stop();
+            t.IsTrue(!worker.active(), "stop joins the thread");
+            worker.enqueue([&order] { order.push_back(-1); });
+            t.Equals(order.back(), -1, "without a thread, jobs run in place");
+        });
+
         tc.Run("idle loops are found by their entry pc", [](TestCase &t)
         {
             const ps2x::IdleCheck check = [](const uint8_t *, const R5900Context &) { return true; };

@@ -28,6 +28,7 @@ namespace ps2x
 }
 
 class GS;
+class GsWorker;
 class Ps2Ipu;
 
 constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
@@ -324,6 +325,10 @@ public:
     using GifPacketCallback = std::function<void(const uint8_t *, uint32_t)>;
     void setGifPacketCallback(GifPacketCallback cb) { m_gifPacketCallback = std::move(cb); }
     void setGifArbiter(GifArbiter *arbiter) { m_gifArbiter = arbiter; }
+    // With a worker, VIF1 data, GIF PATH3 data and VIF1 register writes are queued to it
+    // in order instead of being processed here; EE accesses to VU1 memory wait for it.
+    void setGsWorker(GsWorker *worker) { m_gsWorker = worker; }
+    GsWorker *gsWorker() const { return m_gsWorker; }
     // True when the GS keeps each GIF path's tag state across packets, as the
     // hardware does (paraLLEl-GS): VIF1 DIRECT payloads then go to PATH2 as
     // they are, without re-wrapping an image that continues in a later DIRECT.
@@ -416,6 +421,8 @@ public:
 
     GifPacketCallback m_gifPacketCallback;
     GifArbiter *m_gifArbiter = nullptr;
+    GsWorker *m_gsWorker = nullptr;
+    void applyVif1RegisterWrite(uint32_t address, uint32_t value);
     Vu1MscalCallback m_vu1MscalCallback;
     Vu1MscntCallback m_vu1MscntCallback;
 

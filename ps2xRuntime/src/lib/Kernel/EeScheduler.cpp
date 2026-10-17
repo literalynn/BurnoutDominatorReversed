@@ -2217,6 +2217,7 @@ void EeScheduler::processEvent(const EeEvent &event)
         completeExternalWait(event.id, event.value, KE_OK);
         break;
     case EeEventType::VBlankEnd:
+        m_runtime.queuePresentation();
         dispatchIrq(false, 3u);
         break;
     case EeEventType::Dmac:

@@ -1,3 +1,4 @@
+#include "runtime/gs_worker.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_ipu.h"
 #include "runtime/ps2_address.h"
@@ -598,11 +599,13 @@ const uint8_t *PS2Memory::mapVuMemory(uint32_t physAddr, uint32_t size, uint32_t
     {
         return ptr;
     }
-    if (const uint8_t *ptr = mapRange(PS2_VU1_CODE_BASE, PS2_VU1_CODE_SIZE, m_vu1Code))
-    {
-        return ptr;
-    }
-    return mapRange(PS2_VU1_DATA_BASE, PS2_VU1_DATA_SIZE, m_vu1Data);
+    const uint8_t *vu1 = mapRange(PS2_VU1_CODE_BASE, PS2_VU1_CODE_SIZE, m_vu1Code);
+    if (!vu1)
+        vu1 = mapRange(PS2_VU1_DATA_BASE, PS2_VU1_DATA_SIZE, m_vu1Data);
+    // The worker owns VU1 memory: an EE access sees it once every queued job ran.
+    if (vu1 && m_gsWorker)
+        m_gsWorker->sync();
+    return vu1;
 }
 
 uint32_t PS2Memory::translateAddress(uint32_t virtualAddress)
@@ -1138,7 +1141,11 @@ void PS2Memory::write128(uint32_t address, __m128i value)
     {
         alignas(16) uint8_t fifoData[16];
         _mm_storeu_si128(reinterpret_cast<__m128i *>(fifoData), value);
-        processVIF1Data(fifoData, sizeof(fifoData));
+        if (m_gsWorker)
+            m_gsWorker->enqueue([this, bytes = std::vector<uint8_t>(fifoData, fifoData + sizeof(fifoData))]
+                                { processVIF1Data(bytes.data(), static_cast<uint32_t>(bytes.size())); });
+        else
+            processVIF1Data(fifoData, sizeof(fifoData));
         return;
     }
 
@@ -1264,67 +1271,10 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
     if (address >= 0x10003C00u && address < 0x10003E00u)
     {
         m_vifWriteCount.fetch_add(1, std::memory_order_relaxed);
-
-        switch (address)
-        {
-        case 0x10003C10u:     // VIF1_FBRST
-            if (value & 0x1u) // RST
-            {
-                const bool wasPath3Masked = m_path3Masked;
-                std::memset(&vif1_regs, 0, sizeof(vif1_regs));
-                m_vif1PendingPath2ImageQwc = 0u;
-                m_vif1PendingPath2DirectHl = false;
-                m_path3Masked = false;
-                m_path3Window = false;
-                if (wasPath3Masked)
-                    flushMaskedPath3Packets();
-            }
-            if (value & 0x8u) // STC
-            {
-                vif1_regs.stat &= ~((1u << 8) | (1u << 9) | (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13));
-            }
-            break;
-        case 0x10003C30u:
-            vif1_regs.mark = value & 0xFFFFu;
-            vif1_regs.stat &= ~(1u << 6); // clear MRK flag on CPU write
-            break;
-        case 0x10003C40u:
-            vif1_regs.cycle = value & 0xFFFFu;
-            break;
-        case 0x10003C50u:
-            vif1_regs.mode = value & 0x3u;
-            break;
-        case 0x10003C60u:
-            vif1_regs.num = value & 0xFFu;
-            break;
-        case 0x10003C70u:
-            vif1_regs.mask = value;
-            break;
-        case 0x10003C80u:
-            vif1_regs.code = value;
-            break;
-        case 0x10003C90u:
-            vif1_regs.itops = value & 0x3FFu;
-            break;
-        case 0x10003CA0u:
-            vif1_regs.base = value & 0x3FFu;
-            break;
-        case 0x10003CB0u:
-            vif1_regs.ofst = value & 0x3FFu;
-            break;
-        case 0x10003CC0u:
-            vif1_regs.tops = value & 0x3FFu;
-            break;
-        case 0x10003CD0u:
-            vif1_regs.itop = value & 0x3FFu;
-            break;
-        case 0x10003CE0u:
-            vif1_regs.top = value & 0x3FFu;
-            break;
-        default:
-            break;
-        }
-
+        if (m_gsWorker)
+            m_gsWorker->enqueue([this, address, value] { applyVif1RegisterWrite(address, value); });
+        else
+            applyVif1RegisterWrite(address, value);
         return true;
     }
 
@@ -1806,8 +1756,98 @@ void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
     queueCompletedDmacCause(cause);
 }
 
+void PS2Memory::applyVif1RegisterWrite(uint32_t address, uint32_t value)
+{
+    switch (address)
+    {
+    case 0x10003C10u:     // VIF1_FBRST
+        if (value & 0x1u) // RST
+        {
+            const bool wasPath3Masked = m_path3Masked;
+            std::memset(&vif1_regs, 0, sizeof(vif1_regs));
+            m_vif1PendingPath2ImageQwc = 0u;
+            m_vif1PendingPath2DirectHl = false;
+            m_path3Masked = false;
+            m_path3Window = false;
+            if (wasPath3Masked)
+                flushMaskedPath3Packets();
+        }
+        if (value & 0x8u) // STC
+        {
+            vif1_regs.stat &= ~((1u << 8) | (1u << 9) | (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13));
+        }
+        break;
+    case 0x10003C30u:
+        vif1_regs.mark = value & 0xFFFFu;
+        vif1_regs.stat &= ~(1u << 6); // clear MRK flag on CPU write
+        break;
+    case 0x10003C40u:
+        vif1_regs.cycle = value & 0xFFFFu;
+        break;
+    case 0x10003C50u:
+        vif1_regs.mode = value & 0x3u;
+        break;
+    case 0x10003C60u:
+        vif1_regs.num = value & 0xFFu;
+        break;
+    case 0x10003C70u:
+        vif1_regs.mask = value;
+        break;
+    case 0x10003C80u:
+        vif1_regs.code = value;
+        break;
+    case 0x10003C90u:
+        vif1_regs.itops = value & 0x3FFu;
+        break;
+    case 0x10003CA0u:
+        vif1_regs.base = value & 0x3FFu;
+        break;
+    case 0x10003CB0u:
+        vif1_regs.ofst = value & 0x3FFu;
+        break;
+    case 0x10003CC0u:
+        vif1_regs.tops = value & 0x3FFu;
+        break;
+    case 0x10003CD0u:
+        vif1_regs.itop = value & 0x3FFu;
+        break;
+    case 0x10003CE0u:
+        vif1_regs.top = value & 0x3FFu;
+        break;
+    default:
+        break;
+    }
+}
+
 void PS2Memory::processPendingTransfers()
 {
+    // Everything bound for the GS keeps its order: with a worker the data is copied and
+    // queued here, and the worker runs the same calls on its thread.
+    const auto gifSubmit = [this](std::vector<uint8_t> bytes)
+    {
+        if (m_gsWorker)
+            m_gsWorker->enqueue([this, bytes = std::move(bytes)]
+                                { submitGifPacket(GifPathId::Path3, bytes.data(), static_cast<uint32_t>(bytes.size()), false); });
+        else
+            submitGifPacket(GifPathId::Path3, bytes.data(), static_cast<uint32_t>(bytes.size()), false);
+    };
+    const auto vif1Submit = [this](std::vector<uint8_t> bytes)
+    {
+        if (m_gsWorker)
+            m_gsWorker->enqueue([this, bytes = std::move(bytes)]
+                                { processVIF1Data(bytes.data(), static_cast<uint32_t>(bytes.size())); });
+        else
+            processVIF1Data(bytes.data(), static_cast<uint32_t>(bytes.size()));
+    };
+    const auto drainGif = [this]
+    {
+        if (!m_gifArbiter)
+            return;
+        if (m_gsWorker)
+            m_gsWorker->enqueue([this] { m_gifArbiter->drain(); });
+        else
+            m_gifArbiter->drain();
+    };
     const bool hadGif = !m_pendingGifTransfers.empty();
     uint32_t observedGifQwc = 0u;
     for (const auto &transfer : m_pendingGifTransfers)
@@ -1832,7 +1872,7 @@ void PS2Memory::processPendingTransfers()
         {
             m_seenGifCopy = true;
             m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-            submitGifPacket(GifPathId::Path3, p.chainData.data(), static_cast<uint32_t>(p.chainData.size()), false);
+            gifSubmit(std::move(p.chainData));
         }
         else if (p.qwc > 0)
         {
@@ -1861,7 +1901,7 @@ void PS2Memory::processPendingTransfers()
                         break;
                     m_seenGifCopy = true;
                     m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-                    submitGifPacket(GifPathId::Path3, m_scratchpad + srcPhys, chunk, false);
+                    gifSubmit(std::vector<uint8_t>(m_scratchpad + srcPhys, m_scratchpad + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }
@@ -1880,7 +1920,7 @@ void PS2Memory::processPendingTransfers()
                         break;
                     m_seenGifCopy = true;
                     m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-                    submitGifPacket(GifPathId::Path3, m_rdram + srcPhys, chunk, false);
+                    gifSubmit(std::vector<uint8_t>(m_rdram + srcPhys, m_rdram + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }
@@ -1891,8 +1931,7 @@ void PS2Memory::processPendingTransfers()
     // A GIF DMA started before these VIF transfers reaches the GS first: the
     // arbiter would otherwise put the PATH1/PATH2 packets they produce ahead of
     // it, and geometry would sample textures that PATH3 had not uploaded yet.
-    if (m_gifArbiter)
-        m_gifArbiter->drain();
+    drainGif();
 
     const bool hadVif0 = !m_pendingVif0Transfers.empty();
     for (auto &p : m_pendingVif0Transfers)
@@ -1957,7 +1996,7 @@ void PS2Memory::processPendingTransfers()
     {
         if (!p.chainData.empty())
         {
-            processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
+            vif1Submit(std::move(p.chainData));
         }
         else if (p.qwc > 0)
         {
@@ -1984,7 +2023,7 @@ void PS2Memory::processPendingTransfers()
                         chunk = PS2_SCRATCHPAD_SIZE - srcPhys;
                     if (chunk == 0)
                         break;
-                    processVIF1Data(m_scratchpad + srcPhys, chunk);
+                    vif1Submit(std::vector<uint8_t>(m_scratchpad + srcPhys, m_scratchpad + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }
@@ -2001,7 +2040,7 @@ void PS2Memory::processPendingTransfers()
                         chunk = PS2_RAM_SIZE - srcPhys;
                     if (chunk == 0)
                         break;
-                    processVIF1Data(srcPhys, chunk);
+                    vif1Submit(std::vector<uint8_t>(m_rdram + srcPhys, m_rdram + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }
@@ -2010,8 +2049,7 @@ void PS2Memory::processPendingTransfers()
     }
     m_pendingVif1Transfers.clear();
 
-    if (m_gifArbiter)
-        m_gifArbiter->drain();
+    drainGif();
 
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000;
     static constexpr uint32_t VIF0_CHANNEL = 0x10008000;
@@ -2255,7 +2293,7 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
     // A GS that keeps the GIF path state takes the DMA data as it is.
     if (!m_rdram || !m_gsVRAM || m_path3Masked || m_gifPathsKeepTagState)
         return false;
-    if (m_gifArbiter && !m_gifArbiter->empty())
+    if (m_gsWorker || (m_gifArbiter && !m_gifArbiter->empty()))
         return false;
     if ((chcr & 0x100u) == 0u || ((chcr >> 2u) & 0x3u) != 1u)
         return false;
@@ -2448,7 +2486,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
     // A GS that keeps the GIF path state takes the DMA data as it is.
     if (!m_rdram || !m_gsVRAM || m_path3Masked || m_gifPathsKeepTagState)
         return false;
-    if (m_gifArbiter && !m_gifArbiter->empty())
+    if (m_gsWorker || (m_gifArbiter && !m_gifArbiter->empty()))
         return false;
     if ((chcr & 0x100u) == 0u || ((chcr >> 2u) & 0x3u) != 1u)
         return false;

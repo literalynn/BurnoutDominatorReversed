@@ -160,6 +160,8 @@ int main(int argc, char** argv) {
         std::cerr << settingsErrors;
         PS2Runtime runtime;
         runtime.setMissingFunctionPolicy(PS2Runtime::MissingFunctionPolicy::Stop);
+        const char* gsThread = std::getenv("BDR_GS_THREAD"); // BDR_GS_THREAD=0 overrides settings.ini
+        runtime.setGsThread(gsThread ? *gsThread != '0' : ps2x::hostSettings().gsThread);
         if (options.headless) {
             if (!runtime.memory().initialize() || !runtime.syncCoreSubsystems())
                 throw std::runtime_error("Memory/core initialization failed");

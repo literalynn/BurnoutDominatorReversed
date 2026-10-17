@@ -2,6 +2,7 @@
 // HLE kernel) written to one file and restored at a scheduler quiet point.
 #include "ps2_runtime.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/gs_worker.h"
 #include "runtime/ps2_ipu.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "ps2x/state_archive.h"
@@ -380,6 +381,9 @@ void EeScheduler::serialize(ps2x::StateArchive &archive)
 
 void PS2Runtime::serializeState(ps2x::StateArchive &archive)
 {
+    // The worker owns VIF1, VU1 and the GS: it must have run everything queued.
+    if (m_gsWorker)
+        m_gsWorker->sync();
     archive.tag("BDRS");
     m_memory.serialize(archive);
     m_gifArbiter.serialize(archive);

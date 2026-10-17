@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <cstring>
 #include <map>
 #include <string>
 #include <thread>
@@ -264,6 +265,23 @@ void Sampler::report() {
                     static_cast<unsigned long long>(displacement), lined ? line.FileName : "?",
                     lined ? static_cast<unsigned long>(line.LineNumber) : 0ul);
     }
+    // The hottest source lines, summed over every address that maps to them: this is
+    // where inlined code (the compiled VU programs) shows up.
+    std::map<std::string, uint32_t> perLine;
+    for (const auto& [address, count] : perAddress) {
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof(line);
+        DWORD lineDisplacement = 0;
+        if (symbols && SymGetLineFromAddr64(process, address, &lineDisplacement, &line)) {
+            const char* file = std::strrchr(line.FileName, '\\');
+            perLine[std::string(file ? file + 1 : line.FileName) + ":" + std::to_string(line.LineNumber)] += count;
+        }
+    }
+    std::vector<std::pair<std::string, uint32_t>> lines(perLine.begin(), perLine.end());
+    std::sort(lines.begin(), lines.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (size_t i = 0; i < std::min<size_t>(lines.size(), 40); ++i)
+        std::printf("[profile:line] %5.1f%% %7u  %s\n", 100.0 * lines[i].second / static_cast<double>(samples.size()),
+                    lines[i].second, lines[i].first.c_str());
     std::cout.flush();
     if (symbols)
         SymCleanup(process);

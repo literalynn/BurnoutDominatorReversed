@@ -74,6 +74,8 @@ namespace ps2x
             }
             if (key == "progressive_scan")
                 return parseBool(value, s.progressiveScan);
+            if (key == "gs_thread")
+                return parseBool(value, s.gsThread);
             if (key == "stick_deadzone")
             {
                 int percent = 0;
@@ -130,6 +132,9 @@ namespace ps2x
                 "# more GPU work. progressive_scan shows whole frames instead of interlaced fields (no line combing).\n"
                 "super_sampling = " << s.superSampling << "\n"
                 "progressive_scan = " << (s.progressiveScan ? "true" : "false") << "\n"
+                "\n"
+                "# gs_thread runs the PS2 graphics units (VIF1, VU1, GS) on a second CPU core.\n"
+                "gs_thread = " << (s.gsThread ? "true" : "false") << "\n"
                 "\n"
                 "# Gamepads: any Xbox, PlayStation 4/5 or SDL-compatible pad works next to the keyboard.\n"
                 "# stick_deadzone is a percentage. gamepad_mappings may name an extra gamecontrollerdb.txt file.\n"

@@ -277,6 +277,8 @@ inline void ps2TraceGuestRangeWrite(uint8_t *rdram,
     // TODO we dont need this anymore so on next release it will be deleted
 }
 
+class GsWorker;
+
 class PS2Runtime
 {
 public:
@@ -433,6 +435,12 @@ public:
     void drainCompletedDmacHandlers(uint8_t *rdram);
 
     void requestStop();
+    // VIF1, VU1 and GS submission on a second thread (settings.ini gs_thread); set before initialize().
+    void setGsThread(bool enabled) { m_gsThreadEnabled = enabled; }
+    bool gsWorkerActive() const { return m_gsWorker != nullptr; }
+    // At VBlankEnd: the frame the GS has at that point is presented with the display registers as
+    // they stand then (the game flips them in its VSync handler, between VBlankStart and VBlankEnd).
+    void queuePresentation();
     bool isStopRequested() const;
 
     // Served by the EE scheduler at the next point where the machine is quiet.
@@ -542,6 +550,8 @@ private:
     PS2Memory m_memory;
     GifArbiter m_gifArbiter;
     GS m_gs;
+    std::unique_ptr<GsWorker> m_gsWorker;
+    bool m_gsThreadEnabled = false;
     std::unique_ptr<PS2IopHostAdapter> m_iopHost;
     std::unique_ptr<ps2x::iop::IopSubsystem> m_iopSubsystem;
     PS2AudioBackend m_audioBackend;

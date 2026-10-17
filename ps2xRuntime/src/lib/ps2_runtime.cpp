@@ -9,6 +9,7 @@
 #include "runtime/gs/gs_parallel_backend.h"
 #endif
 #include "runtime/ee_scheduler.h"
+#include "runtime/gs_worker.h"
 #include "runtime/ps2_wait_stats.h"
 #include "runtime/ee_unwind.h"
 #include "ThreadNaming.h"
@@ -412,11 +413,13 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
     static bool s_hasUploadedFrame = false;
     static std::vector<uint8_t> s_scratch;
 
-    const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
+    const bool worker = rt->gsWorkerActive();
+    const uint64_t currentTick = worker ? rt->gs().presentationSerial() : rt->eeScheduler().currentVSyncTick();
     const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
     if (needsLatch)
     {
-        rt->gs().latchHostPresentationFrame();
+        if (!worker)
+            rt->gs().latchHostPresentationFrame();
         s_lastPresentationTick = currentTick;
         s_hasLatchedInitialFrame = true;
     }
@@ -541,6 +544,12 @@ PS2Runtime::~PS2Runtime()
     try
     {
         requestStop();
+        if (m_gsWorker)
+        {
+            m_gsWorker->stop();
+            m_memory.setGsWorker(nullptr);
+            m_gsWorker.reset();
+        }
         m_iopSubsystem.reset();
         m_iopHost.reset();
 #if defined(PLATFORM_VITA)
@@ -704,7 +713,9 @@ bool PS2Runtime::syncCoreSubsystems()
     m_memory.setGifArbiter(&m_gifArbiter);
     m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {
-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+                                     // shortcut: on the worker thread the EE context is not ours to read; the D/T
+                                     // enables come from the main context copy and the stop bits are not reported.
+                                     R5900Context *cpuContext = m_gsWorker || !m_eeScheduler ? nullptr : m_eeScheduler->currentContext();
                                      if (!cpuContext)
                                      {
                                          cpuContext = &m_cpuContext;
@@ -716,13 +727,15 @@ bool PS2Runtime::syncCoreSubsystems()
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
+                                     if (m_gsWorker)
+                                         return;
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
                                          (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
     m_memory.setVu1MscntCallback([this](uint32_t top, uint32_t itop)
                                  {
-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+                                     R5900Context *cpuContext = m_gsWorker || !m_eeScheduler ? nullptr : m_eeScheduler->currentContext();
                                      if (!cpuContext)
                                      {
                                          cpuContext = &m_cpuContext;
@@ -734,6 +747,8 @@ bool PS2Runtime::syncCoreSubsystems()
                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                   m_gs, &m_memory, top, itop, 65536);
+                                     if (m_gsWorker)
+                                         return;
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
@@ -741,6 +756,13 @@ bool PS2Runtime::syncCoreSubsystems()
     resetIop();
     m_vu0.reset();
     m_vu1.reset();
+    if (m_gsThreadEnabled && !m_gsWorker)
+    {
+        m_gsWorker = std::make_unique<GsWorker>();
+        m_gsWorker->start();
+        m_memory.setGsWorker(m_gsWorker.get());
+        std::cout << "[gs] VIF1, VU1 and GS submission run on a second thread" << std::endl;
+    }
 
     m_boundRdram = rdram;
     m_boundGSVram = gsVram;
@@ -2257,6 +2279,14 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
     drainCompletedDmacHandlers(rdram);
 }
 
+void PS2Runtime::queuePresentation()
+{
+    if (!m_gsWorker)
+        return;
+    m_gsWorker->enqueuePresent([this, request = m_gs.buildPresentationRequest()]
+                               { m_gs.latchHostPresentationFrame(request); });
+}
+
 void PS2Runtime::requestStop()
 {
     m_stopRequested.store(true, std::memory_order_relaxed);
@@ -2558,7 +2588,8 @@ bool PS2Runtime::dumpPresentationFrame(const std::filesystem::path &file)
     std::vector<uint8_t> pixels;
     uint32_t width = 0u;
     uint32_t height = 0u;
-    m_gs.latchHostPresentationFrame();
+    if (!gsWorkerActive())
+        m_gs.latchHostPresentationFrame();
     if (!m_gs.copyLatchedHostPresentationFrame(pixels, width, height) ||
         width == 0u || height == 0u ||
         pixels.size() < static_cast<size_t>(width) * height * 4u)

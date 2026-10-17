@@ -138,6 +138,10 @@ public:
     void setDebugHistoryPaused(bool paused);
     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
     void latchHostPresentationFrame();
+    void latchHostPresentationFrame(const GSPresentationRequest &request);
+    GSPresentationRequest buildPresentationRequest() const;
+    // Counts the latched presentations, for a reader that copies each new one.
+    uint64_t presentationSerial() const { return m_presentationSerial.load(std::memory_order_acquire); }
     bool copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
                                           uint32_t &outWidth,
                                           uint32_t &outHeight,
@@ -237,6 +241,7 @@ private:
     uint32_t m_hostPresentationSourceFbp = 0;
     bool m_hostPresentationUsedPreferred = false;
     bool m_hasHostPresentationFrame = false;
+    std::atomic<uint64_t> m_presentationSerial{0};
     uint64_t m_nativeImageUploadCount = 0;
     uint64_t m_nativePackedGIFPacketCount = 0;
 

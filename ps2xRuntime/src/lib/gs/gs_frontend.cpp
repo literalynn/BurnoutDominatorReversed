@@ -570,9 +570,19 @@ GSPresentationRequest GS::buildPresentationRequestUnlocked() const
     return request;
 }
 
+GSPresentationRequest GS::buildPresentationRequest() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    return buildPresentationRequestUnlocked();
+}
+
 void GS::latchHostPresentationFrame()
 {
-    GSPresentationRequest request{};
+    latchHostPresentationFrame(buildPresentationRequest());
+}
+
+void GS::latchHostPresentationFrame(const GSPresentationRequest &request)
+{
     {
         std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
         if (!m_backend || !m_privRegs)
@@ -583,7 +593,6 @@ void GS::latchHostPresentationFrame()
             m_hostPresentationWidth = m_hostPresentationHeight = 0u;
             return;
         }
-        request = buildPresentationRequestUnlocked();
     }
 
     PresentationFrame frame{};
@@ -613,6 +622,7 @@ void GS::latchHostPresentationFrame()
         m_hostPresentationSourceFbp = sourceFbp;
         m_hostPresentationUsedPreferred = usedPreferred;
         m_hasHostPresentationFrame = hasFrame;
+        m_presentationSerial.fetch_add(1u, std::memory_order_acq_rel);
     }
 
     if (hasFrame)

@@ -119,7 +119,18 @@ namespace
         VulkanDevice vulkan;
         mutable ParallelGS::GSInterface gs;
         GSRegisters &priv;
-        Vulkan::BufferHandle readback;
+        // Scan-out readbacks alternate between two buffers: Present queues this frame's copy and
+        // returns the previous frame, whose fence has usually signalled by then, so the GPU does
+        // not stall the thread that presents (the GS worker).
+        struct Readback
+        {
+            Vulkan::BufferHandle buffer;
+            Vulkan::Fence fence;
+            uint32_t width = 0, height = 0;
+            bool pending = false;
+        };
+        Readback readbacks[2];
+        unsigned readbackIndex = 0;
 
         struct Lock
         {
@@ -493,31 +504,43 @@ namespace
             const uint32_t height = scanout.image->get_height();
             const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
             auto &device = vulkan.device;
-            if (!readback || readback->get_create_info().size != bytes)
+            Readback &current = readbacks[readbackIndex];
+            if (current.pending)
+                current.fence->wait(); // the GPU is more than a frame behind
+            if (!current.buffer || current.buffer->get_create_info().size != bytes)
             {
                 Vulkan::BufferCreateInfo info{};
                 info.domain = Vulkan::BufferDomain::CachedHost;
                 info.size = bytes;
                 info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-                readback = device.create_buffer(info);
+                current.buffer = device.create_buffer(info);
             }
 
             auto cmd = device.request_command_buffer();
-            cmd->copy_image_to_buffer(*readback, *scanout.image, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
+            cmd->copy_image_to_buffer(*current.buffer, *scanout.image, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
                                       {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
             cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                          VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
-            Vulkan::Fence fence;
-            device.submit(cmd, &fence);
-            fence->wait();
+            current.fence = {};
+            device.submit(cmd, &current.fence);
+            current.width = width;
+            current.height = height;
+            current.pending = true;
+
+            // The previous frame, or this one when there is none yet.
+            Readback &previous = readbacks[readbackIndex ^ 1u];
+            Readback &ready = previous.pending ? previous : current;
+            readbackIndex ^= 1u;
+            ready.fence->wait();
+            ready.pending = false;
 
             PresentationFrame frame;
-            frame.width = width;
-            frame.height = height;
-            frame.pixels.resize(size_t(bytes));
-            const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*readback, Vulkan::MEMORY_ACCESS_READ_BIT));
+            frame.width = ready.width;
+            frame.height = ready.height;
+            frame.pixels.resize(size_t(ready.width) * ready.height * 4);
+            const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
             std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
-            device.unmap_host_buffer(*readback, Vulkan::MEMORY_ACCESS_READ_BIT);
+            device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
             for (size_t i = 3; i < frame.pixels.size(); i += 4)
                 frame.pixels[i] = 0xff; // Scanout alpha is not a display value.
             return frame;
