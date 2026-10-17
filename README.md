@@ -24,9 +24,10 @@ The game's MIPS R5900 code is translated to C++ with [PS2Recomp](https://github.
 | ✅ Races | cars, damage, reflections, traffic, HUD, crashes, results |
 | ✅ Memory card | profile created and saved after every event |
 | ✅ Save states | F5 / F7, the whole machine |
-| ✅ Gamepads | Xbox, PlayStation 4/5 and SDL-compatible pads, plus keyboard |
-| 🟡 Speed | about 25–30 frames per second of 50 in a race |
-| ⬜ Not yet checked | sound in races, steering with a real pad over a full event |
+| ✅ Gamepads | Xbox, PlayStation 4/5 (also through DS4Windows or DSX) and SDL-compatible pads, plus keyboard, all usable at any time |
+| 🟡 Speed | close to full speed in races on a fast PC (45–50 frames per second of 50); below that the game runs in slow motion |
+| 🟡 Known issues | occasional camera jumps, slow loading screens |
+| 🔴 Sound | the sound chip is emulated, but its output does not reach the speakers yet (in progress) |
 
 Details: [docs/STATUS.md](docs/STATUS.md).
 
@@ -110,7 +111,16 @@ The game itself runs at 50 Hz (PAL) or 60 Hz: pick it on the first screen.
 | [CHANGES](docs/CHANGES.md) | every change to the PS2Recomp snapshot |
 | [SDK_FUNCTIONS](docs/SDK_FUNCTIONS.md) · [FINDINGS](docs/FINDINGS.md) | reverse-engineering evidence |
 
-Contributions are welcome: read [CONTRIBUTING.md](CONTRIBUTING.md) first (no faked success, evidence for every SDK binding, every upstream change documented).
+## Help wanted
+
+Contributions are welcome, from code to bug reports. Where help matters most:
+
+- **Speed**: the VU1 microprograms dominate a race frame. They are compiled ahead of time by [`tools/compile_vu_programs.py`](tools/compile_vu_programs.py) into C++ that is cycle-accurate but far from lean.
+- **Sound**: the SPU2 ([`ps2xIOP/src/emulator/core/iop_spu2.cpp`](ps2xIOP/src/emulator/core/iop_spu2.cpp)) needs its host output, reverb and testing by ear.
+- **Linux and macOS**: builds, controllers, packaging.
+- **Bug reports**: what you saw, when, your hardware, and if you can a save state (F5) taken just before it.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first: no faked success, evidence for every SDK binding, every upstream change documented.
 
 ## Credits and license
 
