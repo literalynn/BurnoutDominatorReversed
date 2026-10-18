@@ -2819,6 +2819,9 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
     ps2x::startHostAudio([iop = m_iopSubsystem.get()](int16_t *frames, size_t count) { return iop ? iop->readAudio(frames, count) : size_t{0}; }, true);
 
     uint64_t tick = 0;
+    uint64_t drawnSerial = std::numeric_limits<uint64_t>::max();
+    auto lastDraw = std::chrono::steady_clock::time_point{};
+    bool resized = false;
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
     {
         PS2_IF_AGRESSIVE_LOGS({
@@ -2853,6 +2856,23 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
 
             }
         });
+        // Draw only when the game has a new frame (or the window changed, or every 100 ms),
+        // and otherwise just poll input. Presenting at the monitor's rate (500 Hz with vsync)
+        // made the OpenGL swap hold a driver lock that the GS worker's Vulkan submissions
+        // waited for: a race ran at 20 frames per second instead of 50.
+        const uint64_t serial = gsWorkerActive() ? m_gs.presentationSerial() : m_eeScheduler->currentVSyncTick();
+        const auto now = std::chrono::steady_clock::now();
+        resized = resized || IsWindowResized();
+        if (serial == drawnSerial && !resized && now - lastDraw < std::chrono::milliseconds(100))
+        {
+            PollInputEvents();
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        }
+        else
+        {
+        drawnSerial = serial;
+        lastDraw = now;
+        resized = false;
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
         UploadFrame(frameTex, this, presentWidth, presentHeight);
@@ -2882,6 +2902,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
             m_debugUiDrawCallback(*this, m_debugUiUserData);
         }
         EndDrawing();
+        }
 
         if (IsKeyPressed(KEY_F11) || (IsKeyPressed(KEY_ENTER) && (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT))))
         {

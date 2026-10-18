@@ -25,7 +25,7 @@ The game's MIPS R5900 code is translated to C++ with [PS2Recomp](https://github.
 | ✅ Memory card | profile created and saved after every event |
 | ✅ Save states | F5 / F7, the whole machine |
 | ✅ Gamepads | Xbox, PlayStation 4/5 (also through DS4Windows or DSX) and SDL-compatible pads, plus keyboard, all usable at any time |
-| 🟡 Speed | close to full speed in races on a fast PC (45–50 frames per second of 50); below that the game runs in slow motion |
+| ✅ Speed | full speed (50 frames per second) in races on a fast PC; a slower PC runs the game in slow motion rather than skipping frames |
 | 🟡 Known issues | occasional camera jumps, slow loading screens |
 | ✅ Sound | music, engines, crashes and menus through the emulated SPU2 (no reverb yet) |
 

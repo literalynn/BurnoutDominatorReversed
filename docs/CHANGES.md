@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The window no longer slows the game down (October 18, 2026)
+
+- `ps2_runtime.cpp`: the window loop drew and swapped buffers as fast as the display allowed, 500 times a second on a 500 Hz monitor with vsync. The OpenGL swap holds a lock in the graphics driver that the GS worker's Vulkan submissions also take, so the worker waited and a race ran at 20 frames per second in the window against 49 headless. The loop now draws only when the game has presented a new frame, the window was resized, or 100 ms passed, and otherwise polls input and sleeps half a millisecond. The same race runs at 49 frames per second of 50 in the window, with more than half of each frame left idle.
+
 ## Sound on the speakers (October 18, 2026)
 
 - `ps2xRuntime/include/runtime/host_audio.h`, `src/lib/host_audio.cpp` (new, listed in `ps2xRuntime/CMakeLists.txt`): the SPU2's output ring was filled but never read, so the game was silent. A raylib audio stream (48 kHz, 16-bit stereo) now pulls it from the audio thread and resamples it at the rate it is produced: the queue is kept about two VSyncs deep and the playback rate follows its depth (0.5 to 1.5), so a game running below full speed sounds slowed down instead of breaking up, and an empty queue fades out instead of clicking. `BDR_AUDIO_WAV=file` also writes everything pulled to a WAV file; headless runs drain the ring into it (`pumpHostAudio`). `PS2Runtime` starts it in `run`/`runHeadless` and stops it before the IOP goes away. The status line gains `spu[voices=N out=frames]`.
