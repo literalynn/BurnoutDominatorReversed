@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## F9 marks a glitch (October 18, 2026)
+
+- `ps2_runtime.cpp`: in the window, F9 writes `[mark] vsync N` and a status line to the log and saves the presented frame to `marks/mark_<vsync>.png` under the working directory, so that something seen while playing (a camera jump) can be located afterwards. `Play.bat` passes `--status-ms 5000`, so `run.log` has a status line every five seconds around it.
+
 ## Fast loading (October 18, 2026)
 
 - `ps2xRuntime/include/runtime/ee_idle_loops.h`, `Kernel/EeScheduler.cpp`, `ee_scheduler.h`: a fast-forward hook (`ps2x::setFastForwardCheck`). At every VBlank the scheduler measures the host time the frame worked (the time between VBlanks less the pacing and idle waits) as a fraction of the VBlank period, smoothed over eight frames; while the check says yes and that load is under one half (three quarters once fast-forwarding), it stops waiting for the host clock, in the pacing wait and in the idle wait, so emulated time runs as fast as the host allows. Fast-forwarded VBlanks restart the host schedule from the current time, or the schedule would run seconds ahead and the game would wait it out afterwards. Deterministic runs ignore the hook. The status line counts fast-forwarded VBlanks (`ff=`).

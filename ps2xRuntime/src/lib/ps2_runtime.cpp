@@ -2938,6 +2938,18 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
                 requestLoadState(options.stateFile);
             }
         }
+        // F9 marks the moment in the log, with a screenshot in marks/, so that a glitch seen
+        // while playing can be found again afterwards.
+        if (IsKeyPressed(KEY_F9))
+        {
+            const uint64_t vsync = m_eeScheduler->currentVSyncTick();
+            std::error_code ignored;
+            std::filesystem::create_directories("marks", ignored);
+            const std::filesystem::path shot = std::filesystem::path("marks") / ("mark_" + std::to_string(vsync) + ".png");
+            std::cout << "[mark] vsync " << vsync << ", screenshot " << shot.string() << std::endl;
+            printRunStatus(std::cout);
+            dumpPresentationFrame(shot);
+        }
         observer.poll(*this, result);
 
         if (WindowShouldClose())

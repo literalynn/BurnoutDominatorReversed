@@ -82,6 +82,7 @@ macOS is not verified yet.
 |---|---|
 | **F11** or **Alt+Enter** | full screen |
 | **F5** / **F7** | save / load state |
+| **F9** | mark a glitch: notes the moment in `<work>/local/logs/run.log` and saves a screenshot in `<work>/marks/` |
 
 ## Settings
 
