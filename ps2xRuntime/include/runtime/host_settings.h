@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <string>
 
@@ -23,9 +24,28 @@ namespace ps2x
         float stickDeadzone = 0.12f;
         bool vibration = true;       // the game's pad vibration on the host gamepad
         std::string gamepadMappings; // extra SDL_GameControllerDB mappings file
+        int volume = 100;            // sound volume in percent
+        bool showFps = false;        // frames per second in a corner of the window
+        // Keyboard and mouse controls: up to two inputs for each DualShock 2 button, in the
+        // order of padButtonNames(). An input is a raylib key code or kMouseInput + a raylib
+        // mouse button; 0 is none.
+        std::array<std::array<int, 2>, 16> keys = defaultKeys();
+
+        static std::array<std::array<int, 2>, 16> defaultKeys();
     };
 
+    constexpr int kMouseInput = 1000;
+
+    // The DualShock 2 buttons keys can be bound to: up, down, left, right, cross, circle,
+    // square, triangle, L1, R1, L2, R2, start, select, L3, R3.
+    const std::array<const char *, 16> &padButtonNames();
+    // "X", "LEFT_SHIFT", "MOUSE_LEFT"... and back; an unknown name is -1, "NONE" is 0.
+    std::string inputName(int input);
+    int inputFromName(const std::string &name);
+
     HostSettings &hostSettings();
+    // The file the settings were loaded from (or written to first), for saving changes.
+    const std::filesystem::path &hostSettingsFile();
 
     // Applies the keys of an existing file; errors lists malformed or unknown lines.
     bool loadHostSettings(const std::filesystem::path &path, std::string &errors);

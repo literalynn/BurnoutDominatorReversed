@@ -21,6 +21,8 @@
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "runtime/host_audio.h"
+#include "runtime/settings_menu.h"
+#include "runtime/run_marks.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/host_settings.h"
 
@@ -2290,6 +2292,22 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
     drainCompletedDmacHandlers(rdram);
 }
 
+namespace
+{
+    std::atomic<ps2x::MarkListener> g_markListener{nullptr};
+}
+
+void ps2x::setMarkListener(ps2x::MarkListener listener)
+{
+    g_markListener.store(listener, std::memory_order_release);
+}
+
+void ps2x::notifyMark(uint64_t vsync)
+{
+    if (const ps2x::MarkListener listener = g_markListener.load(std::memory_order_acquire))
+        listener(vsync);
+}
+
 void PS2Runtime::queuePresentation()
 {
     if (!m_gsWorker)
@@ -2493,13 +2511,13 @@ namespace
     // (the scheduler also wants the frames mostly idle). settings.ini fast_loading.
     bool silentForHalfASecond()
     {
-        return g_fastLoadingIop && g_fastLoadingIop->silentAudioFrames() >= 24000u;
+        return ps2x::hostSettings().fastLoading && g_fastLoadingIop && g_fastLoadingIop->silentAudioFrames() >= 24000u;
     }
 
     void enableFastLoading(ps2x::iop::IopSubsystem *iop)
     {
-        g_fastLoadingIop = ps2x::hostSettings().fastLoading ? iop : nullptr;
-        ps2x::setFastForwardCheck(g_fastLoadingIop ? &silentForHalfASecond : nullptr);
+        g_fastLoadingIop = iop;
+        ps2x::setFastForwardCheck(iop ? &silentForHalfASecond : nullptr);
     }
 
     // Time limit, periodic status lines and framebuffer dumps shared by the
@@ -2850,6 +2868,16 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
 
     uint64_t tick = 0;
     uint64_t drawnSerial = std::numeric_limits<uint64_t>::max();
+    uint64_t framesShown = 0;
+    // Gaps between the last frames shown, printed with an F9 mark; a frame late by more than
+    // two VSyncs is also reported (one line a second at most).
+    std::array<float, 150> frameGaps{};
+    auto lastFrameTime = std::chrono::steady_clock::now();
+    auto lastHitchLine = lastFrameTime;
+    uint32_t hitchesSinceLine = 0;
+    float worstHitch = 0.0f;
+    bool pausedSinceFrame = false;
+    bool smoothScaling = ps2x::hostSettings().smoothScaling;
     auto lastDraw = std::chrono::steady_clock::time_point{};
     bool resized = false;
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
@@ -2890,22 +2918,52 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         // and otherwise just poll input. Presenting at the monitor's rate (500 Hz with vsync)
         // made the OpenGL swap hold a driver lock that the GS worker's Vulkan submissions
         // waited for: a race ran at 20 frames per second instead of 50.
+        // F1: the settings menu, which pauses the game and is drawn at about 60 Hz.
+        ps2x::updateSettingsMenu();
+        const bool menu = ps2x::settingsMenuOpen();
         const uint64_t serial = gsWorkerActive() ? m_gs.presentationSerial() : m_eeScheduler->currentVSyncTick();
         const auto now = std::chrono::steady_clock::now();
         resized = resized || IsWindowResized();
-        if (serial == drawnSerial && !resized && now - lastDraw < std::chrono::milliseconds(100))
+        if (serial == drawnSerial && !resized && now - lastDraw < std::chrono::milliseconds(menu ? 16 : 100))
         {
             PollInputEvents();
             std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
         else
         {
+        if (serial != drawnSerial)
+        {
+            ++framesShown;
+            const float gap = std::chrono::duration<float, std::milli>(now - lastFrameTime).count();
+            lastFrameTime = now;
+            frameGaps[framesShown % frameGaps.size()] = gap;
+            if (gap > 45.0f && framesShown > 2 && !pausedSinceFrame)
+            {
+                ++hitchesSinceLine;
+                worstHitch = std::max(worstHitch, gap);
+            }
+            if (hitchesSinceLine != 0u && now - lastHitchLine >= std::chrono::seconds(1))
+            {
+                std::printf("[hitch] vsync %llu: %u frame(s) shown late since the last line, worst %.0f ms after the previous\n",
+                            static_cast<unsigned long long>(m_eeScheduler->currentVSyncTick()), hitchesSinceLine, worstHitch);
+                lastHitchLine = now;
+                hitchesSinceLine = 0;
+                worstHitch = 0.0f;
+            }
+            pausedSinceFrame = menu;
+        }
+        pausedSinceFrame = pausedSinceFrame || menu;
         drawnSerial = serial;
         lastDraw = now;
         resized = false;
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
         UploadFrame(frameTex, this, presentWidth, presentHeight);
+        if (smoothScaling != ps2x::hostSettings().smoothScaling)
+        {
+            smoothScaling = ps2x::hostSettings().smoothScaling;
+            SetTextureFilter(frameTex, smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
+        }
 
         BeginDrawing();
         ClearBackground(BLACK);
@@ -2927,6 +2985,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
             dstWidth,
             dstHeight};
         DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        ps2x::drawSettingsOverlay(framesShown);
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {
             m_debugUiDrawCallback(*this, m_debugUiUserData);
@@ -2938,7 +2997,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         {
             ToggleBorderlessWindowed();
         }
-        if (!options.stateFile.empty())
+        if (!options.stateFile.empty() && !menu)
         {
             if (IsKeyPressed(KEY_F5))
             {
@@ -2960,6 +3019,13 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
             std::cout << "[mark] vsync " << vsync << ", screenshot " << shot.string() << std::endl;
             printRunStatus(std::cout);
             dumpPresentationFrame(shot);
+            std::ostringstream gaps;
+            gaps << "[mark] gaps between the last " << std::min<uint64_t>(framesShown, frameGaps.size()) << " frames shown (ms, oldest first):";
+            for (size_t i = 1; i <= frameGaps.size(); ++i)
+                if (framesShown >= frameGaps.size() || i > frameGaps.size() - framesShown)
+                    gaps << ' ' << int(frameGaps[(framesShown + i) % frameGaps.size()] + 0.5f);
+            std::cout << gaps.str() << std::endl;
+            ps2x::notifyMark(vsync);
         }
         observer.poll(*this, result);
 

@@ -2,6 +2,7 @@
 #include "ps2_host_backend.h"
 #include "runtime/gamepad_rumble.h"
 #include "runtime/host_settings.h"
+#include "runtime/settings_menu.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -183,35 +184,25 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         stick(pad.rx, pad.ry, data[4], data[5]);
     }
 
+    // Keyboard and mouse, as bound in settings.ini (padButtonNames() order); not while the
+    // settings menu has them.
+    if (!ps2x::settingsMenuCapturesInput())
     {
-        if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
-            clearBit(PAD_UP);
-        if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S))
-            clearBit(PAD_DOWN);
-        if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))
-            clearBit(PAD_LEFT);
-        if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D))
-            clearBit(PAD_RIGHT);
-        if (IsKeyDown(KEY_X) || IsKeyDown(KEY_SPACE))
-            clearBit(PAD_CROSS);
-        if (IsKeyDown(KEY_C) || IsKeyDown(KEY_ESCAPE))
-            clearBit(PAD_CIRCLE);
-        if (IsKeyDown(KEY_Z) || IsKeyDown(KEY_KP_0))
-            clearBit(PAD_SQUARE);
-        if (IsKeyDown(KEY_V) || IsKeyDown(KEY_KP_1))
-            clearBit(PAD_TRIANGLE);
-        if (IsKeyDown(KEY_Q))
-            clearBit(PAD_L1);
-        if (IsKeyDown(KEY_E))
-            clearBit(PAD_R1);
-        if (IsKeyDown(KEY_LEFT_SHIFT))
-            clearBit(PAD_L2);
-        if (IsKeyDown(KEY_RIGHT_SHIFT))
-            clearBit(PAD_R2);
-        if (IsKeyDown(KEY_ENTER) && !IsKeyDown(KEY_LEFT_ALT) && !IsKeyDown(KEY_RIGHT_ALT))
-            clearBit(PAD_START);
-        if (IsKeyDown(KEY_TAB))
-            clearBit(PAD_SELECT);
+        static constexpr uint16_t kMasks[16] = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_CROSS, PAD_CIRCLE,
+                                                PAD_SQUARE, PAD_TRIANGLE, PAD_L1, PAD_R1, PAD_L2, PAD_R2,
+                                                PAD_START, PAD_SELECT, PAD_L3, PAD_R3};
+        const bool alt = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+        const auto &keys = ps2x::hostSettings().keys;
+        for (size_t button = 0; button < keys.size(); ++button)
+            for (const int input : keys[button])
+            {
+                const bool down = input >= ps2x::kMouseInput ? IsMouseButtonDown(input - ps2x::kMouseInput)
+                                  : input == KEY_ENTER       ? IsKeyDown(input) && !alt // Alt+Enter: full screen
+                                  : input > 0                ? IsKeyDown(input)
+                                                             : false;
+                if (down)
+                    clearBit(kMasks[button]);
+            }
     }
 
     data[2] = static_cast<uint8_t>(btns & 0xFF);

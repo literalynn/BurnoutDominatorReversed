@@ -78,15 +78,18 @@ macOS is not verified yet.
 | Start · Select | Enter · Tab | Start · Back |
 | Analog sticks | — | sticks |
 
+Keyboard and mouse buttons can be changed in the settings menu (**F1**), two per PS2 button.
+
 | Key | Action |
 |---|---|
+| **F1** | settings menu (the game pauses): volume, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
 | **F11** or **Alt+Enter** | full screen |
 | **F5** / **F7** | save / load state |
 | **F9** | mark a glitch: notes the moment in `<work>/local/logs/run.log` and saves a screenshot in `<work>/marks/` |
 
 ## Settings
 
-The first launch writes **`settings.ini`** next to `Play.bat`:
+The first launch writes **`settings.ini`** next to `Play.bat`; the F1 menu changes it too:
 
 | Setting | Default | |
 |---|---|---|
@@ -101,6 +104,9 @@ The first launch writes **`settings.ini`** next to `Play.bat`:
 | `stick_deadzone` | 12 | percent |
 | `vibration` | true | the game's pad vibration on your gamepad |
 | `gamepad_mappings` | — | extra `gamecontrollerdb.txt` |
+| `volume` | 100 | percent |
+| `show_fps` | false | frames per second in the corner |
+| `key_cross`, `key_l1`... | see Controls | up to two keys or mouse buttons (`MOUSE_LEFT`, `MOUSE_RIGHT`...) per button, or `NONE` |
 
 The game itself runs at 50 Hz (PAL) or 60 Hz: pick it on the first screen.
 

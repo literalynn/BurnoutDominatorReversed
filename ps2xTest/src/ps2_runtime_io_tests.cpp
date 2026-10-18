@@ -725,6 +725,9 @@ void register_ps2_runtime_io_tests()
             const ps2x::HostSettings saved = settings;
             settings.superSampling = 8;
             settings.aspect = "16:9";
+            settings.volume = 40;
+            settings.keys[4] = {ps2x::kMouseInput, 'J'};
+            settings.keys[12] = {0, 0};
             t.IsTrue(ps2x::writeHostSettings(path), "defaults are written");
             settings = ps2x::HostSettings{};
             std::string errors;
@@ -732,14 +735,23 @@ void register_ps2_runtime_io_tests()
             t.Equals(errors, std::string(), "the written file has no bad line");
             t.Equals(settings.superSampling, 8, "super_sampling round-trips");
             t.Equals(settings.aspect, std::string("16:9"), "aspect round-trips");
+            t.Equals(settings.volume, 40, "volume round-trips");
+            t.Equals(settings.keys[4][0], ps2x::kMouseInput, "a mouse button binding round-trips");
+            t.Equals(settings.keys[4][1], int('J'), "a key binding round-trips");
+            t.Equals(settings.keys[12][0], 0, "an unbound button round-trips");
+            t.Equals(settings.keys[0][0], 265, "the default bindings are written");
             {
                 std::ofstream file(path);
-                file << "window_width = 2560  # QHD\nsuper_sampling = 3\nunknown = 1\nfullscreen = yes\n";
+                file << "window_width = 2560  # QHD\nsuper_sampling = 3\nunknown = 1\nfullscreen = yes\n"
+                        "key_l1 = F2 mouse_right\nkey_r1 = NOPE\n";
             }
             errors.clear();
             t.IsTrue(ps2x::loadHostSettings(path, errors), "the edited file loads");
             t.Equals(settings.windowWidth, 2560, "comments after a value are ignored");
             t.IsTrue(settings.fullscreen, "yes is true");
+            t.Equals(settings.keys[8][0], 291, "F2 is read");
+            t.Equals(settings.keys[8][1], ps2x::kMouseInput + 1, "input names ignore case");
+            t.IsTrue(errors.find(":6:") != std::string::npos, "an unknown input name is reported");
             t.Equals(settings.superSampling, 8, "an invalid sample count is ignored");
             t.IsTrue(errors.find(":2:") != std::string::npos && errors.find(":3:") != std::string::npos,
                      "bad and unknown lines are reported");

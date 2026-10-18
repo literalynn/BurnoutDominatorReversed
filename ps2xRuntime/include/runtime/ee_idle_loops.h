@@ -23,4 +23,9 @@ namespace ps2x
     using FastForwardCheck = bool (*)();
     void setFastForwardCheck(FastForwardCheck check);
     FastForwardCheck fastForwardCheck();
+
+    // While paused (the settings menu is open) the game thread stops between guest time
+    // slices, so the EE, the IOP and the sound stand still.
+    void setEmulationPaused(bool paused);
+    bool emulationPaused();
 }

@@ -3,9 +3,12 @@
 #include "ps2_runtime.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/run_marks.h"
 #include "runtime/host_settings.h"
 
+#include <algorithm>
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -162,17 +165,29 @@ class CameraWatch {
 public:
     CameraWatch(PS2Runtime& runtime, bool windowed) : m_runtime(runtime) {
         const char* value = std::getenv("BDR_CAMERA_WATCH");
-        if (value ? (*value && *value != '0') : windowed)
+        if (value ? (*value && *value != '0') : windowed) {
+            s_instance = this;
+            ps2x::setMarkListener([](uint64_t) { if (s_instance) s_instance->printHistory(); });
             m_thread = std::thread([this] { run(); });
+        }
     }
     ~CameraWatch() {
         m_stop = true;
         if (m_thread.joinable())
             m_thread.join();
+        ps2x::setMarkListener(nullptr);
+        s_instance = nullptr;
     }
 
 private:
     struct Vec { float x, y, z; };
+    // One game frame as the watch saw it: when the camera or the car moved.
+    struct Sample {
+        float ms;
+        uint32_t vsync;
+        Vec camera, car;
+    };
+
     Vec read(uint32_t address) const {
         Vec v{};
         std::memcpy(&v, m_runtime.memory().getRDRAM() + address, sizeof(v));
@@ -181,7 +196,24 @@ private:
     static float distance(const Vec& a, const Vec& b) {
         return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
     }
+
+    // F9: the last three seconds of camera and car positions, a line per game frame.
+    void printHistory() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const size_t count = std::min(m_count, m_history.size());
+        std::printf("[mark] camera history, %zu frames (ms since the first, vsync, camera, car, camera to car):\n", count);
+        for (size_t i = 0; i < count; ++i) {
+            const Sample& sample = m_history[(m_count - count + i) % m_history.size()];
+            std::printf("[mark-cam] %.1f %u cam %.2f %.2f %.2f car %.2f %.2f %.2f dist %.2f\n",
+                        sample.ms - m_history[(m_count - count) % m_history.size()].ms, sample.vsync, sample.camera.x,
+                        sample.camera.y, sample.camera.z, sample.car.x, sample.car.y, sample.car.z,
+                        distance(sample.camera, sample.car));
+        }
+        std::fflush(stdout);
+    }
+
     void run() {
+        const auto start = std::chrono::steady_clock::now();
         Vec camera = read(0x43EE10u), car = read(0x43ED30u);
         while (!m_stop) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -189,7 +221,13 @@ private:
             const float cameraStep = distance(camera, nextCamera), carStep = distance(car, nextCar);
             if (cameraStep == 0.0f && carStep == 0.0f)
                 continue;
+            const auto now = std::chrono::steady_clock::now();
             const auto vsync = static_cast<unsigned long long>(m_runtime.eeScheduler().currentVSyncTick());
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_history[m_count++ % m_history.size()] =
+                    Sample{std::chrono::duration<float, std::milli>(now - start).count(), uint32_t(vsync), nextCamera, nextCar};
+            }
             if (std::isfinite(cameraStep) && cameraStep > 4.0f && cameraStep > 3.0f * carStep + 2.0f)
                 std::printf("[camjump] vsync=%llu camera (%.1f %.1f %.1f) -> (%.1f %.1f %.1f) moved %.1f, car %.1f\n", vsync,
                             camera.x, camera.y, camera.z, nextCamera.x, nextCamera.y, nextCamera.z, cameraStep, carStep);
@@ -200,8 +238,12 @@ private:
         }
     }
 
+    static inline CameraWatch* s_instance = nullptr;
     PS2Runtime& m_runtime;
     std::atomic<bool> m_stop{false};
+    std::mutex m_mutex;
+    std::array<Sample, 150> m_history{};
+    size_t m_count = 0;
     std::thread m_thread;
 };
 } // namespace

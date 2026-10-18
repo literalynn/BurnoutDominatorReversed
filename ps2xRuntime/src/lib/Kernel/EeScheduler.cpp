@@ -15,6 +15,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 namespace
 {
@@ -296,6 +297,10 @@ void EeScheduler::run()
 
     while (!m_stopRequested.load(std::memory_order_acquire))
     {
+        // Paused between slices, where a state save also stops; the VBlank schedule
+        // restarts from the clock afterwards (at most one period behind).
+        while (ps2x::emulationPaused() && !m_stopRequested.load(std::memory_order_acquire))
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         if (m_runtime.m_stateRequestPending.load(std::memory_order_acquire))
         {
             // The native stack is unwound here: all guest state is in thread contexts and memory.
@@ -2508,6 +2513,21 @@ namespace ps2x
     FastForwardCheck fastForwardCheck()
     {
         return g_fastForwardCheck.load(std::memory_order_acquire);
+    }
+
+    namespace
+    {
+        std::atomic<bool> g_paused{false};
+    }
+
+    void setEmulationPaused(bool paused)
+    {
+        g_paused.store(paused, std::memory_order_release);
+    }
+
+    bool emulationPaused()
+    {
+        return g_paused.load(std::memory_order_acquire);
     }
 }
 

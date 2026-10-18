@@ -1,4 +1,5 @@
 #include "runtime/host_audio.h"
+#include "runtime/host_settings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -114,6 +115,7 @@ namespace
         const double rate = ps2x::hostAudioRateFor(state.level);
         state.stats.rate = rate;
         const int16_t *in = state.queue.data() + state.head * 2u;
+        const int volume = std::clamp(ps2x::hostSettings().volume, 0, 100);
         for (unsigned int i = 0; i < frames; ++i)
         {
             const size_t index = size_t(state.position);
@@ -134,8 +136,8 @@ namespace
                 for (int c = 0; c < 2; ++c)
                     state.last[c] = int16_t(state.last[c] * 31 / 32);
             }
-            out[i * 2u] = state.last[0];
-            out[i * 2u + 1u] = state.last[1];
+            out[i * 2u] = int16_t(state.last[0] * volume / 100);
+            out[i * 2u + 1u] = int16_t(state.last[1] * volume / 100);
         }
         const size_t consumed = std::min(size_t(state.position), available > 0u ? available - 1u : 0u);
         state.head += consumed;
