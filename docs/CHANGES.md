@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Fast loading (October 18, 2026)
+
+- `ps2xRuntime/include/runtime/ee_idle_loops.h`, `Kernel/EeScheduler.cpp`, `ee_scheduler.h`: a fast-forward hook (`ps2x::setFastForwardCheck`). At every VBlank the scheduler measures the host time the frame worked (the time between VBlanks less the pacing and idle waits) as a fraction of the VBlank period, smoothed over eight frames; while the check says yes and that load is under one half (three quarters once fast-forwarding), it stops waiting for the host clock, in the pacing wait and in the idle wait, so emulated time runs as fast as the host allows. Fast-forwarded VBlanks restart the host schedule from the current time, or the schedule would run seconds ahead and the game would wait it out afterwards. Deterministic runs ignore the hook. The status line counts fast-forwarded VBlanks (`ff=`).
+- `ps2_runtime.cpp` registers the check when `settings.ini` `fast_loading` is on (the default): the SPU2 output has been exactly silent for half a second (`Spu2::silentFrames`, `IopSubsystem::silentAudioFrames`). Burnout's loading screens are silent and leave three quarters of each frame idle while the IOP streams the data; the loading before a race went from 7.5 s to 2 s, and the boot to the first menu saves about 15 s. Races and menus play sound and are never fast-forwarded.
+
 ## The window no longer slows the game down (October 18, 2026)
 
 - `ps2_runtime.cpp`: the window loop drew and swapped buffers as fast as the display allowed, 500 times a second on a 500 Hz monitor with vsync. The OpenGL swap holds a lock in the graphics driver that the GS worker's Vulkan submissions also take, so the worker waited and a race ran at 20 frames per second in the window against 49 headless. The loop now draws only when the game has presented a new frame, the window was resized, or 100 ms passed, and otherwise polls input and sleeps half a millisecond. The same race runs at 49 frames per second of 50 in the window, with more than half of each frame left idle.

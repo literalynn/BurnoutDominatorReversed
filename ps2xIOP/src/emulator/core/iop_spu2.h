@@ -102,6 +102,8 @@ namespace ps2x::iop::detail
         // ring drops its oldest frames when the consumer is slower than the emulation.
         size_t readAudio(int16_t *destination, size_t frames);
         [[nodiscard]] uint64_t producedFrames() const noexcept { return m_producedFrames; }
+        // Output frames in a row that were exactly silent, up to the last one mixed.
+        [[nodiscard]] uint64_t silentFrames() const noexcept { return m_silentFrames; }
 
         // Introspection for tests and diagnostics.
         [[nodiscard]] uint16_t soundRam(uint32_t wordAddress) const noexcept { return m_ram[wordAddress & RamMask]; }
@@ -202,5 +204,6 @@ namespace ps2x::iop::detail
         size_t m_audioHead = 0;       // next frame to read
         size_t m_audioCount = 0;      // frames stored
         uint64_t m_producedFrames = 0;
+        uint64_t m_silentFrames = 0; // host-side observation, not saved
     };
 }

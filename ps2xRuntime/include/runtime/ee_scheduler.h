@@ -468,6 +468,19 @@ private:
     uint64_t m_invocationSequence = 0;
     uint64_t m_vsyncTick = 0;
     std::atomic<bool> m_palVideoTiming{false};
+    // Fast-forward (ps2x::setFastForwardCheck): host pacing is skipped while the check says so
+    // and the frames' work fills less than half of a VBlank period. EE thread only.
+    void updateFastForward();
+    bool m_fastForward = false;
+    double m_frameLoad = 0.0; // host time spent working per VBlank period, smoothed
+    std::chrono::steady_clock::time_point m_lastVBlankHost{};
+    std::chrono::steady_clock::duration m_waitedSinceVBlank{};
+    std::atomic<uint64_t> m_fastForwardVBlanks{0};
+
+public:
+    [[nodiscard]] uint64_t fastForwardVBlanks() const noexcept { return m_fastForwardVBlanks.load(std::memory_order_relaxed); }
+
+private:
     uint32_t m_vsyncFlagAddress = 0;
     uint32_t m_vsyncTickAddress = 0;
     uint32_t m_gsVSyncCallback = 0;

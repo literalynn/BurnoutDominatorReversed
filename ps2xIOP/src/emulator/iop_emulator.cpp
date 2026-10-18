@@ -1188,6 +1188,11 @@ namespace ps2x::iop::detail
         return m_impl->memory.spu().activeVoices();
     }
 
+    uint64_t IopEmulator::silentAudioFrames() const noexcept
+    {
+        return m_impl->memory.spu().silentFrames();
+    }
+
     uint32_t IopEmulator::loadedModuleCount() const noexcept
     {
         return static_cast<uint32_t>(m_impl->modules.size());

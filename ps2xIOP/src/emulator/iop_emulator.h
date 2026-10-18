@@ -54,6 +54,7 @@ namespace ps2x::iop::detail
         size_t readAudio(int16_t *destination, size_t frames);
         [[nodiscard]] uint64_t audioFramesProduced() const noexcept;
         [[nodiscard]] uint32_t activeAudioVoices() const noexcept;
+        [[nodiscard]] uint64_t silentAudioFrames() const noexcept;
         [[nodiscard]] uint32_t loadedModuleCount() const noexcept;
         [[nodiscard]] uint32_t threadCount() const noexcept;
         [[nodiscard]] uint32_t rpcServerCount() const noexcept;

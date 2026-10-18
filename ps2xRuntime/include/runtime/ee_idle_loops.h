@@ -15,4 +15,12 @@ namespace ps2x
 
     void registerIdleLoop(uint32_t pc, IdleCheck idle);
     IdleCheck idleLoopAt(uint32_t pc);
+
+    // Fast-forward: while this says yes (a loading screen, for instance) and the frames leave
+    // most of each VBlank period idle, the scheduler stops waiting for the host clock, so the
+    // emulated time runs as fast as the host allows. Checked once per VBlank on the EE thread;
+    // deterministic runs ignore it.
+    using FastForwardCheck = bool (*)();
+    void setFastForwardCheck(FastForwardCheck check);
+    FastForwardCheck fastForwardCheck();
 }

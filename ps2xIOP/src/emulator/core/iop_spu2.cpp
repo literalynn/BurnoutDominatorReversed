@@ -706,6 +706,7 @@ namespace ps2x::iop::detail
 
         const int16_t left = static_cast<int16_t>(clamp16(output[0]));
         const int16_t right = static_cast<int16_t>(clamp16(output[1]));
+        m_silentFrames = (left == 0 && right == 0) ? m_silentFrames + 1u : 0u;
         std::lock_guard<std::mutex> lock(m_audioMutex);
         if (m_audioCount == kAudioCapacityFrames)
         {

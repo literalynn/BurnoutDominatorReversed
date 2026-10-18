@@ -2092,12 +2092,13 @@ void EeScheduler::processDueDeadlines()
                 return;
             }
 
-            if (!deterministicTiming() && now < pacingDeadline)
+            if (!deterministicTiming() && !m_fastForward && now < pacingDeadline)
             {
                 ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::EePacing);
                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                      { return !m_events.empty() ||
                                               m_stopRequested.load(std::memory_order_acquire); });
+                m_waitedSinceVBlank += std::chrono::steady_clock::now() - now;
                 if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
                 {
                     updateNextDeadline();
@@ -2109,7 +2110,7 @@ void EeScheduler::processDueDeadlines()
             auto firstFuture = std::partition(m_deadlines.begin(), m_deadlines.end(),
                                               [this, pacedNow](const ScheduledEvent &item)
                                               { return item.deadlineCycle <= m_eeCycle &&
-                                                       (deterministicTiming() || item.hostDeadline <= pacedNow); });
+                                                       (deterministicTiming() || m_fastForward || item.hostDeadline <= pacedNow); });
             due.insert(due.end(),
                        std::make_move_iterator(m_deadlines.begin()),
                        std::make_move_iterator(firstFuture));
@@ -2142,15 +2143,19 @@ void EeScheduler::processDueDeadlines()
         {
             if (scheduled.event.type == EeEventType::VBlankStart)
             {
+                updateFastForward();
+                // Fast-forwarded VBlanks fire before their host deadline: the schedule restarts
+                // from now, or it would run seconds ahead and the game would wait them out.
+                const auto hostNow = std::chrono::steady_clock::now();
                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
-                              scheduled.hostDeadline + kVBlankDuration,
+                              std::min(scheduled.hostDeadline, hostNow) + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
                 const bool pal = m_palVideoTiming.load(std::memory_order_relaxed);
                 const auto period = pal ? kPalVBlankPeriod : kVBlankPeriod;
                 // After a host stall the schedule would sit far behind the clock and VBlanks
                 // would fire in a burst until it caught up, so the game stepped several
                 // frames at once (the car and camera jumped). Let it lag one period at most.
-                const auto base = std::max(scheduled.hostDeadline, std::chrono::steady_clock::now() - period);
+                const auto base = std::clamp(scheduled.hostDeadline, hostNow - period, hostNow);
                 scheduleEvent(scheduled.deadlineCycle + (pal ? kPalVBlankPeriodCycles : kVBlankPeriodCycles),
                               base + period,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
@@ -2352,11 +2357,15 @@ void EeScheduler::waitForEvent()
         }
     }
 
-    const bool signaled = deterministicTiming()
+    const bool skipHostWait = deterministicTiming() || m_fastForward;
+    const auto waitStart = std::chrono::steady_clock::now();
+    const bool signaled = skipHostWait
                               ? (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
                               : m_eventCv.wait_until(lock, hostDeadline, [this]()
                                                      { return !m_events.empty() ||
                                                               m_stopRequested.load(std::memory_order_acquire); });
+    if (!skipHostWait)
+        m_waitedSinceVBlank += std::chrono::steady_clock::now() - waitStart;
     if (!signaled)
     {
         const uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;
@@ -2485,4 +2494,43 @@ namespace ps2x
                 return g_idleLoops[i].second;
         return nullptr;
     }
+
+    namespace
+    {
+        std::atomic<FastForwardCheck> g_fastForwardCheck{nullptr};
+    }
+
+    void setFastForwardCheck(FastForwardCheck check)
+    {
+        g_fastForwardCheck.store(check, std::memory_order_release);
+    }
+
+    FastForwardCheck fastForwardCheck()
+    {
+        return g_fastForwardCheck.load(std::memory_order_acquire);
+    }
+}
+
+void EeScheduler::updateFastForward()
+{
+    if (deterministicTiming())
+        return;
+    // Work per frame: the host time between two VBlanks less what was spent waiting for the
+    // host clock (pacing) or for an event while every thread slept.
+    const auto now = std::chrono::steady_clock::now();
+    const auto period = m_palVideoTiming.load(std::memory_order_relaxed) ? kPalVBlankPeriod : kVBlankPeriod;
+    if (m_lastVBlankHost != std::chrono::steady_clock::time_point{})
+    {
+        const auto worked = (now - m_lastVBlankHost) - m_waitedSinceVBlank;
+        const double load = std::clamp(std::chrono::duration<double>(worked).count() /
+                                           std::chrono::duration<double>(period).count(),
+                                       0.0, 4.0);
+        m_frameLoad += (load - m_frameLoad) * 0.125;
+    }
+    m_lastVBlankHost = now;
+    m_waitedSinceVBlank = {};
+    const ps2x::FastForwardCheck check = ps2x::fastForwardCheck();
+    m_fastForward = check && check() && m_frameLoad < (m_fastForward ? 0.75 : 0.5);
+    if (m_fastForward)
+        m_fastForwardVBlanks.fetch_add(1u, std::memory_order_relaxed);
 }

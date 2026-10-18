@@ -192,6 +192,11 @@ namespace ps2x::iop
         return m_impl->emulator.activeAudioVoices();
     }
 
+    uint64_t IopSubsystem::silentAudioFrames() const noexcept
+    {
+        return m_impl->emulator.silentAudioFrames();
+    }
+
     RpcAbi IopSubsystem::selectRpcAbi(const RpcAbiRequest &request) const
     {
         for (const auto &service : m_impl->coreServices)

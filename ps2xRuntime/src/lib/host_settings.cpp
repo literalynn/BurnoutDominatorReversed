@@ -76,6 +76,8 @@ namespace ps2x
                 return parseBool(value, s.progressiveScan);
             if (key == "gs_thread")
                 return parseBool(value, s.gsThread);
+            if (key == "fast_loading")
+                return parseBool(value, s.fastLoading);
             if (key == "stick_deadzone")
             {
                 int percent = 0;
@@ -135,6 +137,8 @@ namespace ps2x
                 "\n"
                 "# gs_thread runs the PS2 graphics units (VIF1, VU1, GS) on a second CPU core.\n"
                 "gs_thread = " << (s.gsThread ? "true" : "false") << "\n"
+                "# fast_loading runs loading screens (silent, mostly idle) faster than real time.\n"
+                "fast_loading = " << (s.fastLoading ? "true" : "false") << "\n"
                 "\n"
                 "# Gamepads: any Xbox, PlayStation 4/5 or SDL-compatible pad works next to the keyboard.\n"
                 "# stick_deadzone is a percentage. gamepad_mappings may name an extra gamecontrollerdb.txt file.\n"

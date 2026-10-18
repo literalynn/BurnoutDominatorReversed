@@ -42,6 +42,8 @@ namespace ps2x::iop
         size_t readAudio(int16_t *destination, size_t frames);
         [[nodiscard]] uint64_t audioFramesProduced() const noexcept;
         [[nodiscard]] uint32_t activeAudioVoices() const noexcept;
+        // Output frames in a row that were exactly silent (48 000 a second).
+        [[nodiscard]] uint64_t silentAudioFrames() const noexcept;
 
         [[nodiscard]] RpcAbi selectRpcAbi(const RpcAbiRequest &request) const;
         [[nodiscard]] bool canBindRpc(uint32_t sid) const noexcept;

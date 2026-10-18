@@ -26,7 +26,7 @@ The game's MIPS R5900 code is translated to C++ with [PS2Recomp](https://github.
 | ✅ Save states | F5 / F7, the whole machine |
 | ✅ Gamepads | Xbox, PlayStation 4/5 (also through DS4Windows or DSX) and SDL-compatible pads, plus keyboard, all usable at any time |
 | ✅ Speed | full speed (50 frames per second) in races on a fast PC; a slower PC runs the game in slow motion rather than skipping frames |
-| 🟡 Known issues | occasional camera jumps, slow loading screens |
+| 🟡 Known issues | occasional camera jumps |
 | ✅ Sound | music, engines, crashes and menus through the emulated SPU2 (no reverb yet) |
 
 Details: [docs/STATUS.md](docs/STATUS.md).
@@ -96,6 +96,7 @@ The first launch writes **`settings.ini`** next to `Play.bat`:
 | `smooth_scaling` | true | bilinear enlargement |
 | `super_sampling` | 4 | anti-aliasing: 1, 2, 4, 8 or 16 samples per pixel |
 | `progressive_scan` | true | whole frames, no interlacing lines |
+| `fast_loading` | true | loading screens run faster than real time |
 | `stick_deadzone` | 12 | percent |
 | `gamepad_mappings` | — | extra `gamecontrollerdb.txt` |
 
