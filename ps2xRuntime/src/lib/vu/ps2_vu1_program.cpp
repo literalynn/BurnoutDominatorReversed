@@ -241,17 +241,70 @@ void Run::exactUpper(uint32_t upper)
     ps2_vu_detail::upper::computeUpper(upper, inputs, m_upper);
 }
 
-bool Run::progressKick(uint32_t cycle, uint32_t nextPc)
+bool Run::advanceKick(uint32_t cycle, uint32_t nextPc)
 {
-    // A GIF callback sees the PC and clock the interpreter would show here.
-    m_state.pc = nextPc;
-    m_state.cycles = m_base + cycle;
-    Access::progressXgkick(m_vu);
+    if (cycle > m_kickCycle)
+    {
+        // A GIF callback sees the PC and clock the interpreter would show here.
+        m_state.pc = nextPc;
+        m_state.cycles = m_base + cycle;
+        // progressXgkick adds one cycle's credit, the interpreter's step.
+        Access::xgkick(m_vu).cycleCredit += cycle - m_kickCycle - 1u;
+        m_kickCycle = cycle;
+        Access::progressXgkick(m_vu);
+    }
     if (Access::xgkickActive(m_vu))
+    {
+        scheduleKick();
         return true;
+    }
     if (Access::codeGeneration(m_vu) != m_generation)
         m_stale = true;
     return false;
+}
+
+void Run::scheduleKick()
+{
+    // Walk the GIF tags still to come in VU memory as it is now, as
+    // progressXgkick will read them: one qword every two cycles.
+    const Access::Xgkick &kick = Access::xgkick(m_vu);
+    const uint32_t limit = Access::Xgkick::kBufferSize;
+    uint32_t end = kick.currentTagEnd;
+    bool eop = kick.currentTagEop;
+    while (end == 0u || !eop)
+    {
+        const uint32_t offset = end == 0u ? kick.copiedBytes : end;
+        if (offset > limit - 16u)
+            break;
+        uint64_t tagLo = 0;
+        std::memcpy(&tagLo, m_data + ((kick.sourceAddress + offset) & m_dataMask), sizeof(tagLo));
+        const uint64_t nloop = tagLo & 0x7FFFu;
+        const uint32_t format = static_cast<uint32_t>((tagLo >> 58) & 0x3u);
+        const uint64_t nreg = ((tagLo >> 60) & 0xFu) == 0u ? 16u : (tagLo >> 60) & 0xFu;
+        uint64_t bytes = 16u;
+        if (format == 0u)
+            bytes += nloop * nreg * 16u;
+        else if (format == 1u)
+            bytes += ((nloop * nreg + 1u) & ~1ull) * 8u;
+        else
+            bytes += nloop * 16u;
+        if (bytes > limit - offset)
+            break;
+        end = offset + static_cast<uint32_t>(bytes);
+        eop = ((tagLo >> 15) & 1u) != 0u;
+    }
+    if (end == 0u || !eop)
+    {
+        // A packet progressXgkick will refuse: go cycle by cycle, as it does.
+        m_kickDue = m_kickCycle + 1u;
+        m_kickEnd = limit;
+        return;
+    }
+    // Each call adds a credit and copies a qword per two: the last one is due when
+    // the credits reach twice the qwords left.
+    const uint32_t needed = 2u * ((end - kick.copiedBytes) / 16u);
+    m_kickDue = m_kickCycle + (needed > kick.cycleCredit ? needed - kick.cycleCredit : 1u);
+    m_kickEnd = end;
 }
 
 Run::Clock Run::stall(uint32_t cycle, uint32_t target, uint32_t pc, bool untilIdle)
@@ -259,9 +312,11 @@ Run::Clock Run::stall(uint32_t cycle, uint32_t target, uint32_t pc, bool untilId
     bool kicking = true;
     while (cycle < target || (untilIdle && kicking))
     {
-        ++cycle;
-        if (kicking)
-            kicking = progressKick(cycle, pc);
+        // Nothing happens between the target and PATH1's next due cycle.
+        const uint32_t goal = kicking ? std::min(m_kickDue, untilIdle ? std::max(target, m_kickDue) : target) : target;
+        cycle = std::max(cycle + 1u, goal);
+        if (kicking && cycle >= m_kickDue)
+            kicking = advanceKick(cycle, pc);
     }
     return {cycle, kicking};
 }
@@ -394,6 +449,9 @@ void Run::commitP(uint32_t cycle)
 
 void Run::handBack()
 {
+    // The interpreter steps PATH1 from its clock on.
+    if (m_kickActive)
+        m_kickActive = advanceKick(m_cycle, m_state.pc);
     m_flagHead = commitQ(m_flagHead, m_flagTail, m_cycle);
     commitP(m_cycle);
     m_flagHead = commitFlags(m_flagHead, m_flagTail, m_cycle);

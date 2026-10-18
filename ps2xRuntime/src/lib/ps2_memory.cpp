@@ -5,6 +5,8 @@
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -2229,6 +2231,18 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
 {
     if (!data || sizeBytes < 16)
         return;
+    // BDR_GIF_HASH=1: a running hash of every GIF packet, printed every 2^18 packets. Two builds
+    // that must draw the same thing print the same lines for the same deterministic run.
+    static const bool hashPackets = std::getenv("BDR_GIF_HASH") != nullptr;
+    if (hashPackets)
+    {
+        static uint64_t hash = 1469598103934665603ull, packets = 0;
+        hash = (hash ^ static_cast<uint64_t>(pathId)) * 1099511628211ull;
+        for (uint32_t i = 0; i < sizeBytes; ++i)
+            hash = (hash ^ data[i]) * 1099511628211ull;
+        if ((++packets & 0x3FFFFu) == 0u)
+            std::printf("[gifhash] packets %llu hash %016llx\n", (unsigned long long)packets, (unsigned long long)hash);
+    }
 
     if (pathId == GifPathId::Path3)
     {

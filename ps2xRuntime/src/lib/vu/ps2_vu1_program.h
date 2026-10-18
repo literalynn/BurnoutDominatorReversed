@@ -108,6 +108,8 @@ struct Access
     static bool xgkickActive(const VU1Interpreter &vu) { return vu.m_xgkick.active; }
     static void startXgkick(VU1Interpreter &vu, uint32_t address) { vu.startXgkick(address); }
     static void progressXgkick(VU1Interpreter &vu) { vu.progressXgkick(); }
+    using Xgkick = VU1Interpreter::XgkickPipeline;
+    static Xgkick &xgkick(VU1Interpreter &vu) { return vu.m_xgkick; }
     static ScalarEntry &fdiv(VU1Interpreter &vu) { return vu.m_fdiv; }
     static std::array<ScalarEntry, 2> &efu(VU1Interpreter &vu) { return vu.m_efu; }
     static uint64_t efuResourceReady(const VU1Interpreter &vu) { return vu.m_efuResourceReady; }
@@ -465,7 +467,18 @@ private:
     // near the range limits; it leaves its result in m_upper.
     void exactUpper(uint32_t upper);
     Clock stall(uint32_t cycle, uint32_t target, uint32_t pc, bool untilIdle);
-    bool progressKick(uint32_t cycle, uint32_t nextPc);
+    // PATH1 runs behind the clock: its copy of VU memory catches up when it can
+    // finish (m_kickDue), before a store into the part it still has to read and
+    // when the run hands back. Until then nothing can tell it lags.
+    bool advanceKick(uint32_t cycle, uint32_t nextPc);
+    void scheduleKick();
+    // Whether a store at this VU address lands in what PATH1 has yet to read.
+    bool kickReads(uint32_t address)
+    {
+        const Access::Xgkick &kick = Access::xgkick(m_vu);
+        const uint32_t ahead = m_kickEnd - kick.copiedBytes;
+        return ahead > m_dataMask || ((address - kick.sourceAddress - kick.copiedBytes) & m_dataMask) < ahead;
+    }
     PendingFlags *commitFlags(PendingFlags *head, PendingFlags *tail, uint32_t upTo);
     FlagRange makeRoom(PendingFlags *head, PendingFlags *tail, uint32_t cycle);
     void cancelSameCycle(PendingFlags *head, PendingFlags *tail, uint32_t cycle, uint32_t writes);
@@ -502,6 +515,9 @@ private:
     int32_t m_backupValue = 0;
     uint32_t m_backupReg = 0u;
     bool m_kickActive = false;
+    uint32_t m_kickCycle = 0u; // the cycle PATH1 has caught up to
+    uint32_t m_kickDue = 0u;   // the cycle it finishes, as VU memory stands
+    uint32_t m_kickEnd = 0u;   // the packet's end then, in bytes from its start
     bool m_stale = false;
     bool m_finished = false;
     bool m_ended = false;
@@ -655,10 +671,16 @@ private:
     template <uint8_t Dest>
     PS2_VU_FORCE_INLINE void store(uint32_t addr, const uint32_t *words)
     {
+        // PATH1 copies what it has to read so far first, and plans again after.
+        const bool ahead = m_kickActive && m_run.kickReads(addr);
+        if (ahead) [[unlikely]]
+            m_kickActive = m_run.advanceKick(m_cycle, m_state.pc);
         uint32_t lanes[4];
         std::memcpy(lanes, m_data + addr, sizeof(lanes));
         applyLanes<Dest>(lanes, words);
         std::memcpy(m_data + addr, lanes, sizeof(lanes));
+        if (ahead && m_kickActive) [[unlikely]]
+            m_run.scheduleKick();
     }
 
     template <uint8_t Dest, uint8_t Reg>
@@ -820,7 +842,7 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
     // Only the last step depends on the clock, which keeps its chain short.
     const uint32_t ready = pairReady<Lower, Upper, Settled>();
     const bool kicking = m_kickActive;
-    if (kicking) [[unlikely]]
+    if (kicking && (kick || ready > m_cycle)) [[unlikely]]
     {
         const Run::Clock clock = m_run.stall(m_cycle, ready, Pc, kick);
         m_cycle = clock.cycle;
@@ -896,8 +918,8 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
     ++m_cycle;
     if (kicking || m_kickActive) [[unlikely]]
     {
-        if (m_kickActive)
-            m_kickActive = m_run.progressKick(m_cycle, nextPc);
+        if (m_kickActive && m_cycle >= m_run.m_kickDue)
+            m_kickActive = m_run.advanceKick(m_cycle, nextPc);
         if (m_run.m_stale)
             return stale<Pc, Lower, Upper>(nextPc);
     }
@@ -1565,6 +1587,11 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
             syncClock();
             Access::startXgkick(m_run.m_vu, static_cast<uint16_t>(m_state.vi[viS]));
             m_kickActive = Access::xgkickActive(m_run.m_vu);
+            if (m_kickActive)
+            {
+                m_run.m_kickCycle = m_cycle;
+                m_run.scheduleKick();
+            }
         }
         else if constexpr (special >= 0x70u && special <= 0x7Eu && special != 0x77u) // EFU; 0x77 is unassigned
         {
