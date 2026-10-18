@@ -23,7 +23,6 @@ namespace
         RowVolume,
         RowResolution,
         RowAntiAliasing,
-        RowHudSmoothing,
         RowAspect,
         RowFps,
         RowFullscreen,
@@ -118,7 +117,6 @@ namespace
         case RowVolume: return "Sound volume";
         case RowResolution: return "Resolution";
         case RowAntiAliasing: return "Anti-aliasing";
-        case RowHudSmoothing: return "HUD anti-aliasing";
         case RowAspect: return "Picture shape";
         case RowFps: return "Show FPS";
         case RowFullscreen: return "Full screen (F11)";
@@ -162,7 +160,6 @@ namespace
             const bool supersampling = resolutionScale(s) == 1 && s.superSampling >= 8;
             return supersampling ? (s.fxaa ? "Supersampling + FXAA" : "Supersampling") : (s.fxaa ? "FXAA" : "Off");
         }
-        case RowHudSmoothing: return onOff(s.hudSmoothing);
         case RowAspect: return s.aspect == "stretch" ? "Stretch" : s.aspect;
         case RowFps: return onOff(s.showFps);
         case RowFullscreen: return onOff(IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
@@ -206,9 +203,7 @@ namespace
                 s.superSampling = next >= 2 ? 8 : 4;
             break;
         }
-        case RowHudSmoothing:
-            s.hudSmoothing = !s.hudSmoothing;
-            break;
+
         case RowAspect:
         {
             static const char *kShapes[] = {"4:3", "16:9", "stretch"};

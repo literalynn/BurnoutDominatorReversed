@@ -82,7 +82,7 @@ The mouse works in the menus: wheel to move, left click to select, right click t
 
 | Key | Action |
 |---|---|
-| **F1** | settings menu (the game pauses): volume, resolution, anti-aliasing, HUD anti-aliasing, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
+| **F1** | settings menu (the game pauses): volume, resolution, anti-aliasing, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
 | **Escape** | back in the menus; in a race, asks whether to quit (so does the window's close button) |
 | **F11** or **Alt+Enter** | full screen |
 | **F5** / **F7** | save / load state |
