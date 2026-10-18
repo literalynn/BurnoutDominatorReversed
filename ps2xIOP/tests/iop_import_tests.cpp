@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -195,6 +196,20 @@ namespace
         if (!expect(sio2Packet(memory, 0u, poll) == expected, "pressure poll returns sticks and pressures") ||
             !expect(memory.controller(0u).motors()[0] == 0x40u && memory.controller(0u).motors()[1] == 0x01u,
                     "poll bytes 3 and 4 drive the motors"))
+            return false;
+        // Mapped motors (0x4D: byte 3 the small motor, byte 4 the large one) reach the host once per change.
+        std::vector<std::tuple<uint32_t, bool, uint8_t>> rumble;
+        memory.setMotorSink([&](uint32_t port, bool small, uint8_t large) { rumble.emplace_back(port, small, large); });
+        sio2Packet(memory, 0u, {0x01, 0x43, 0, 1, 0});
+        sio2Packet(memory, 0u, {0x01, 0x4D, 0, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF});
+        sio2Packet(memory, 0u, {0x01, 0x43, 0, 0, 0, 0, 0, 0, 0});
+        poll[3] = 0x01;
+        poll[4] = 0x80;
+        rumble.clear();
+        sio2Packet(memory, 0u, poll);
+        sio2Packet(memory, 0u, poll);
+        if (!expect(rumble.size() == 1u && rumble[0] == std::make_tuple(0u, true, uint8_t{0x80}),
+                    "mapped motor speeds reach the host once per change"))
             return false;
         // Port 1 stays empty: it answers 0xFF and RECV1 flags it.
         memory.write32(0xBF808200u, (3u << 18) | (3u << 8) | 0u);

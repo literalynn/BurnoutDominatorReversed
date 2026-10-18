@@ -74,6 +74,7 @@ public:
 
     int32_t memoryCard(const ps2x::iop::MemoryCardRequest &request) override;
     bool readControllerPad(uint32_t port, ps2x::iop::ControllerPadState &state) override;
+    void setControllerMotors(uint32_t port, bool small, uint8_t large) override;
 
     bool hasGuestFunction(uint32_t address) const override;
     bool invokeGuestFunction(uint64_t callToken,

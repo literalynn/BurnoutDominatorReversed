@@ -37,6 +37,19 @@ namespace ps2x::iop::detail
         m_configAtStart = m_config;
     }
 
+    DualShock2::MotorSpeeds DualShock2::motorSpeeds() const noexcept
+    {
+        MotorSpeeds speeds;
+        for (size_t i = 0; i < m_motors.size(); ++i)
+        {
+            if (m_motorMap[i] == 0x00u)
+                speeds.small = speeds.small || m_motors[i] != 0u;
+            else if (m_motorMap[i] == 0x01u)
+                speeds.large = m_motors[i];
+        }
+        return speeds;
+    }
+
     uint8_t DualShock2::pressure(uint32_t buttonBit) const noexcept
     {
         return (m_input.buttons & (1u << buttonBit)) == 0u ? 0xFFu : 0x00u;

@@ -1,4 +1,5 @@
 #include "ps2_iop_host.h"
+#include "runtime/gamepad_rumble.h"
 
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
@@ -457,6 +458,19 @@ namespace
         }
         return presses;
     }
+}
+
+void PS2IopHostAdapter::setControllerMotors(uint32_t port, bool small, uint8_t large)
+{
+    if (port != 0u)
+        return;
+    static bool reported = false;
+    if (!reported && (small || large != 0u))
+    {
+        reported = true;
+        std::cerr << "[pad] the game started the vibration motors" << std::endl;
+    }
+    ps2x::setGamepadRumble(small, large);
 }
 
 bool PS2IopHostAdapter::readControllerPad(uint32_t port, ps2x::iop::ControllerPadState &state)

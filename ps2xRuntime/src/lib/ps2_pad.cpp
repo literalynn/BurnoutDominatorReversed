@@ -1,5 +1,6 @@
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
+#include "runtime/gamepad_rumble.h"
 #include "runtime/host_settings.h"
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,8 @@ namespace
     };
 
 #if defined(PS2X_HAS_SDL2)
+    SDL_GameController *g_controller = nullptr;
+
     // SDL2 game controllers: Xbox, PlayStation 3/4/5, Switch and the SDL_GameControllerDB
     // pads, over USB or Bluetooth, with or without Steam. Opened and pumped by the thread
     // that reads the pad.
@@ -65,7 +68,7 @@ namespace
                 SDL_GameControllerAddMappingsFromFile(ps2x::hostSettings().gamepadMappings.c_str());
             return true;
         }();
-        static SDL_GameController *controller = nullptr;
+        SDL_GameController *&controller = g_controller;
         if (!ready)
             return false;
         SDL_GameControllerUpdate();
@@ -214,4 +217,19 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     data[2] = static_cast<uint8_t>(btns & 0xFF);
     data[3] = static_cast<uint8_t>(btns >> 8);
     return true;
+}
+
+void ps2x::setGamepadRumble(bool small, uint8_t large)
+{
+#if defined(PS2X_HAS_SDL2)
+    if (!g_controller || !ps2x::hostSettings().vibration)
+        return;
+    // The game sets the motors when they change; a long duration keeps them running until then.
+    const Uint16 low = static_cast<Uint16>(large * 257u);
+    const Uint16 high = small ? 0xFFFFu : 0u;
+    SDL_GameControllerRumble(g_controller, low, high, low || high ? 10000u : 0u);
+#else
+    (void)small;
+    (void)large;
+#endif
 }

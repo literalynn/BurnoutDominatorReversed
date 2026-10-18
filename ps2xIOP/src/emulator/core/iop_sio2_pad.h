@@ -32,6 +32,15 @@ namespace ps2x::iop::detail
         [[nodiscard]] uint8_t mode() const noexcept { return m_mode; }
         [[nodiscard]] bool inConfig() const noexcept { return m_config; }
         [[nodiscard]] std::array<uint8_t, 2> motors() const noexcept { return m_motors; }
+        // What the motors do after the last poll, through the mapping set with command 0x4D:
+        // the small motor is on or off, the large one runs at 0-255.
+        struct MotorSpeeds
+        {
+            bool small = false;
+            uint8_t large = 0u;
+            bool operator==(const MotorSpeeds &) const = default;
+        };
+        [[nodiscard]] MotorSpeeds motorSpeeds() const noexcept;
 
     private:
         [[nodiscard]] uint8_t poll(uint32_t position, uint8_t command, bool driveMotors) noexcept;

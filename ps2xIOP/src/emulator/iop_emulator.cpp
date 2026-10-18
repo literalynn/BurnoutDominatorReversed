@@ -120,6 +120,8 @@ namespace ps2x::iop::detail
             reset();
             // The SPU2 asserts IOP interrupt 9 when a voice or a transfer reaches its IRQ address.
             memory.setSio2IrqCallback([this] { pendingDmaInterrupts[17] = totalCycles + 64u; });
+            memory.setMotorSink([this](uint32_t port, bool small, uint8_t large)
+                                { host.setControllerMotors(port, small, large); });
             memory.setControllerSource([this](uint32_t port, ControllerPadState &state)
                                        { return host.readControllerPad(port, state); });
             static const bool traceSio2 = []

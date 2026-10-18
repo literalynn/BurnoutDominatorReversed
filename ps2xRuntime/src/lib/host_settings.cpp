@@ -78,6 +78,8 @@ namespace ps2x
                 return parseBool(value, s.gsThread);
             if (key == "fast_loading")
                 return parseBool(value, s.fastLoading);
+            if (key == "vibration")
+                return parseBool(value, s.vibration);
             if (key == "stick_deadzone")
             {
                 int percent = 0;
@@ -143,7 +145,9 @@ namespace ps2x
                 "# Gamepads: any Xbox, PlayStation 4/5 or SDL-compatible pad works next to the keyboard.\n"
                 "# stick_deadzone is a percentage. gamepad_mappings may name an extra gamecontrollerdb.txt file.\n"
                 "stick_deadzone = " << int(s.stickDeadzone * 100.0f + 0.5f) << "\n"
-                "gamepad_mappings = " << s.gamepadMappings << "\n";
+                "gamepad_mappings = " << s.gamepadMappings << "\n"
+                "# vibration passes the game's pad vibration on to the gamepad.\n"
+                "vibration = " << (s.vibration ? "true" : "false") << "\n";
         return static_cast<bool>(file);
     }
 }

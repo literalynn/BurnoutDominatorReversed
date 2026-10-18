@@ -90,6 +90,11 @@ namespace ps2x::iop::detail
         [[nodiscard]] Spu2 &spu() const noexcept { return m_spu; }
         void setSio2IrqCallback(std::function<void()> callback) { m_sio2Irq = std::move(callback); }
         // Reads the controller on a SIO2 port; false leaves the port empty.
+        // Told when the motors of the pad in a port change speed (small on/off, large 0-255).
+        void setMotorSink(std::function<void(uint32_t, bool, uint8_t)> sink)
+        {
+            m_motorSink = std::move(sink);
+        }
         void setControllerSource(std::function<bool(uint32_t, ControllerPadState &)> source)
         {
             m_controllerSource = std::move(source);
@@ -133,6 +138,8 @@ namespace ps2x::iop::detail
         bool m_sio2PadPacket = false;
         std::array<DualShock2, 2> m_pads{};
         std::function<bool(uint32_t, ControllerPadState &)> m_controllerSource;
+        std::function<void(uint32_t, bool, uint8_t)> m_motorSink;
+        std::array<DualShock2::MotorSpeeds, 2> m_reportedMotors{};
         std::function<void(uint32_t, const std::vector<uint8_t> &, const std::vector<uint8_t> &)> m_sio2Trace;
         std::vector<uint8_t> m_sio2Sent;
         std::vector<uint8_t> m_sio2Received;

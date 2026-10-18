@@ -350,6 +350,15 @@ namespace ps2x::iop::detail
                     }
                     if (++m_sio2InputCount == length)
                     {
+                        if (m_sio2PadPacket && m_motorSink)
+                        {
+                            const DualShock2::MotorSpeeds speeds = m_pads[port].motorSpeeds();
+                            if (!(speeds == m_reportedMotors[port]))
+                            {
+                                m_reportedMotors[port] = speeds;
+                                m_motorSink(port, speeds.small, speeds.large);
+                            }
+                        }
                         m_sio2Ports |= 1u << port;
                         if (!m_sio2PadPacket)
                             m_sio2Missing |= 1u << port;

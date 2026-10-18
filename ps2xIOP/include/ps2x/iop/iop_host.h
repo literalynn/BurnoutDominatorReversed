@@ -131,6 +131,15 @@ namespace ps2x::iop
             return false;
         }
 
+        // The game changed the vibration of the pad in a port: small motor on or off,
+        // large motor 0-255.
+        virtual void setControllerMotors(uint32_t port, bool small, uint8_t large)
+        {
+            (void)port;
+            (void)small;
+            (void)large;
+        }
+
         virtual bool hasGuestFunction(uint32_t address) const = 0;
         virtual bool invokeGuestFunction(uint64_t callToken,
                                          uint32_t address,
