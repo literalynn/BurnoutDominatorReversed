@@ -100,7 +100,7 @@ The first launch writes **`settings.ini`** next to `Play.bat`; the F1 menu chang
 | `aspect` | 4:3 | `4:3`, `16:9` (with in-game widescreen) or `stretch` |
 | `smooth_scaling` | true | bilinear enlargement |
 | `super_sampling` | 4 | samples per pixel: 1, 2, 4, 8 or 16 |
-| `high_resolution` | true | 1280x1024 instead of the PS2's 640x512 (needs 4 samples or more; 8 and 16 smooth the edges) |
+| `high_resolution` | true | a higher resolution built from the samples: 2x the PS2's (1280 pixels wide) with 4 or 8 samples, 4x (2560) with 16 |
 | `progressive_scan` | true | whole frames, no interlacing lines |
 | `fast_loading` | true | loading screens run faster than real time |
 | `stick_deadzone` | 12 | percent |

@@ -19,7 +19,7 @@ namespace ps2x
         bool smoothScaling = true; // bilinear filtering when the image is enlarged
         int superSampling = 4;     // paraLLEl-GS SSAA: 1, 2, 4, 8 or 16
         bool progressiveScan = true; // whole frames instead of interlaced fields (no line combing)
-        bool highResolution = true;  // twice the PS2 resolution from the super samples (needs 4 or more)
+        bool highResolution = true;  // 2x the PS2 resolution from 4 or 8 samples a pixel, 4x from 16
         bool gsThread = true;        // VIF1, VU1 and GS submission on a second thread
         bool fastLoading = true;     // run faster than real time while the game is silent and idle
         float stickDeadzone = 0.12f;

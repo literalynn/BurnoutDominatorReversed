@@ -128,7 +128,8 @@ namespace
         }
     }
 
-    // Resolution presets: 640x512 at one sample, then 1280x1024 from 4, 8 or 16 samples a pixel.
+    // Resolution presets: the PS2's 640 pixels wide at one sample, twice that from 4 or 8
+    // samples a pixel, four times from 16.
     constexpr int kPresetSamples[] = {1, 4, 8, 16};
 
     int resolutionPreset(const ps2x::HostSettings &s)
@@ -146,8 +147,8 @@ namespace
         case RowVolume: return std::to_string(s.volume) + "%";
         case RowResolution:
         {
-            const int preset = resolutionPreset(s);
-            return preset == 0 ? "640x512 (PS2)" : preset == 1 ? "1280x1024" : "1280x1024, " + std::to_string(s.superSampling) + "x AA";
+            static const char *kLabels[] = {"PS2 (1x)", "2x, about 1080p", "2x, smoother edges", "4x, about 4K"};
+            return kLabels[resolutionPreset(s)];
         }
         case RowAspect: return s.aspect == "stretch" ? "Stretch" : s.aspect;
         case RowFps: return onOff(s.showFps);
