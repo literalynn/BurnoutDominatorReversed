@@ -6,7 +6,7 @@
 #include "runtime/ee_scheduler.h"
 #include "runtime/run_marks.h"
 #include "runtime/settings_menu.h"
-#include "runtime/pad_injection.h"
+#include "runtime/ee_unwind.h"
 #include "runtime/host_settings.h"
 
 #include <algorithm>
@@ -165,12 +165,63 @@ int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
 // and 0x43ED30 the player car's (followed over consecutive race frames). Sampled every 2 ms
 // from the host; a camera that moves much further than the car between two samples is
 // reported, and so is a car that jumps (a reset after a crash).
-// The game asks 50 or 60 Hz at boot (page su_frequency: 50Hz highlighted, then 60Hz, 60Hz
-// TEST). With settings.ini refresh_rate 60 or 50 the runner answers for the player, pressing
-// down then cross (or cross), as the player would, while the window keeps the previous frame.
+// The game asks 50 or 60 Hz at boot (front-end page SU_Frequency). With settings.ini
+// refresh_rate 60 or 50 the page is skipped: the runner does what the page's SetFrequency native
+// (0x18B700) does for the chosen rate, then goes to the page that follows it, SU_Movie.
 // 0x1838A8 is the page manager's go-to-page (a0 = manager 0x43A6D0, a1 = page name), called by
-// the GoToPage native 0x1893C0; the hook only reads the name and calls it.
+// the GoToPage native 0x1893C0.
+//
+// The steps are guest calls made from native code. The EE scheduler may stop one of them
+// midway and later resume the guest code alone, without this native frame; so each step returns
+// to a continuation registered in a free function-table slot, and whichever way a step ends,
+// the continuation runs the next one.
 PS2Runtime::RecompiledFunction g_goToPage = nullptr;
+uint32_t g_continuation = 0; // guest address of continueFrequencySkip
+
+struct FrequencySkip {
+    int step = 0;
+    uint32_t mode = 0;      // 0 = 60 Hz, 2 = 50 Hz (PAL)
+    __m128i a0, a1, ra;     // the go-to-page call being completed
+} g_skip;
+
+void setArg(R5900Context* ctx, int reg, uint32_t value) {
+    ctx->r[reg] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(value)));
+}
+
+// Calls a guest function returning to the continuation; false if the scheduler stopped it.
+bool callGuest(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t function, uint32_t a0, uint32_t a1) {
+    setArg(ctx, 4, a0);
+    setArg(ctx, 5, a1);
+    setArg(ctx, 31, g_continuation);
+    ctx->pc = function;
+    runtime->lookupFunction(function)(rdram, ctx, runtime);
+    return ctx->pc == g_continuation && !ps2_ee_unwind::g_returningToScheduler;
+}
+
+void continueFrequencySkip(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    for (;;) {
+        const int step = g_skip.step++;
+        bool finished = true;
+        if (step == 0) // the video mode and the flag at 0x432E98 that the frame step reads
+            finished = callGuest(rdram, ctx, runtime, 0x1B4B90u, 0x43E7C0u, g_skip.mode);
+        else if (step == 1) {
+            const uint32_t fifty = g_skip.mode == 2 ? 1u : 0u;
+            std::memcpy(rdram + 0x1CA61C4u, &fifty, sizeof(fifty));
+            finished = callGuest(rdram, ctx, runtime, 0x245CE8u, 0x1CA5370u, 0u);
+        } else if (step == 2) // the frame rate
+            finished = callGuest(rdram, ctx, runtime, 0x215978u, 0x491540u, 1u);
+        else {
+            ctx->r[4] = g_skip.a0;
+            ctx->r[5] = g_skip.a1;
+            ctx->r[31] = g_skip.ra;
+            ctx->pc = 0x1838A8u;
+            g_goToPage(rdram, ctx, runtime);
+            return;
+        }
+        if (!finished)
+            return;
+    }
+}
 
 void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const std::string& rate = ps2x::hostSettings().refreshRate;
@@ -186,14 +237,12 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 return true;
         }
     };
-    if (rate != "ask" && isPage("su_frequency")) {
-        const uint64_t now = runtime->eeScheduler().currentVSyncTick();
-        constexpr uint16_t kDown = 0x0040, kCross = 0x4000;
-        if (rate == "60")
-            ps2x::injectPadPress(kDown, now + 60, now + 64);
-        ps2x::injectPadPress(kCross, now + 76, now + 80);
-        ps2x::holdDisplayUntil(now + 110);
-        std::printf("[game] answering the 50/60 Hz question: %s Hz\n", rate.c_str());
+    if (rate != "ask" && g_continuation != 0 && isPage("su_frequency")) {
+        std::memcpy(rdram + name, "SU_Movie", 9); // the name buffer held "SU_Frequency"
+        g_skip = FrequencySkip{0, rate == "60" ? 0u : 2u, ctx->r[4], ctx->r[5], ctx->r[31]};
+        std::printf("[game] skipped the 50/60 Hz question: %s Hz\n", rate.c_str());
+        continueFrequencySkip(rdram, ctx, runtime);
+        return;
     }
     g_goToPage(rdram, ctx, runtime);
 }
@@ -324,6 +373,10 @@ int main(int argc, char** argv) {
         g_goToPage = runtime.lookupFunction(0x1838A8u);
         if (g_goToPage)
             runtime.replaceFunction(0x1838A8u, &goToPage);
+        // A free slot right after the go-to-page entry, inside its body, for the continuation.
+        for (uint32_t address = 0x1838ACu; address < 0x1838C8u && !g_continuation; address += 4)
+            if (!runtime.hasFunction(address) && runtime.registerFunction(address, &continueFrequencySkip))
+                g_continuation = address;
         traceCalls(runtime, options.traceCalls);
         // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
         // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores

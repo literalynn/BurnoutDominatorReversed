@@ -23,7 +23,6 @@
 #include "runtime/host_audio.h"
 #include "runtime/settings_menu.h"
 #include "runtime/run_marks.h"
-#include "runtime/pad_injection.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/host_settings.h"
 
@@ -2960,10 +2959,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         drawnSerial = serial;
         lastDraw = now;
         resized = false;
-        // A question the runner answers for the player stays off screen (pad_injection.h):
-        // the last frame shown stays.
-        if (!ps2x::displayHeld(m_eeScheduler->currentVSyncTick()))
-            UploadFrame(frameTex, this, shownWidth, shownHeight);
+        UploadFrame(frameTex, this, shownWidth, shownHeight);
         const uint32_t presentWidth = shownWidth;
         const uint32_t presentHeight = shownHeight;
         if (smoothScaling != ps2x::hostSettings().smoothScaling)
