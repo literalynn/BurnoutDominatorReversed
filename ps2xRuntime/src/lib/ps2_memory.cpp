@@ -2255,7 +2255,9 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
         flushMaskedPath3Packets(false);
     }
 
-    if (m_gifArbiter)
+    if (m_gifArbiter && drainImmediately && m_gifArbiter->empty())
+        m_gifArbiter->process(pathId, data, sizeBytes);
+    else if (m_gifArbiter)
         m_gifArbiter->submit(pathId, data, sizeBytes, path2DirectHl);
     else if (m_gifPacketCallback)
         m_gifPacketCallback(data, sizeBytes);

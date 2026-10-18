@@ -38,6 +38,13 @@ public:
     void setProcessPacketFn(ProcessPacketFn fn) { m_processFn = std::move(fn); }
 
     void submit(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl = false);
+    // Hands a packet straight to the GS, without a copy: for one that would be drained
+    // at once with nothing queued to order it against.
+    void process(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes)
+    {
+        if (m_processFn)
+            m_processFn(pathId, data, sizeBytes);
+    }
 
     void drain();
     bool empty() const { return m_queue.empty(); }
