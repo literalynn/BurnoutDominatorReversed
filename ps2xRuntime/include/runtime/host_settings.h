@@ -20,6 +20,8 @@ namespace ps2x
         int superSampling = 4;     // paraLLEl-GS SSAA: 1, 2, 4, 8 or 16
         bool progressiveScan = true; // whole frames instead of interlaced fields (no line combing)
         bool highResolution = true;  // 2x the PS2 resolution from 4 or 8 samples a pixel, 4x from 16
+        bool fxaa = false;           // FXAA on the frame before it is scaled to the window
+        bool hudSmoothing = true;    // HUD and menu art interpolated per sample at 2x and 4x
         bool gsThread = true;        // VIF1, VU1 and GS submission on a second thread
         bool fastLoading = true;     // run faster than real time while the game is silent and idle
         float stickDeadzone = 0.12f;

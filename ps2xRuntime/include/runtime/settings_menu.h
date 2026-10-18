@@ -14,6 +14,8 @@ namespace ps2x
 void updateSettingsMenu();
 // Wheel notches waiting to press their binding: +1 up, -1 down. Taken by the pad.
 int takeMouseWheelNotch();
+// The size of the picture the game shows, for the Resolution row.
+void setPictureSize(uint32_t width, uint32_t height);
 bool settingsMenuOpen();
 // Whether the keyboard and mouse belong to the menu: it is open, or a key used to close it is
 // still held. Safe from any thread.

@@ -22,6 +22,8 @@ namespace
     {
         RowVolume,
         RowResolution,
+        RowAntiAliasing,
+        RowHudSmoothing,
         RowAspect,
         RowFps,
         RowFullscreen,
@@ -115,6 +117,8 @@ namespace
         {
         case RowVolume: return "Sound volume";
         case RowResolution: return "Resolution";
+        case RowAntiAliasing: return "Anti-aliasing";
+        case RowHudSmoothing: return "HUD anti-aliasing";
         case RowAspect: return "Picture shape";
         case RowFps: return "Show FPS";
         case RowFullscreen: return "Full screen (F11)";
@@ -128,15 +132,15 @@ namespace
         }
     }
 
-    // Resolution presets: the PS2's 640 pixels wide at one sample, twice that from 4 or 8
-    // samples a pixel, four times from 16.
-    constexpr int kPresetSamples[] = {1, 4, 8, 16};
+    // Resolutions: the PS2's at one sample a pixel, twice it from 4 (or, with supersampling,
+    // 8 averaged in pairs), four times from 16.
+    std::atomic<uint32_t> g_pictureWidth{0u}, g_pictureHeight{0u};
 
-    int resolutionPreset(const ps2x::HostSettings &s)
+    int resolutionScale(const ps2x::HostSettings &s)
     {
         if (!s.highResolution || s.superSampling < 4)
             return 0;
-        return s.superSampling == 4 ? 1 : s.superSampling == 8 ? 2 : 3;
+        return s.superSampling == 16 ? 2 : 1;
     }
 
     std::string mainValue(int row)
@@ -147,9 +151,18 @@ namespace
         case RowVolume: return std::to_string(s.volume) + "%";
         case RowResolution:
         {
-            static const char *kLabels[] = {"PS2 (1x)", "2x, about 1080p", "2x, smoother edges", "4x, about 4K"};
-            return kLabels[resolutionPreset(s)];
+            static const char *kScales[] = {"1x (PS2)", "2x", "4x"};
+            std::string label = kScales[resolutionScale(s)];
+            if (g_pictureWidth.load() != 0u)
+                label += " - " + std::to_string(g_pictureWidth.load()) + "x" + std::to_string(g_pictureHeight.load());
+            return label;
         }
+        case RowAntiAliasing:
+        {
+            const bool supersampling = resolutionScale(s) == 1 && s.superSampling >= 8;
+            return supersampling ? (s.fxaa ? "Supersampling + FXAA" : "Supersampling") : (s.fxaa ? "FXAA" : "Off");
+        }
+        case RowHudSmoothing: return onOff(s.hudSmoothing);
         case RowAspect: return s.aspect == "stretch" ? "Stretch" : s.aspect;
         case RowFps: return onOff(s.showFps);
         case RowFullscreen: return onOff(IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
@@ -174,11 +187,28 @@ namespace
             break;
         case RowResolution:
         {
-            const int preset = (resolutionPreset(s) + (step < 0 ? 3 : 1)) % 4;
-            s.superSampling = kPresetSamples[preset];
-            s.highResolution = preset > 0;
+            static const int kSamples[] = {1, 4, 16};
+            const int scale = (resolutionScale(s) + (step < 0 ? 2 : 1)) % 3;
+            s.superSampling = kSamples[scale];
+            s.highResolution = scale > 0;
+            g_pictureWidth = 0u; // until the new size shows
             break;
         }
+        case RowAntiAliasing:
+        {
+            // Off, FXAA, and at 2x supersampling (8 samples) without and with FXAA.
+            const bool twice = resolutionScale(s) == 1;
+            const int count = twice ? 4 : 2;
+            const int current = (twice && s.superSampling >= 8 ? 2 : 0) + (s.fxaa ? 1 : 0);
+            const int next = (current + (step < 0 ? count - 1 : 1)) % count;
+            s.fxaa = (next & 1) != 0;
+            if (twice)
+                s.superSampling = next >= 2 ? 8 : 4;
+            break;
+        }
+        case RowHudSmoothing:
+            s.hudSmoothing = !s.hudSmoothing;
+            break;
         case RowAspect:
         {
             static const char *kShapes[] = {"4:3", "16:9", "stretch"};
@@ -600,6 +630,12 @@ namespace ps2x
                 g_wheelNotches.fetch_add(notch, std::memory_order_relaxed);
         }
         setEmulationPaused(g_menu.open || g_quitQuestion);
+    }
+
+    void setPictureSize(uint32_t width, uint32_t height)
+    {
+        g_pictureWidth = width;
+        g_pictureHeight = height;
     }
 
     int takeMouseWheelNotch()

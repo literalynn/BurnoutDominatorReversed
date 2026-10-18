@@ -82,7 +82,7 @@ The mouse works in the menus: wheel to move, left click to select, right click t
 
 | Key | Action |
 |---|---|
-| **F1** | settings menu (the game pauses): volume, resolution, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
+| **F1** | settings menu (the game pauses): volume, resolution, anti-aliasing, HUD anti-aliasing, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
 | **Escape** | back in the menus; in a race, asks whether to quit (so does the window's close button) |
 | **F11** or **Alt+Enter** | full screen |
 | **F5** / **F7** | save / load state |
@@ -101,6 +101,8 @@ The first launch writes **`settings.ini`** next to `Play.bat`; the F1 menu chang
 | `smooth_scaling` | true | bilinear enlargement |
 | `super_sampling` | 4 | samples per pixel: 1, 2, 4, 8 or 16 |
 | `high_resolution` | true | a higher resolution built from the samples: 2x the PS2's (1280 pixels wide) with 4 or 8 samples, 4x (2560) with 16 |
+| `fxaa` | false | FXAA on the finished picture |
+| `hud_smoothing` | true | the race HUD smooth instead of blocky at 2x and 4x |
 | `progressive_scan` | true | whole frames, no interlacing lines |
 | `fast_loading` | true | loading screens run faster than real time |
 | `stick_deadzone` | 12 | percent |

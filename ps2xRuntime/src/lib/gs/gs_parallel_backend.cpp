@@ -20,6 +20,11 @@
 #include <mutex>
 #include <stdexcept>
 
+namespace ParallelGS
+{
+    extern bool bdr_smooth_ui_sprites; // patched into gs_interface.cpp
+}
+
 namespace
 {
     constexpr size_t VramSize = 4 * 1024 * 1024;
@@ -461,6 +466,7 @@ namespace
                 gs.set_super_sampling_rate(ParallelGS::SuperSampling(samples), true, true);
                 superSampling = samples;
             }
+            ParallelGS::bdr_smooth_ui_sprites = ps2x::hostSettings().hudSmoothing; // see ParallelGSPatches.cmake
             auto &p = gs.get_priv_register_state();
             p.qwords_lo[0] = request.pmode;
             p.qwords_lo[2] = priv.smode1;

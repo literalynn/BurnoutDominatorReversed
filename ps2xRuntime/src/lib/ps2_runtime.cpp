@@ -22,6 +22,7 @@
 #include "ps2x/iop/iop_subsystem.h"
 #include "runtime/host_audio.h"
 #include "runtime/settings_menu.h"
+#include "runtime/post_filter.h"
 #include "runtime/run_marks.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/host_settings.h"
@@ -2963,11 +2964,13 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         UploadFrame(frameTex, this, shownWidth, shownHeight);
         const uint32_t presentWidth = shownWidth;
         const uint32_t presentHeight = shownHeight;
+        ps2x::setPictureSize(presentWidth, presentHeight);
         if (smoothScaling != ps2x::hostSettings().smoothScaling)
         {
             smoothScaling = ps2x::hostSettings().smoothScaling;
             SetTextureFilter(frameTex, smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
         }
+        const ps2x::PostFrame picture = ps2x::applyPostFilter(frameTex, ps2x::hostSettings().fxaa, smoothScaling);
 
         BeginDrawing();
         ClearBackground(BLACK);
@@ -2982,13 +2985,13 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
                                                           : 4.0f / 3.0f;
         const float dstWidth = std::min(screenWidth, screenHeight * aspect);
         const float dstHeight = dstWidth / aspect;
-        const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
+        const Rectangle srcRect{0.0f, 0.0f, srcWidth, picture.flipped ? -srcHeight : srcHeight};
         const Rectangle dstRect{
             (screenWidth - dstWidth) * 0.5f,
             (screenHeight - dstHeight) * 0.5f,
             dstWidth,
             dstHeight};
-        DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        DrawTexturePro(picture.texture, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
         ps2x::drawSettingsOverlay(framesShown);
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {

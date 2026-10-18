@@ -128,6 +128,10 @@ namespace ps2x
                 return parseBool(value, s.progressiveScan);
             if (key == "high_resolution")
                 return parseBool(value, s.highResolution);
+            if (key == "fxaa")
+                return parseBool(value, s.fxaa);
+            if (key == "hud_smoothing")
+                return parseBool(value, s.hudSmoothing);
             if (key == "gs_thread")
                 return parseBool(value, s.gsThread);
             if (key == "fast_loading")
@@ -264,6 +268,10 @@ namespace ps2x
                 "# wide) with super_sampling 4 or 8 (8 smooths the edges), four times (2560) with 16.\n"
                 "# F1 > Resolution changes both.\n"
                 "high_resolution = " << (s.highResolution ? "true" : "false") << "\n"
+                "# fxaa smooths the edges of the finished picture; hud_smoothing makes the HUD and menu art\n"
+                "# smooth instead of blocky at 2x and 4x.\n"
+                "fxaa = " << (s.fxaa ? "true" : "false") << "\n"
+                "hud_smoothing = " << (s.hudSmoothing ? "true" : "false") << "\n"
                 "\n"
                 "# gs_thread runs the PS2 graphics units (VIF1, VU1, GS) on a second CPU core.\n"
                 "gs_thread = " << (s.gsThread ? "true" : "false") << "\n"
