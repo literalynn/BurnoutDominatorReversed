@@ -24,7 +24,8 @@ if(MSVC)
     # Debug info in the PDB, so profiles name paraLLEl-GS code too.
     target_compile_options(parallel-gs PRIVATE $<$<CONFIG:Release>:/Z7>)
 endif()
-target_sources(ps2_runtime PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/gs_parallel_backend.cpp")
+target_sources(ps2_runtime PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/gs_parallel_backend.cpp"
+                                   "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/gs_async_backend.cpp")
 target_link_libraries(ps2_runtime PRIVATE parallel-gs)
 target_compile_definitions(ps2_runtime PUBLIC PS2X_GS_PARALLEL=1)
 install(FILES "${parallel_gs_SOURCE_DIR}/COPYING.LGPLv3" DESTINATION share/licenses/parallel-gs)

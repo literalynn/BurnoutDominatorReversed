@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## paraLLEl-GS on a third thread (October 18, 2026)
+
+- `ps2xRuntime/src/lib/gs/gs_async_backend.cpp` (new, listed in `cmake/ParallelGS.cmake`), `runtime/gs/gs_parallel_backend.h`: `CreateAsyncGSBackend` wraps a backend so that its calls without a result (GIF packets, register writes, image data, flushes) are copied into a queue and run in order on a `GsSubmit` thread, while the calls with a result (present, VRAM reads and writes, local-to-host transfers, transfer snapshots, save states) wait for the queue to drain and run on the caller's thread. Packet buffers are recycled; more than 64 MiB queued makes the producer wait. The thread is woken for a batch (32 packets or 256 KiB), at a flush or when a caller waits, since it empties the queue faster than the GS worker fills it and a wake-up per packet cost the worker 4% of its time. `ps2_runtime.cpp` wraps paraLLEl-GS this way when the GS worker is on (`BDR_GS_ASYNC=0` keeps it on the worker). paraLLEl-GS's GIF decoding and GPU recording were about a third of the worker's time; an unpaced race now reaches 5,508 VSyncs in 75 s against 4,825 (+14%), and in the window the worker is idle 27% of the time instead of 17%. RAM after the same race differs only in the usual timing words.
+
 ## Gamepad vibration (October 18, 2026)
 
 - `ps2xIOP`: `DualShock2::motorSpeeds` applies the motor mapping of command 0x4D to the values of the last poll (the small motor on or off, the large one 0-255). `IopMemory::setMotorSink` reports a change once a pad packet completes, and the emulator passes it to the new `IopHost::setControllerMotors` (no-op by default). Test: the DualShock 2 test in `ps2_iop_import_tests` maps the motors and checks that one change is reported once.
