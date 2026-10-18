@@ -10,10 +10,14 @@
 namespace
 {
     // Runs a backend's GIF processing on a thread of its own. Calls without a result (GIF
-    // packets, register writes, image data, flushes) are copied into a queue and return at
-    // once; the others wait until the queue has drained and then call the backend on the
-    // caller's thread. paraLLEl-GS spends about a third of the GS worker's time decoding GIF
-    // packets and recording GPU work, which now overlaps with the worker's VIF1 and VU1 work.
+    // packets, register writes, image data, flushes, FINISH and presentation syncs) are copied
+    // into a queue and return at once; the others wait until the queue has drained and then
+    // call the backend on the caller's thread. paraLLEl-GS spends about a third of the GS
+    // worker's time decoding GIF packets and recording GPU work, which now overlaps with the
+    // worker's VIF1 and VU1 work. Present is queued too and returns the last frame the thread
+    // has finished presenting, or no frame if it has not finished one since the last call (the
+    // frontend then keeps the frame it has): the worker no longer waits for the queue to
+    // drain, the GPU and the readback at every VBlank.
     class AsyncBackend final : public GSRasterBackend
     {
     public:
@@ -73,13 +77,22 @@ namespace
         void TextureFlush() override { push(Kind::TextureFlush, 0u, 0u, nullptr, 0u); }
         void Sync(GSSyncReason reason) override
         {
+            // Nothing reads the GS behind these, and the queue keeps the order.
+            if (reason == GSSyncReason::Finish || reason == GSSyncReason::Presentation)
+            {
+                push(Kind::Sync, static_cast<uint32_t>(reason), 0u, nullptr, 0u);
+                return;
+            }
             sync();
             m_inner->Sync(reason);
         }
         PresentationFrame Present(const GSPresentationRequest &request) override
         {
-            sync();
-            return m_inner->Present(request);
+            push(Kind::Present, 0u, 0u, nullptr, 0u, &request);
+            std::lock_guard<std::mutex> lock(m_mutex);
+            PresentationFrame frame = std::move(m_presented);
+            m_presented = {};
+            return frame;
         }
 
         bool ClearFramebuffer(const GSContext &context, uint32_t rgba) override
@@ -126,6 +139,8 @@ namespace
             Image,
             Flush,
             TextureFlush,
+            Sync,
+            Present,
         };
 
         struct Job
@@ -134,12 +149,14 @@ namespace
             uint32_t argument;
             uint64_t value;
             std::vector<uint8_t> data;
+            GSPresentationRequest request;
         };
 
         // More queued data than this makes the producer wait: a frame's GIF data is a few MiB.
         static constexpr size_t kMaxQueuedBytes = 64u << 20;
 
-        void push(Kind kind, uint32_t argument, uint64_t value, const uint8_t *data, uint32_t size)
+        void push(Kind kind, uint32_t argument, uint64_t value, const uint8_t *data, uint32_t size,
+                  const GSPresentationRequest *request = nullptr)
         {
             std::unique_lock<std::mutex> lock(m_mutex);
             if (m_queuedBytes > kMaxQueuedBytes)
@@ -163,10 +180,11 @@ namespace
                 buffer.assign(data, data + size);
                 m_queuedBytes += size;
             }
-            m_queue.push_back(Job{kind, argument, value, std::move(buffer)});
+            m_queue.push_back(Job{kind, argument, value, std::move(buffer), request ? *request : GSPresentationRequest{}});
             // Waking the thread costs a system call, and it empties the queue faster than it
-            // fills: wake it for a batch of packets, at a flush, or when someone waits (sync).
-            const bool wake = m_sleeping && (kind == Kind::Flush || m_queue.size() >= 32u ||
+            // fills: wake it for a batch of packets, at a flush or a presentation, or when
+            // someone waits (sync).
+            const bool wake = m_sleeping && (kind == Kind::Flush || kind == Kind::Present || m_queue.size() >= 32u ||
                                              m_queuedBytes >= (256u << 10));
             if (wake)
                 m_sleeping = false;
@@ -224,6 +242,16 @@ namespace
                     case Kind::TextureFlush:
                         m_inner->TextureFlush();
                         break;
+                    case Kind::Sync:
+                        m_inner->Sync(static_cast<GSSyncReason>(job.argument));
+                        break;
+                    case Kind::Present:
+                    {
+                        PresentationFrame frame = m_inner->Present(job.request);
+                        std::lock_guard<std::mutex> presented(m_mutex);
+                        m_presented = std::move(frame);
+                        break;
+                    }
                     }
                     bytes += job.data.size();
                 }
@@ -243,6 +271,7 @@ namespace
         mutable std::condition_variable m_pushed;
         mutable std::condition_variable m_drained;
         std::deque<Job> m_queue;
+        PresentationFrame m_presented; // the last frame presented, until Present takes it
         std::vector<std::vector<uint8_t>> m_spare;
         size_t m_queuedBytes = 0u;
         bool m_busy = false;

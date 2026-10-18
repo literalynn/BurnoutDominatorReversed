@@ -134,6 +134,7 @@ namespace
         Readback readbacks[2];
         unsigned readbackIndex = 0;
         int superSampling = 1; // the rate paraLLEl-GS renders at
+        bool presentCurrent = false; // Present waits for this frame's readback
         PresentationFrame lastFrame; // the frame shown
 
         struct Lock
@@ -300,7 +301,7 @@ namespace
         }
 
     public:
-        explicit ParallelBackend(GSRegisters &registers) : priv(registers)
+        ParallelBackend(GSRegisters &registers, bool presentCurrentFrame) : priv(registers), presentCurrent(presentCurrentFrame)
         {
             Lock lock(mutex);
             ParallelGS::GSOptions options{};
@@ -561,7 +562,7 @@ namespace
             // The previous frame; the very first one shows itself.
             Readback &previous = readbacks[readbackIndex ^ 1u];
             readbackIndex ^= 1u;
-            copyOut(previous.pending ? previous : current);
+            copyOut(previous.pending && !presentCurrent ? previous : current);
             return lastFrame;
         }
 
@@ -655,8 +656,8 @@ namespace
     };
 }
 
-std::unique_ptr<GSRasterBackend> CreateParallelGSBackend(GSRegisters &registers)
+std::unique_ptr<GSRasterBackend> CreateParallelGSBackend(GSRegisters &registers, bool presentCurrentFrame)
 {
-    return std::make_unique<ParallelBackend>(registers);
+    return std::make_unique<ParallelBackend>(registers, presentCurrentFrame);
 }
 

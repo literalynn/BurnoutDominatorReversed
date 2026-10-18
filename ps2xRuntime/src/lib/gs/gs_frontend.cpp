@@ -606,8 +606,15 @@ void GS::latchHostPresentationFrame(const GSPresentationRequest &request)
         }
     }
 
-    tracePresentation(request, frame);
     const bool hasFrame = static_cast<bool>(frame);
+    if (!hasFrame)
+    {
+        // An asynchronous backend has not finished a frame since the last call: keep this one.
+        std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
+        if (m_hasHostPresentationFrame)
+            return;
+    }
+    tracePresentation(request, frame);
     const uint32_t displayFbp = frame.displayFbp;
     const uint32_t sourceFbp = frame.sourceFbp;
     const uint32_t width = frame.width;

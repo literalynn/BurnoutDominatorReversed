@@ -703,11 +703,12 @@ bool PS2Runtime::syncCoreSubsystems()
     {
         try
         {
-            std::unique_ptr<GSRasterBackend> backend = CreateParallelGSBackend(m_memory.gs());
-            // With the GS worker, paraLLEl-GS decodes GIF packets on a third thread
-            // (BDR_GS_ASYNC=0 keeps it on the worker).
-            const char *async = std::getenv("BDR_GS_ASYNC");
-            if (m_gsThreadEnabled && !(async && *async == '0'))
+            // With the GS worker, paraLLEl-GS decodes GIF packets and presents on a third
+            // thread (BDR_GS_ASYNC=0 keeps it on the worker).
+            const char *asyncSetting = std::getenv("BDR_GS_ASYNC");
+            const bool async = m_gsThreadEnabled && !(asyncSetting && *asyncSetting == '0');
+            std::unique_ptr<GSRasterBackend> backend = CreateParallelGSBackend(m_memory.gs(), async);
+            if (async)
                 backend = CreateAsyncGSBackend(std::move(backend));
             m_gs.setRasterBackend(std::move(backend));
             std::cout << "[gs] paraLLEl-GS backend (Vulkan)" << std::endl;
