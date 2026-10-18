@@ -3,6 +3,7 @@
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
 #include "runtime/host_settings.h"
+#include "runtime/host_audio.h"
 
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <vector>
 #include <cstring>
 #include <chrono>
+#include <cmath>
 
 using namespace ps2_syscalls;
 
@@ -716,6 +718,25 @@ void register_ps2_runtime_io_tests()
             t.Equals(syncMc(test.rdram, &cmd), 1, "a directory name should match only that directory");
             const auto *entries = reinterpret_cast<const SceMcTblGetDir *>(test.rdram.data() + GUEST_MC_TABLE_ADDR);
             t.Equals(std::string(entries[0].entryName), std::string("SAVEDATA"), "the entry should be the directory");
+        });
+
+        tc.Run("time stretch slows the tempo and keeps the pitch", [](TestCase &t)
+        {
+            // Two seconds of a 440 Hz tone, played at 80% of its tempo.
+            std::vector<int16_t> in(96000u * 2u);
+            for (size_t i = 0; i < 96000u; ++i)
+                in[i * 2u] = in[i * 2u + 1u] = static_cast<int16_t>(8000.0 * std::sin(2.0 * 3.14159265358979 * 440.0 * double(i) / 48000.0));
+            ps2x::TimeStretch stretch;
+            std::vector<int16_t> out;
+            const size_t consumed = stretch.process(in.data(), 96000u, 0.8, 1000000u, out);
+            const size_t produced = out.size() / 2u;
+            t.IsTrue(produced > 96000u, "the output is longer than what it consumed");
+            t.IsTrue(std::abs(double(consumed) / double(produced) - 0.8) < 0.02, "it consumes 0.8 frames a frame");
+            size_t crossings = 0u;
+            for (size_t i = 1; i < produced; ++i)
+                crossings += (out[(i - 1u) * 2u] < 0) != (out[i * 2u] < 0) ? 1u : 0u;
+            const double frequency = double(crossings) / 2.0 / (double(produced) / 48000.0);
+            t.IsTrue(std::abs(frequency - 440.0) < 8.0, "the tone stays at 440 Hz");
         });
 
         tc.Run("settings.ini round-trips and reports bad lines", [](TestCase &t)

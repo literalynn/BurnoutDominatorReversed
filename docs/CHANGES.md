@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The sound keeps its pitch when the game slows down (October 18, 2026)
+
+- `host_audio.cpp`, `runtime/host_audio.h`: the host played the SPU2 output resampled at the speed it was produced, so a game running at 80% sounded 20% slower and lower. `ps2x::TimeStretch` (WSOLA, as SoundTouch does: 25 ms segments, 5 ms crossfades, each segment taken at the offset within 8 ms of its nominal place whose start best correlates with the previous segment's end, channel sums, normalized) now changes the tempo and keeps the pitch; the tempo follows the queue depth as the rate did. The queue aims at 100 ms instead of 40 (a segment reads 33 ms, and a slow game leaves longer gaps between the VSync bursts). Test: a 440 Hz tone stretched to 80% tempo comes out 1.25 times longer and still at 440 Hz. In a 4x race at 46-51 VSyncs per second, with another game running on the same PC, the fade-outs for want of samples were as frequent before as after; they need the game itself to keep up.
+
 ## Anti-aliasing and HUD smoothing (October 18, 2026)
 
 - `post_filter.cpp`, `runtime/post_filter.h` (new, listed in `ps2xRuntime/CMakeLists.txt`): FXAA (the console form: luma of the four diagonal neighbours, a two- or four-tap blend along the edge, the wider one kept while its luma stays in the neighbourhood's range) renders the frame at its own size into a render texture before the window scales it; `ps2_runtime.cpp` draws that texture (flipped source rectangle) when `fxaa` is set. Checked on a hidden window's screenshot: the car's outline and the HUD star are smoothed.
