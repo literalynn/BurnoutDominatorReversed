@@ -30,8 +30,6 @@ public:
     void enqueuePresent(Job job);
     // Returns once every job queued so far has run. A no-op on the worker thread.
     void sync();
-    // Presentations queued and not yet finished, the running one included.
-    uint32_t queuedPresents() const { return m_queuedPresents.load(std::memory_order_relaxed); }
 
 private:
     void run();

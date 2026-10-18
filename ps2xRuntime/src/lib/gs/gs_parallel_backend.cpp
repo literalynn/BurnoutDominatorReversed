@@ -3,7 +3,6 @@
 // version needs no window: it creates its own Vulkan device and reads the
 // scanout image back to host memory, so presentation, frame dumps and headless
 // runs go through the usual PresentationFrame pixels.
-#include "runtime/gs/gs_present_hint.h"
 #include "runtime/gs/gs_parallel_backend.h"
 #include "ps2x/state_archive.h"
 #include "runtime/gs/gs_frontend.h"
@@ -113,8 +112,6 @@ namespace
         }
     };
 
-    std::atomic<bool> g_presentBacklog{false};
-
     class ParallelBackend final : public GSRasterBackend, private ParallelGS::SignalInterface
     {
         // Every GSInterface and Device call is serialized, presentation included.
@@ -123,26 +120,20 @@ namespace
         mutable ParallelGS::GSInterface gs;
         GSRegisters &priv;
         // Scan-out readbacks alternate between two buffers: Present queues this frame's copy and
-        // returns the previous frame if its fence has signalled, else the last frame again, so
-        // the GPU never stalls the thread that presents (the GS worker).
+        // returns the previous frame's, which has had a whole frame to land, so the GS worker
+        // rarely waits for the GPU and every frame is shown once, one presentation late.
+        // Showing this frame when it landed within a bound (2 or 8 ms) and the previous one
+        // otherwise repeated a frame and then skipped one: up to 3 judders a second in a race.
         struct Readback
         {
             Vulkan::BufferHandle buffer;
             Vulkan::Fence fence;
             uint32_t width = 0, height = 0;
-            uint64_t serial = 0; // present that queued it
             bool pending = false;
         };
         Readback readbacks[2];
         unsigned readbackIndex = 0;
-        PresentationFrame lastFrame; // shown again while no newer readback has landed
-        uint64_t lastSerial = 0;     // present that lastFrame comes from
-        // How long a present without a backlog waits for its own readback before
-        // showing the previous frame. With 2 ms, one race frame in 20 missed it: the screen
-        // showed the previous frame twice and then skipped that one (a judder); 8 ms lands
-        // them all and the worker still idles.
-        const uint64_t presentWaitNs = std::getenv("BDR_PGS_PRESENT_WAIT_US") ? uint64_t(std::atoi(std::getenv("BDR_PGS_PRESENT_WAIT_US"))) * 1000u : 8000000u;
-        unsigned presents = 0, presentsLanded = 0, presentsStale = 0;
+        PresentationFrame lastFrame; // the frame shown
 
         struct Lock
         {
@@ -516,18 +507,9 @@ namespace
             const uint32_t height = scanout.image->get_height();
             const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
             auto &device = vulkan.device;
-            // A readback that has not landed is picked up at a later present, and the last
-            // frame is shown meanwhile; see the wait bound below.
             const auto copyOut = [&](Readback &ready) {
+                ready.fence->wait();
                 ready.pending = false;
-                // A readback that lands after a newer one was shown would step the picture
-                // back one frame (the camera jumps back, then forward again).
-                if (ready.serial < lastSerial)
-                {
-                    ++presentsStale;
-                    return;
-                }
-                lastSerial = ready.serial;
                 lastFrame.width = ready.width;
                 lastFrame.height = ready.height;
                 lastFrame.pixels.resize(size_t(ready.width) * ready.height * 4);
@@ -538,12 +520,6 @@ namespace
                     lastFrame.pixels[i] = 0xff; // Scanout alpha is not a display value.
             };
             Readback &current = readbacks[readbackIndex];
-            if (current.pending)
-            {
-                if (!current.fence->wait_timeout(0))
-                    return lastFrame; // the GPU is two frames behind: this frame goes unread
-                copyOut(current);     // two presents old; replaced below if the newer one landed
-            }
             if (!current.buffer || current.buffer->get_create_info().size != bytes)
             {
                 Vulkan::BufferCreateInfo info{};
@@ -562,31 +538,12 @@ namespace
             device.submit(cmd, &current.fence);
             current.width = width;
             current.height = height;
-            current.serial = presents + 1u;
             current.pending = true;
 
-            // The previous frame if it has landed, then this one if it lands within the
-            // wait bound (no display lag on a GPU that keeps up), unless presentations are
-            // queuing up behind this one; the very first frame waits.
+            // The previous frame; the very first one shows itself.
             Readback &previous = readbacks[readbackIndex ^ 1u];
             readbackIndex ^= 1u;
-            if (previous.pending && previous.fence->wait_timeout(0))
-                copyOut(previous);
-            if (current.fence->wait_timeout(g_presentBacklog.load(std::memory_order_relaxed) ? 0u : presentWaitNs))
-            {
-                copyOut(current);
-                ++presentsLanded;
-            }
-            else if (!lastFrame)
-            {
-                current.fence->wait();
-                copyOut(current);
-            }
-            if (++presents % 500 == 0 && std::getenv("BDR_PGS_PRESENT_STATS"))
-                std::printf("[pgs-present] %u of the last 500 presents landed within %llu us, %u stale readbacks skipped\n",
-                            presentsLanded, (unsigned long long)(presentWaitNs / 1000u), presentsStale);
-            if (presents % 500 == 0)
-                presentsLanded = presentsStale = 0;
+            copyOut(previous.pending ? previous : current);
             return lastFrame;
         }
 
@@ -685,7 +642,3 @@ std::unique_ptr<GSRasterBackend> CreateParallelGSBackend(GSRegisters &registers)
     return std::make_unique<ParallelBackend>(registers);
 }
 
-void ps2x::setPresentBacklog(bool backlog)
-{
-    g_presentBacklog.store(backlog, std::memory_order_relaxed);
-}
