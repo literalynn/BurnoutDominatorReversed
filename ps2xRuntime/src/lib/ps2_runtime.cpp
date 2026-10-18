@@ -23,6 +23,7 @@
 #include "runtime/host_audio.h"
 #include "runtime/settings_menu.h"
 #include "runtime/run_marks.h"
+#include "runtime/pad_injection.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/host_settings.h"
 
@@ -2870,6 +2871,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
     uint64_t tick = 0;
     uint64_t drawnSerial = std::numeric_limits<uint64_t>::max();
     uint64_t framesShown = 0;
+    uint32_t shownWidth = FB_WIDTH, shownHeight = DEFAULT_DISPLAY_HEIGHT;
     // Gaps between the last frames shown, printed with an F9 mark; a frame late by more than
     // two VSyncs is also reported (one line a second at most).
     std::array<float, 150> frameGaps{};
@@ -2958,9 +2960,12 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         drawnSerial = serial;
         lastDraw = now;
         resized = false;
-        uint32_t presentWidth = FB_WIDTH;
-        uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
-        UploadFrame(frameTex, this, presentWidth, presentHeight);
+        // A question the runner answers for the player stays off screen (pad_injection.h):
+        // the last frame shown stays.
+        if (!ps2x::displayHeld(m_eeScheduler->currentVSyncTick()))
+            UploadFrame(frameTex, this, shownWidth, shownHeight);
+        const uint32_t presentWidth = shownWidth;
+        const uint32_t presentHeight = shownHeight;
         if (smoothScaling != ps2x::hostSettings().smoothScaling)
         {
             smoothScaling = ps2x::hostSettings().smoothScaling;

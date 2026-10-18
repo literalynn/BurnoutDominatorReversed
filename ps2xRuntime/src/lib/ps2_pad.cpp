@@ -192,11 +192,27 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
                                                 PAD_SQUARE, PAD_TRIANGLE, PAD_L1, PAD_R1, PAD_L2, PAD_R2,
                                                 PAD_START, PAD_SELECT, PAD_L3, PAD_R3};
         const bool alt = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+        // A wheel notch holds its binding for three polls, then leaves three released.
+        static int wheelHeld = 0, wheelGap = 0, wheelDirection = 0;
+        if (wheelHeld > 0)
+            --wheelHeld;
+        else if (wheelGap > 0)
+            --wheelGap;
+        else if ((wheelDirection = ps2x::takeMouseWheelNotch()) != 0)
+        {
+            wheelHeld = 2;
+            wheelGap = 3;
+        }
+        const int wheelInput = wheelHeld > 0 || (wheelGap == 3 && wheelDirection != 0)
+                                   ? (wheelDirection > 0 ? ps2x::kMouseWheelUp : ps2x::kMouseWheelDown)
+                                   : 0;
         const auto &keys = ps2x::hostSettings().keys;
         for (size_t button = 0; button < keys.size(); ++button)
             for (const int input : keys[button])
             {
-                const bool down = input >= ps2x::kMouseInput ? IsMouseButtonDown(input - ps2x::kMouseInput)
+                const bool down = input == ps2x::kMouseWheelUp || input == ps2x::kMouseWheelDown
+                                      ? input == wheelInput
+                                  : input >= ps2x::kMouseInput ? IsMouseButtonDown(input - ps2x::kMouseInput)
                                   : input == KEY_ENTER       ? IsKeyDown(input) && !alt // Alt+Enter: full screen
                                   : input == KEY_ESCAPE      ? IsKeyDown(input) && !ps2x::escapeAsksToQuit()
                                   : input > 0                ? IsKeyDown(input)

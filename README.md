@@ -78,7 +78,7 @@ macOS is not verified yet.
 | Start · Select | Enter · Tab | Start · Back |
 | Analog sticks | — | sticks |
 
-Keyboard and mouse buttons can be changed in the settings menu (**F1**), two per PS2 button.
+The mouse works in the menus: wheel to move, left click to select, right click to go back. Keys, mouse buttons and the wheel can be changed in the settings menu (**F1**), three per PS2 button.
 
 | Key | Action |
 |---|---|
@@ -107,9 +107,10 @@ The first launch writes **`settings.ini`** next to `Play.bat`; the F1 menu chang
 | `gamepad_mappings` | — | extra `gamecontrollerdb.txt` |
 | `volume` | 100 | percent |
 | `show_fps` | false | frames per second in the corner |
-| `key_cross`, `key_l1`... | see Controls | up to two keys or mouse buttons (`MOUSE_LEFT`, `MOUSE_RIGHT`...) per button, or `NONE` |
+| `key_cross`, `key_l1`... | see Controls | up to three keys, mouse buttons or wheel directions (`MOUSE_LEFT`, `MOUSE_WHEEL_UP`...) per button, or `NONE` |
+| `refresh_rate` | 60 | the game's 50/60 Hz question, answered for you: `60`, `50`, or `ask` |
 
-The game itself runs at 50 Hz (PAL) or 60 Hz: pick it on the first screen.
+The game runs at 60 Hz: the runner answers its 50/60 Hz question at start-up (`refresh_rate`).
 
 ## Documentation
 

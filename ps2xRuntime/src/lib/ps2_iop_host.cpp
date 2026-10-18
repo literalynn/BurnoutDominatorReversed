@@ -1,5 +1,6 @@
 #include "ps2_iop_host.h"
 #include "runtime/gamepad_rumble.h"
+#include "runtime/pad_injection.h"
 
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
@@ -17,6 +18,7 @@
 #include <limits>
 #include <sstream>
 #include <utility>
+#include <atomic>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -463,6 +465,39 @@ namespace
     }
 }
 
+namespace
+{
+    std::mutex g_injectionMutex;
+    std::vector<ScriptedPress> g_injected;
+    std::atomic<uint64_t> g_displayHeldUntil{0u};
+}
+
+void ps2x::injectPadPress(uint16_t buttons, uint64_t beginVsync, uint64_t endVsync)
+{
+    std::lock_guard<std::mutex> lock(g_injectionMutex);
+    g_injected.push_back(ScriptedPress{buttons, beginVsync, endVsync});
+}
+
+uint16_t ps2x::injectedPadButtons(uint64_t vsync)
+{
+    std::lock_guard<std::mutex> lock(g_injectionMutex);
+    uint16_t buttons = 0u;
+    for (const ScriptedPress &press : g_injected)
+        if (vsync >= press.begin && vsync < press.end)
+            buttons |= press.mask;
+    return buttons;
+}
+
+void ps2x::holdDisplayUntil(uint64_t vsync)
+{
+    g_displayHeldUntil.store(vsync, std::memory_order_release);
+}
+
+bool ps2x::displayHeld(uint64_t vsync)
+{
+    return vsync < g_displayHeldUntil.load(std::memory_order_acquire);
+}
+
 void PS2IopHostAdapter::setControllerMotors(uint32_t port, bool small, uint8_t large)
 {
     if (port != 0u)
@@ -495,6 +530,7 @@ bool PS2IopHostAdapter::readControllerPad(uint32_t port, ps2x::iop::ControllerPa
     state.leftY = data[7];
 
     static const std::vector<ScriptedPress> script = parsePadScript(std::getenv("BDR_PAD_SCRIPT"));
+    state.buttons = static_cast<uint16_t>(state.buttons & ~ps2x::injectedPadButtons(m_runtime.eeScheduler().currentVSyncTick()));
     if (!script.empty())
     {
         const uint64_t tick = m_runtime.eeScheduler().currentVSyncTick();

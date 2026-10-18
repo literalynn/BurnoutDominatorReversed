@@ -25,16 +25,19 @@ namespace ps2x
         bool vibration = true;       // the game's pad vibration on the host gamepad
         std::string gamepadMappings; // extra SDL_GameControllerDB mappings file
         int volume = 100;            // sound volume in percent
+        std::string refreshRate = "60"; // "60" or "50": the answer to the game's boot question; "ask" shows it
         bool showFps = false;        // frames per second in a corner of the window
-        // Keyboard and mouse controls: up to two inputs for each DualShock 2 button, in the
-        // order of padButtonNames(). An input is a raylib key code or kMouseInput + a raylib
-        // mouse button; 0 is none.
-        std::array<std::array<int, 2>, 16> keys = defaultKeys();
+        // Keyboard and mouse controls: up to three inputs for each DualShock 2 button, in the
+        // order of padButtonNames(). An input is a raylib key code, kMouseInput + a raylib
+        // mouse button, or a wheel direction; 0 is none.
+        std::array<std::array<int, 3>, 16> keys = defaultKeys();
 
-        static std::array<std::array<int, 2>, 16> defaultKeys();
+        static std::array<std::array<int, 3>, 16> defaultKeys();
     };
 
     constexpr int kMouseInput = 1000;
+    constexpr int kMouseWheelUp = kMouseInput + 10;   // a notch presses the button briefly
+    constexpr int kMouseWheelDown = kMouseInput + 11;
 
     // The DualShock 2 buttons keys can be bound to: up, down, left, right, cross, circle,
     // square, triangle, L1, R1, L2, R2, start, select, L3, R3.

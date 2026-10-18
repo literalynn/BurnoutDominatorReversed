@@ -726,8 +726,8 @@ void register_ps2_runtime_io_tests()
             settings.superSampling = 8;
             settings.aspect = "16:9";
             settings.volume = 40;
-            settings.keys[4] = {ps2x::kMouseInput, 'J'};
-            settings.keys[12] = {0, 0};
+            settings.keys[4] = {ps2x::kMouseInput, 'J', ps2x::kMouseWheelDown};
+            settings.keys[12] = {0, 0, 0};
             t.IsTrue(ps2x::writeHostSettings(path), "defaults are written");
             settings = ps2x::HostSettings{};
             std::string errors;
@@ -738,6 +738,7 @@ void register_ps2_runtime_io_tests()
             t.Equals(settings.volume, 40, "volume round-trips");
             t.Equals(settings.keys[4][0], ps2x::kMouseInput, "a mouse button binding round-trips");
             t.Equals(settings.keys[4][1], int('J'), "a key binding round-trips");
+            t.Equals(settings.keys[4][2], ps2x::kMouseWheelDown, "a wheel binding round-trips");
             t.Equals(settings.keys[12][0], 0, "an unbound button round-trips");
             t.Equals(settings.keys[0][0], 265, "the default bindings are written");
             {

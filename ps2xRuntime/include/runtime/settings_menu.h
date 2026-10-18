@@ -10,7 +10,10 @@ namespace ps2x
 // the menu is open. Runs on the window thread.
 
 // Reads the keyboard and mouse; call it once per window loop pass, after input was polled.
+// It also passes the mouse wheel on to the pad (wheel bindings) while the menu is closed.
 void updateSettingsMenu();
+// Wheel notches waiting to press their binding: +1 up, -1 down. Taken by the pad.
+int takeMouseWheelNotch();
 bool settingsMenuOpen();
 // Whether the keyboard and mouse belong to the menu: it is open, or a key used to close it is
 // still held. Safe from any thread.

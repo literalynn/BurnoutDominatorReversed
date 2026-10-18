@@ -2,6 +2,13 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## 60 Hz without the question, mouse in the menus (October 18, 2026)
+
+- `src/burnout_main.cpp`: the game asks at boot whether to run at 50 or 60 Hz (front-end page `SU_Frequency`, options 50Hz, 60Hz and 60Hz TEST, 50Hz highlighted). With `refresh_rate` 60 (the default) or 50 in settings.ini, the runner answers for the player: it wraps the page manager's go-to-page function 0x1838A8 (a0 = manager 0x43A6D0, a1 = page name; called by the `GoToPage` native 0x1893C0, registered under that name at 0x189210), which only reads the name and calls the original, and when the page is `SU_Frequency` presses down then cross (or cross) as the player would. The game's own `SetFrequency` native (0x18B700, "50HZ"/"60HZ") then switches the video mode (0x1B4B90 with mode 0) and the flag at 0x432E98 that its frame step and frame rate read. `refresh_rate = ask` shows the question. `BDR_TRACE_PAGES=1` logs every page the game goes to.
+- `runtime/pad_injection.h` (new), `ps2_iop_host.cpp`, `ps2_runtime.cpp`: `ps2x::injectPadPress` holds pad buttons from one VSync tick to another, on top of the real pad, and `ps2x::holdDisplayUntil` keeps the window on its last frame meanwhile, so the answered question does not flash on screen.
+- `src/burnout_main.cpp`: Escape asks whether to quit only while driving: the camera watch sets `ps2x::setEscapeAsksToQuit` when the player's car (0x43ED30) moved in ten frames in a row, the last one less than 1.5 s ago (`[game] driving` / `[game] not driving`). The frame-end callback used first is the video-mode one (0x1B4B90 sets it), present from boot. Menus, car select and the pause menu keep Escape as the back button.
+- `host_settings.h`/`.cpp`, `ps2_pad.cpp`, `settings_menu.cpp`: three inputs per button instead of two, and the mouse wheel as an input (`MOUSE_WHEEL_UP`, `MOUSE_WHEEL_DOWN`; a notch holds the button for three pad polls). New default bindings: wheel up and down on the D-pad, left click on cross, right click on triangle, so the mouse moves through the game's menus. The settings menu shows three columns, takes the wheel when binding, and has the frame-rate answer (60 Hz, 50 Hz, ask; read at the next start).
+
 ## Escape, quitting, the sound after a pause, PC save messages (October 18, 2026)
 
 - `host_audio.cpp`: after the queue stayed empty for 50 ms (the settings menu, a state load, a long stall), playback waits until the queue is full again and restarts at rate 1. It used to resume at once from a nearly empty queue: the rate controller dipped, then overshot, and the sound slowed down and sped up for a few seconds.

@@ -6,11 +6,13 @@
 #include "runtime/ee_scheduler.h"
 #include "runtime/run_marks.h"
 #include "runtime/settings_menu.h"
+#include "runtime/pad_injection.h"
 #include "runtime/host_settings.h"
 
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -163,6 +165,39 @@ int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
 // and 0x43ED30 the player car's (followed over consecutive race frames). Sampled every 2 ms
 // from the host; a camera that moves much further than the car between two samples is
 // reported, and so is a car that jumps (a reset after a crash).
+// The game asks 50 or 60 Hz at boot (page su_frequency: 50Hz highlighted, then 60Hz, 60Hz
+// TEST). With settings.ini refresh_rate 60 or 50 the runner answers for the player, pressing
+// down then cross (or cross), as the player would, while the window keeps the previous frame.
+// 0x1838A8 is the page manager's go-to-page (a0 = manager 0x43A6D0, a1 = page name), called by
+// the GoToPage native 0x1893C0; the hook only reads the name and calls it.
+PS2Runtime::RecompiledFunction g_goToPage = nullptr;
+
+void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const std::string& rate = ps2x::hostSettings().refreshRate;
+    const uint32_t name = getRegU32(ctx, 5) & (PS2_RAM_SIZE - 1);
+    static const bool tracePages = std::getenv("BDR_TRACE_PAGES") != nullptr; // the pages the game goes to
+    if (tracePages)
+        std::printf("[page] %.40s\n", reinterpret_cast<const char*>(rdram + name));
+    const auto isPage = [&](const char* page) {
+        for (size_t i = 0;; ++i) {
+            if (name + i >= PS2_RAM_SIZE || std::tolower(rdram[name + i]) != page[i])
+                return false;
+            if (page[i] == 0)
+                return true;
+        }
+    };
+    if (rate != "ask" && isPage("su_frequency")) {
+        const uint64_t now = runtime->eeScheduler().currentVSyncTick();
+        constexpr uint16_t kDown = 0x0040, kCross = 0x4000;
+        if (rate == "60")
+            ps2x::injectPadPress(kDown, now + 60, now + 64);
+        ps2x::injectPadPress(kCross, now + 76, now + 80);
+        ps2x::holdDisplayUntil(now + 110);
+        std::printf("[game] answering the 50/60 Hz question: %s Hz\n", rate.c_str());
+    }
+    g_goToPage(rdram, ctx, runtime);
+}
+
 class CameraWatch {
 public:
     CameraWatch(PS2Runtime& runtime, bool windowed) : m_runtime(runtime) {
@@ -217,13 +252,27 @@ private:
     void run() {
         const auto start = std::chrono::steady_clock::now();
         Vec camera = read(0x43EE10u), car = read(0x43ED30u);
+        auto lastDrive = start - std::chrono::hours(1);
+        int movingFrames = 0;
         while (!m_stop) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             const Vec nextCamera = read(0x43EE10u), nextCar = read(0x43ED30u);
             const float cameraStep = distance(camera, nextCamera), carStep = distance(car, nextCar);
+            const auto now = std::chrono::steady_clock::now();
+            // Driving (the player's car moved in ten frames in a row, the last one less than a
+            // second and a half ago): there Escape asks whether to quit. Menus, the pause menu
+            // and car select (where the car is only put in place) keep it as the back button.
+            if (std::isfinite(carStep) && carStep > 0.01f && carStep < 15.0f) {
+                movingFrames = now - lastDrive < std::chrono::milliseconds(200) ? movingFrames + 1 : 1;
+                lastDrive = now;
+            }
+            const bool driving = movingFrames >= 10 && now - lastDrive < std::chrono::milliseconds(1500);
+            if (driving != ps2x::escapeAsksToQuit()) {
+                ps2x::setEscapeAsksToQuit(driving);
+                std::printf(driving ? "[game] driving\n" : "[game] not driving\n");
+            }
             if (cameraStep == 0.0f && carStep == 0.0f)
                 continue;
-            const auto now = std::chrono::steady_clock::now();
             const auto vsync = static_cast<unsigned long long>(m_runtime.eeScheduler().currentVSyncTick());
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
@@ -272,6 +321,9 @@ int main(int argc, char** argv) {
         if (!runtime.loadELF(options.elf.string()))
             throw std::runtime_error("ELF loading failed");
         g_watched = options.traceWatch;
+        g_goToPage = runtime.lookupFunction(0x1838A8u);
+        if (g_goToPage)
+            runtime.replaceFunction(0x1838A8u, &goToPage);
         traceCalls(runtime, options.traceCalls);
         // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
         // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores
@@ -282,13 +334,7 @@ int main(int argc, char** argv) {
             uint32_t callback = 0;
             const uint32_t address = (getRegU32(&ctx, 28) - 0x7DD8u) & (PS2_RAM_SIZE - 1) & ~3u;
             std::memcpy(&callback, rdram + address, sizeof(callback));
-            // The callback is set in races: there Escape asks to quit instead of going back.
-            const bool race = callback == 0x1B49F0u;
-            if (race != ps2x::escapeAsksToQuit()) {
-                ps2x::setEscapeAsksToQuit(race);
-                std::printf(race ? "[game] race\n" : "[game] menus\n");
-            }
-            return callback == 0u || race;
+            return callback == 0u || callback == 0x1B49F0u;
         });
         // loadELF configures roots; apply our explicit mount afterwards.
         auto paths = PS2Runtime::getIoPaths();

@@ -27,6 +27,7 @@ namespace
         RowSmooth,
         RowVibration,
         RowFastLoading,
+        RowRefresh,
         RowDeadzone,
         RowControls,
         RowClose,
@@ -62,6 +63,8 @@ namespace
 
     Menu g_menu;
     std::atomic<bool> g_captures{false};
+    std::atomic<int> g_wheelNotches{0};
+    float g_wheel = 0.0f;
     std::atomic<bool> g_escapeAsksToQuit{false};
     bool g_quitQuestion = false;
     bool g_quitConfirmed = false;
@@ -116,6 +119,7 @@ namespace
         case RowSmooth: return "Smooth scaling";
         case RowVibration: return "Gamepad vibration";
         case RowFastLoading: return "Fast loading";
+        case RowRefresh: return "Frame rate (next start)";
         case RowDeadzone: return "Stick dead zone";
         case RowControls: return "Keyboard and mouse controls";
         default: return "Close (F1)";
@@ -134,6 +138,7 @@ namespace
         case RowSmooth: return onOff(s.smoothScaling);
         case RowVibration: return onOff(s.vibration);
         case RowFastLoading: return onOff(s.fastLoading);
+        case RowRefresh: return s.refreshRate == "ask" ? "Ask" : s.refreshRate + " Hz";
         case RowDeadzone: return std::to_string(int(s.stickDeadzone * 100.0f + 0.5f)) + "%";
         case RowControls: return ">";
         default: return "";
@@ -174,6 +179,15 @@ namespace
         case RowFastLoading:
             s.fastLoading = !s.fastLoading;
             break;
+        case RowRefresh:
+        {
+            static const char *kRates[] = {"60", "50", "ask"};
+            int index = 0;
+            while (index < 3 && s.refreshRate != kRates[index])
+                ++index;
+            s.refreshRate = kRates[(index % 3 + (step < 0 ? 2 : 1)) % 3];
+            break;
+        }
         case RowDeadzone:
             s.stickDeadzone = std::clamp(s.stickDeadzone + 0.02f * float(step == 0 ? 1 : step), 0.0f, 0.5f);
             break;
@@ -237,6 +251,11 @@ namespace
                 continue;
             }
             bind(g_menu.capturing, g_menu.column, key);
+            return;
+        }
+        if (const float wheel = GetMouseWheelMove(); wheel != 0.0f)
+        {
+            bind(g_menu.capturing, g_menu.column, wheel > 0.0f ? ps2x::kMouseWheelUp : ps2x::kMouseWheelDown);
             return;
         }
         bool anyDown = false;
@@ -304,8 +323,10 @@ namespace
             g_menu.row = (g_menu.row + kControlRowCount - 1) % kControlRowCount;
         if (pressed(KEY_DOWN))
             g_menu.row = (g_menu.row + 1) % kControlRowCount;
-        if (pressed(KEY_LEFT) || pressed(KEY_RIGHT))
-            g_menu.column ^= 1;
+        if (pressed(KEY_LEFT))
+            g_menu.column = (g_menu.column + 2) % 3;
+        if (pressed(KEY_RIGHT))
+            g_menu.column = (g_menu.column + 1) % 3;
         const bool activate = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_SPACE);
         if (activate && g_menu.row < 16)
             startCapture(g_menu.row, g_menu.column);
@@ -333,14 +354,14 @@ namespace
             {
                 if (moved)
                 {
-                    g_menu.row = int(i / 2);
-                    g_menu.column = int(i % 2);
+                    g_menu.row = int(i / 3);
+                    g_menu.column = int(i % 3);
                 }
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-                    startCapture(int(i / 2), int(i % 2));
+                    startCapture(int(i / 3), int(i % 3));
                 else if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))
                 {
-                    ps2x::hostSettings().keys[i / 2][i % 2] = 0;
+                    ps2x::hostSettings().keys[i / 3][i % 3] = 0;
                     save();
                 }
                 return;
@@ -408,10 +429,10 @@ namespace
                 continue;
             }
             DrawText(kButtonLabels[row], left + pad, y, font, selected ? WHITE : LIGHTGRAY);
-            const int cellWidth = (panelWidth - 2 * pad) * 3 / 10;
-            for (int column = 0; column < 2; ++column)
+            const int cellWidth = (panelWidth - 2 * pad) * 23 / 100;
+            for (int column = 0; column < 3; ++column)
             {
-                const Rectangle cell{float(left + panelWidth - pad - (2 - column) * (cellWidth + pad / 2)),
+                const Rectangle cell{float(left + panelWidth - pad - (3 - column) * (cellWidth + pad / 2)),
                                      float(y - font / 4), float(cellWidth), float(rowHeight - 2)};
                 g_menu.cells.push_back(cell);
                 const bool current = selected && column == g_menu.column;
@@ -420,7 +441,8 @@ namespace
                 const std::string text = g_menu.capturing == row && current ? "press..."
                                          : input == 0                        ? "-"
                                                                              : ps2x::inputName(input);
-                DrawText(text.c_str(), int(cell.x) + font / 3, y, font, current ? kAccent : LIGHTGRAY);
+                const int cellFont = MeasureText(text.c_str(), font) > cellWidth - font / 2 ? font * 2 / 3 : font;
+                DrawText(text.c_str(), int(cell.x) + font / 3, y + (font - cellFont) / 2, cellFont, current ? kAccent : LIGHTGRAY);
             }
         }
 
@@ -435,13 +457,13 @@ namespace
         }
         else if (g_menu.capturing >= 0)
         {
-            hints[0] = "Press a key or a mouse button";
+            hints[0] = "Press a key, a mouse button or turn the wheel";
             hints[1] = g_menu.notice.empty() ? "Esc: cancel" : g_menu.notice.c_str();
             hints[2] = "";
         }
         else
         {
-            hints[0] = "Enter or click: change   Left/Right: first or second input";
+            hints[0] = "Enter or click: change   Left/Right: first, second or third input";
             hints[1] = "Backspace or right click: clear   A key presses one button only";
             hints[2] = "Esc: back. Gamepads keep their own layout";
         }
@@ -542,7 +564,29 @@ namespace ps2x
         if (!g_menu.open && g_menu.releasing && !menuKeyHeld())
             g_menu.releasing = false;
         g_captures.store(g_menu.open || g_menu.releasing || g_quitQuestion, std::memory_order_release);
+        // Whole wheel notches go to the pad; a fraction waits for the next.
+        g_wheel = g_menu.open || g_quitQuestion ? 0.0f : g_wheel + GetMouseWheelMove();
+        while (g_wheel >= 1.0f || g_wheel <= -1.0f)
+        {
+            const int notch = g_wheel > 0.0f ? 1 : -1;
+            g_wheel -= float(notch);
+            const int pending = g_wheelNotches.load(std::memory_order_relaxed);
+            if (pending * notch < 4) // at most four notches waiting
+                g_wheelNotches.fetch_add(notch, std::memory_order_relaxed);
+        }
         setEmulationPaused(g_menu.open || g_quitQuestion);
+    }
+
+    int takeMouseWheelNotch()
+    {
+        int pending = g_wheelNotches.load(std::memory_order_relaxed);
+        while (pending != 0)
+        {
+            const int notch = pending > 0 ? 1 : -1;
+            if (g_wheelNotches.compare_exchange_weak(pending, pending - notch, std::memory_order_relaxed))
+                return notch;
+        }
+        return 0;
     }
 
     bool settingsMenuOpen()

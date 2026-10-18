@@ -38,10 +38,10 @@ namespace ps2x
             {345, "RIGHT_CONTROL"}, {346, "RIGHT_ALT"}, {347, "RIGHT_SUPER"}, {348, "MENU"},
             {kMouseInput + 0, "MOUSE_LEFT"}, {kMouseInput + 1, "MOUSE_RIGHT"}, {kMouseInput + 2, "MOUSE_MIDDLE"},
             {kMouseInput + 3, "MOUSE_SIDE"}, {kMouseInput + 4, "MOUSE_EXTRA"}, {kMouseInput + 5, "MOUSE_FORWARD"},
-            {kMouseInput + 6, "MOUSE_BACK"},
+            {kMouseInput + 6, "MOUSE_BACK"}, {kMouseWheelUp, "MOUSE_WHEEL_UP"}, {kMouseWheelDown, "MOUSE_WHEEL_DOWN"},
         };
 
-        std::string keysValue(const std::array<int, 2> &inputs)
+        std::string keysValue(const std::array<int, 3> &inputs)
         {
             std::string value;
             for (const int input : inputs)
@@ -50,9 +50,9 @@ namespace ps2x
             return value.empty() ? "NONE" : value;
         }
 
-        bool parseKeys(const std::string &value, std::array<int, 2> &out)
+        bool parseKeys(const std::string &value, std::array<int, 3> &out)
         {
-            std::array<int, 2> inputs{};
+            std::array<int, 3> inputs{};
             size_t count = 0;
             std::string name;
             std::istringstream words(value);
@@ -141,6 +141,8 @@ namespace ps2x
                 return s.gamepadMappings = value, true;
             if (key == "volume")
                 return parseInt(value, 0, 100, s.volume);
+            if (key == "refresh_rate")
+                return (value == "60" || value == "50" || value == "ask") && (s.refreshRate = value, true);
             if (key == "show_fps")
                 return parseBool(value, s.showFps);
             for (size_t i = 0; i < s.keys.size(); ++i)
@@ -150,10 +152,13 @@ namespace ps2x
         }
     }
 
-    std::array<std::array<int, 2>, 16> HostSettings::defaultKeys()
+    std::array<std::array<int, 3>, 16> HostSettings::defaultKeys()
     {
-        return {{{265, 'W'}, {264, 'S'}, {263, 'A'}, {262, 'D'}, {'X', 32}, {'C', 321}, {'Z', 320}, {'V', 256},
-                 {'Q', 0}, {'E', 0}, {340, 0}, {344, 0}, {257, 0}, {258, 0}, {0, 0}, {0, 0}}};
+        // The mouse moves through the menus: wheel up and down, left click selects (cross), right
+        // click goes back (triangle).
+        return {{{265, 'W', kMouseWheelUp}, {264, 'S', kMouseWheelDown}, {263, 'A'}, {262, 'D'},
+                 {'X', 32, kMouseInput + 0}, {'C', 321}, {'Z', 320}, {'V', 256, kMouseInput + 1},
+                 {'Q'}, {'E'}, {340}, {344}, {257}, {258}, {}, {}}};
     }
 
     const std::array<const char *, 16> &padButtonNames()
@@ -269,9 +274,12 @@ namespace ps2x
                 "# Sound volume in percent, and a frames-per-second counter in the window corner.\n"
                 "volume = " << s.volume << "\n"
                 "show_fps = " << (s.showFps ? "true" : "false") << "\n"
+                "# The game asks 50 or 60 Hz at start-up: refresh_rate 60 or 50 answers for you, ask shows it.\n"
+                "refresh_rate = " << s.refreshRate << "\n"
                 "\n"
-                "# Keyboard and mouse controls, two inputs at most per button: letters, digits, F1-F12,\n"
-                "# SPACE, ENTER, ESCAPE, TAB, UP, LEFT_SHIFT, KP_0, MOUSE_LEFT, MOUSE_RIGHT... or NONE.\n"
+                "# Keyboard and mouse controls, three inputs at most per button: letters, digits, F1-F12,\n"
+                "# SPACE, ENTER, ESCAPE, TAB, UP, LEFT_SHIFT, KP_0, MOUSE_LEFT, MOUSE_RIGHT, MOUSE_WHEEL_UP...\n"
+                "# or NONE.\n"
                 "# F1 opens the settings menu, which also changes them.\n";
         for (size_t i = 0; i < s.keys.size(); ++i)
             file << "key_" << padButtonNames()[i] << " = " << keysValue(s.keys[i]) << '\n';
