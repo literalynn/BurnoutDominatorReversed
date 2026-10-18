@@ -635,7 +635,7 @@ namespace ps2x::iop::detail
                 const float p0 = taps[0], p1 = taps[1], p2 = taps[2], p3 = taps[3];
                 const float interpolated =
                     p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
-                int32_t sample = clamp16(static_cast<int32_t>(std::lrint(interpolated)));
+                int32_t sample = clamp16(static_cast<int32_t>(std::lround(interpolated))); // the EE thread rounds toward zero
 
                 stepEnvelope(voice);
                 if (voice.phase == Phase::Off)

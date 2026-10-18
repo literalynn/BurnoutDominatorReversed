@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cfenv>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -293,6 +294,15 @@ void EeScheduler::run()
 {
     assertExecutor();
     ps2_wait_stats::t_gameThread = true;
+    // The EE FPU and VU0 in macro mode round toward zero (as PCSX2 does by default); games
+    // rely on it, Burnout's VU0 cosine rounds with 1.5 * 2^23 and jumped at a half turn.
+    // Restored on the way out: the thread may run other host code afterwards (the tests do).
+    struct RoundingGuard
+    {
+        int previous = std::fegetround();
+        ~RoundingGuard() { std::fesetround(previous); }
+    } roundingGuard;
+    std::fesetround(FE_TOWARDZERO);
     m_running.store(true, std::memory_order_release);
 
     while (!m_stopRequested.load(std::memory_order_acquire))

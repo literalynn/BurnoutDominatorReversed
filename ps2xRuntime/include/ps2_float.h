@@ -7,7 +7,7 @@
 // division by zero gives +-FLT_MAX and a square root uses the absolute value.
 // Host IEEE arithmetic otherwise produces Inf and NaN that then spread through
 // game state. Follows PCSX2 (FPU.cpp, VU clamping) and the EE manuals.
-// Rounding stays the host's round-to-nearest; the EE rounds toward zero.
+// The game thread rounds toward zero, as the EE does (EeScheduler::run sets it).
 
 #include <cstdint>
 #include <cstring>
