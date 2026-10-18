@@ -1,11 +1,13 @@
 #pragma once
 
 #include "ps2x/iop/iop_host.h"
+#include "runtime/disc_patches.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 class PS2Runtime;
 struct R5900Context;
@@ -103,6 +105,7 @@ private:
     {
         std::FILE *stream = nullptr;
         uint64_t size = 0u;
+        std::vector<ps2x::DiscOverlay> overlays; // patched disc files (disc_patches.h)
     };
     mutable std::mutex m_hostFileMutex;
     std::unordered_map<uint64_t, HostFile> m_hostFiles;

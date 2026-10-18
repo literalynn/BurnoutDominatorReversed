@@ -327,13 +327,15 @@ uint64_t PS2IopHostAdapter::openHostFile(std::string_view path)
         return 0u;
     }
 
+    const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
+    std::vector<ps2x::DiscOverlay> overlays = ps2x::discOverlaysFor(hostPath, paths.cdImage, paths.cdRoot);
     std::lock_guard<std::mutex> lock(m_hostFileMutex);
     uint64_t handle = m_nextHostFileHandle++;
     if (handle == 0u)
     {
         handle = m_nextHostFileHandle++;
     }
-    m_hostFiles.emplace(handle, HostFile{stream, size});
+    m_hostFiles.emplace(handle, HostFile{stream, size, std::move(overlays)});
     return handle;
 }
 
@@ -388,6 +390,7 @@ bool PS2IopHostAdapter::readHostFile(uint64_t handle,
         std::clearerr(it->second.stream);
         return false;
     }
+    ps2x::applyDiscOverlays(it->second.overlays, offset, destination, bytesRead);
     return true;
 }
 

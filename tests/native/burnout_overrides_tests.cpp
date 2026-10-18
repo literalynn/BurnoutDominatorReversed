@@ -1,6 +1,7 @@
 // Checks src/burnout_overrides.cpp without the generated guest code: every
 // SDK binding resolves to the intended runtime handler, and rom0:ROMVER has the
-// layout the game's parser expects.
+// layout the game's parser expects. Also the text replacement of src/burnout_texts.cpp.
+#include "../../src/burnout_texts.h"
 #include "game_overrides.h"
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
@@ -157,11 +158,34 @@ void testRomVersion() {
           "the Burnout ROM0 profile must not apply to other ELFs");
     std::filesystem::remove_all(root);
 }
+void testPcTexts() {
+    // Two records as in MAINUK.BIN: a two-unit hash (here with a no-break space in it), then
+    // NUL-terminated UTF-16 text.
+    const std::u16string records[] = {u"\x9A0D\x00A0No memory\x00A0" u"card (PS2) here.", u"\x1234\x5678Short."};
+    std::vector<uint8_t> file;
+    for (const std::u16string& record : records)
+        for (const char16_t c : record + u'\0') {
+            file.push_back(uint8_t(c & 0xFF));
+            file.push_back(uint8_t(c >> 8));
+        }
+    const size_t size = file.size();
+    const size_t changed = burnout::replaceUtf16Text(
+        file, {{u"memory card (PS2)", u"save"}, {u"Short.", u"Far too long to fit."}});
+    std::u16string text;
+    for (size_t i = 0; i < file.size(); i += 2)
+        text.push_back(char16_t(file[i] | (file[i + 1] << 8)));
+    check(changed == 1 && file.size() == size, "one string changes and the file keeps its size");
+    check(text.compare(0, 16, std::u16string(u"\x9A0D\x00A0No save here.") + u'\0') == 0,
+          "the hash stays and a no-break space matches a space");
+    check(text.find(u"Short.") != std::u16string::npos, "a replacement that does not fit is not made");
+    check(text[28] == 0 && text[29] == 0x1234, "the shortened text is padded with NULs up to the next record");
+}
 } // namespace
 
 int main() {
     testBindings();
     testRomVersion();
+    testPcTexts();
     if (g_failures) {
         std::cerr << g_failures << " Burnout override check(s) failed\n";
         return 1;

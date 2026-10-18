@@ -20,7 +20,8 @@ if(BDR_BUILD_GAME)
     set(BDR_PROJECT_SOURCES
         "${PROJECT_SOURCE_DIR}/src/burnout_main.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
-        "${PROJECT_SOURCE_DIR}/src/burnout_profile.cpp")
+        "${PROJECT_SOURCE_DIR}/src/burnout_profile.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_texts.cpp")
     # Keep hand-written sources out of the generated unity batches so editing
     # them recompiles one file instead of a batch of guest functions.
     set_source_files_properties(${BDR_PROJECT_SOURCES} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
@@ -51,6 +52,7 @@ if(TARGET ps2_runtime AND TARGET ps2_test_function_table)
     add_executable(burnout_overrides_tests
         "${PROJECT_SOURCE_DIR}/tests/native/burnout_overrides_tests.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_texts.cpp"
         $<TARGET_OBJECTS:ps2_test_function_table>)
     target_include_directories(burnout_overrides_tests PRIVATE "${PROJECT_SOURCE_DIR}/ps2xRuntime/include")
     target_link_libraries(burnout_overrides_tests PRIVATE ps2_runtime)

@@ -801,6 +801,7 @@ bool PS2Runtime::initialize(const char *title)
         const ps2x::HostSettings &settings = ps2x::hostSettings();
         SetConfigFlags(FLAG_WINDOW_RESIZABLE | (settings.vsync ? FLAG_VSYNC_HINT : 0u));
         InitWindow(settings.windowWidth, settings.windowHeight, title);
+        SetExitKey(KEY_NULL); // Escape is the game's back button; quitting asks first
         if (settings.fullscreen)
             ToggleBorderlessWindowed();
         if (!settings.gamepadMappings.empty())
@@ -2877,7 +2878,8 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
     uint32_t hitchesSinceLine = 0;
     float worstHitch = 0.0f;
     bool pausedSinceFrame = false;
-    bool smoothScaling = ps2x::hostSettings().smoothScaling;
+    // Not the setting, so that the first frame applies it to the texture made above.
+    bool smoothScaling = !ps2x::hostSettings().smoothScaling;
     auto lastDraw = std::chrono::steady_clock::time_point{};
     bool resized = false;
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
@@ -3029,7 +3031,10 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         }
         observer.poll(*this, result);
 
+        // The close button and Alt+F4 ask first (settings_menu.h); Escape no longer closes.
         if (WindowShouldClose())
+            ps2x::requestQuitConfirmation();
+        if (ps2x::quitConfirmed())
         {
             RUNTIME_LOG("[run] window close requested, breaking out of loop");
             requestStop();

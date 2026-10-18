@@ -198,6 +198,7 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
             {
                 const bool down = input >= ps2x::kMouseInput ? IsMouseButtonDown(input - ps2x::kMouseInput)
                                   : input == KEY_ENTER       ? IsKeyDown(input) && !alt // Alt+Enter: full screen
+                                  : input == KEY_ESCAPE      ? IsKeyDown(input) && !ps2x::escapeAsksToQuit()
                                   : input > 0                ? IsKeyDown(input)
                                                              : false;
                 if (down)

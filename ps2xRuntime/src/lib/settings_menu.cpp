@@ -62,6 +62,10 @@ namespace
 
     Menu g_menu;
     std::atomic<bool> g_captures{false};
+    std::atomic<bool> g_escapeAsksToQuit{false};
+    bool g_quitQuestion = false;
+    bool g_quitConfirmed = false;
+    Rectangle g_quitButtons[2] = {}; // quit, keep playing
 
     const Color kAccent{255, 170, 30, 255};
 
@@ -448,6 +452,46 @@ namespace
         }
     }
 
+    void updateQuitQuestion()
+    {
+        const Vector2 mouse = GetMousePosition();
+        const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_Y) ||
+            (click && CheckCollisionPointRec(mouse, g_quitButtons[0])))
+            g_quitConfirmed = true;
+        else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_N) ||
+                 (click && CheckCollisionPointRec(mouse, g_quitButtons[1])))
+        {
+            g_quitQuestion = false;
+            g_menu.releasing = true;
+        }
+    }
+
+    void drawQuitQuestion()
+    {
+        const int width = GetScreenWidth(), height = GetScreenHeight();
+        DrawRectangle(0, 0, width, height, Fade(BLACK, 0.6f));
+        const int font = std::clamp(height / 24, 14, 40);
+        const int panelWidth = std::min(width - 2 * font, font * 18), panelHeight = font * 6;
+        const int left = (width - panelWidth) / 2, top = (height - panelHeight) / 2;
+        DrawRectangle(left, top, panelWidth, panelHeight, Color{20, 20, 24, 240});
+        DrawRectangleLines(left, top, panelWidth, panelHeight, kAccent);
+        const char *title = "Quit the game?";
+        DrawText(title, left + (panelWidth - MeasureText(title, font)) / 2, top + font, font, WHITE);
+        const char *labels[2] = {"Quit (Enter)", "Keep playing (Esc)"};
+        const int buttonWidth = (panelWidth - 3 * font) / 2;
+        for (int i = 0; i < 2; ++i)
+        {
+            g_quitButtons[i] = Rectangle{float(left + font + i * (buttonWidth + font)), float(top + font * 3),
+                                         float(buttonWidth), float(font * 2)};
+            const bool hover = CheckCollisionPointRec(GetMousePosition(), g_quitButtons[i]);
+            DrawRectangleRec(g_quitButtons[i], hover ? Color{255, 170, 30, 90} : Color{255, 255, 255, 25});
+            const int labelFont = font * 2 / 3;
+            DrawText(labels[i], int(g_quitButtons[i].x) + (buttonWidth - MeasureText(labels[i], labelFont)) / 2,
+                     int(g_quitButtons[i].y) + (font * 2 - labelFont) / 2, labelFont, i == 0 ? kAccent : LIGHTGRAY);
+        }
+    }
+
     void drawFps(uint64_t framesShown)
     {
         using Clock = std::chrono::steady_clock;
@@ -474,7 +518,11 @@ namespace ps2x
 {
     void updateSettingsMenu()
     {
-        if (IsKeyPressed(KEY_F1))
+        if (g_quitQuestion)
+            updateQuitQuestion();
+        else if (!g_menu.open && g_escapeAsksToQuit.load(std::memory_order_acquire) && IsKeyPressed(KEY_ESCAPE))
+            g_quitQuestion = true;
+        else if (IsKeyPressed(KEY_F1))
         {
             if (g_menu.open)
                 closeMenu();
@@ -493,13 +541,37 @@ namespace ps2x
         }
         if (!g_menu.open && g_menu.releasing && !menuKeyHeld())
             g_menu.releasing = false;
-        g_captures.store(g_menu.open || g_menu.releasing, std::memory_order_release);
-        setEmulationPaused(g_menu.open);
+        g_captures.store(g_menu.open || g_menu.releasing || g_quitQuestion, std::memory_order_release);
+        setEmulationPaused(g_menu.open || g_quitQuestion);
     }
 
     bool settingsMenuOpen()
     {
-        return g_menu.open;
+        return g_menu.open || g_quitQuestion;
+    }
+
+    void setEscapeAsksToQuit(bool asks)
+    {
+        g_escapeAsksToQuit.store(asks, std::memory_order_release);
+    }
+
+    bool escapeAsksToQuit()
+    {
+        return g_escapeAsksToQuit.load(std::memory_order_acquire);
+    }
+
+    void requestQuitConfirmation()
+    {
+        // A second close request while asking quits.
+        if (g_quitQuestion)
+            g_quitConfirmed = true;
+        g_quitQuestion = true;
+        g_menu.open = false;
+    }
+
+    bool quitConfirmed()
+    {
+        return g_quitConfirmed;
     }
 
     bool settingsMenuCapturesInput()
@@ -513,5 +585,7 @@ namespace ps2x
             drawFps(framesShown);
         if (g_menu.open)
             drawMenu();
+        if (g_quitQuestion)
+            drawQuitQuestion();
     }
 }

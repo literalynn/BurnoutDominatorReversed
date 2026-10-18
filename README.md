@@ -72,7 +72,7 @@ macOS is not verified yet.
 | PS2 | Keyboard | Gamepad |
 |---|---|---|
 | D-pad | arrows / WASD | D-pad |
-| ✕ ○ □ △ | X · C · Z · V | A B X Y / ✕ ○ □ △ |
+| ✕ ○ □ △ | X · C · Z · V (△ also Escape: back) | A B X Y / ✕ ○ □ △ |
 | L1 · R1 | Q · E | LB · RB |
 | L2 · R2 | Left Shift · Right Shift | LT · RT |
 | Start · Select | Enter · Tab | Start · Back |
@@ -83,6 +83,7 @@ Keyboard and mouse buttons can be changed in the settings menu (**F1**), two per
 | Key | Action |
 |---|---|
 | **F1** | settings menu (the game pauses): volume, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
+| **Escape** | back in the menus; in a race, asks whether to quit (so does the window's close button) |
 | **F11** or **Alt+Enter** | full screen |
 | **F5** / **F7** | save / load state |
 | **F9** | mark a glitch: notes the moment in `<work>/local/logs/run.log` and saves a screenshot in `<work>/marks/` |

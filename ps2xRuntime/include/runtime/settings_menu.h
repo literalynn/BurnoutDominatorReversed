@@ -18,4 +18,13 @@ bool settingsMenuCapturesInput();
 // Draws the FPS counter and the menu over the frame. framesShown counts the game frames the
 // window has shown so far.
 void drawSettingsOverlay(uint64_t framesShown);
+
+// Quitting asks first. The window's close button opens the question (requestQuitConfirmation);
+// so does Escape while the game says Escape should not reach it (a race: the runner calls
+// setEscapeAsksToQuit), and elsewhere Escape is the game's back button. The game is paused
+// while the question is shown; quitConfirmed() turns true once it is answered yes.
+void setEscapeAsksToQuit(bool asks);
+bool escapeAsksToQuit();
+void requestQuitConfirmation();
+bool quitConfirmed();
 }

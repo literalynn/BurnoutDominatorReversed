@@ -21,6 +21,9 @@ namespace
     constexpr double kTargetFrames = 1920.0;
     // Beyond this the queue is cut back to the target (after a stall or a state load).
     constexpr size_t kMaxFrames = 4u * 1920u;
+    // A queue empty this long (a pause, a state load, a long stall) is refilled to the target
+    // before playing on.
+    constexpr size_t kStarvedFrames = 2400u;
 
     struct HostAudio
     {
@@ -31,6 +34,8 @@ namespace
         double position = 0.0;         // read position past `head`, in frames
         double level = kTargetFrames;  // queue depth, smoothed
         int16_t last[2] = {0, 0};
+        size_t emptyFrames = 0u;
+        bool starved = false;
         std::FILE *wav = nullptr;
         uint32_t wavFrames = 0u;
         bool streaming = false;
@@ -108,8 +113,26 @@ namespace
             state.position = 0.0;
             state.level = kTargetFrames;
         }
+        // After a gap, play again only once the queue is full and at rate 1: resuming at once
+        // from a near-empty queue made the rate dip, then overshoot (the sound slowed down and
+        // sped up after the settings menu or a state load).
+        if (available == 0u)
+            state.emptyFrames += frames;
+        else if (!state.starved)
+            state.emptyFrames = 0u;
+        if (state.emptyFrames >= kStarvedFrames)
+            state.starved = true;
+        if (state.starved && available >= size_t(kTargetFrames))
+        {
+            state.starved = false;
+            state.emptyFrames = 0u;
+            state.level = kTargetFrames;
+            state.position = 0.0;
+        }
+        if (state.starved)
+            available = 0u;
         // Smoothed over half a second, which irons out the VSync bursts. An empty queue
-        // (a stall, a load) leaves it alone, so playback resumes at the rate it had.
+        // (a short stall) leaves it alone, so playback resumes at the rate it had.
         if (available > 0u)
             state.level += (double(available) - state.level) * std::min(1.0, frames / (0.5 * kSampleRate));
         const double rate = ps2x::hostAudioRateFor(state.level);
@@ -172,6 +195,8 @@ namespace ps2x
             state.position = 0.0;
             state.level = kTargetFrames;
             state.last[0] = state.last[1] = 0;
+            state.emptyFrames = 0u;
+            state.starved = false;
             if (const char *path = std::getenv("BDR_AUDIO_WAV"); path && *path)
             {
                 state.wav = std::fopen(path, "wb");

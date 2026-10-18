@@ -1,9 +1,11 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
 #include "burnout_profile.h"
+#include "burnout_texts.h"
 #include "ps2_runtime.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/ee_scheduler.h"
 #include "runtime/run_marks.h"
+#include "runtime/settings_menu.h"
 #include "runtime/host_settings.h"
 
 #include <algorithm>
@@ -256,6 +258,8 @@ int main(int argc, char** argv) {
         if (!ps2x::loadHostSettings(options.settings, settingsErrors) && !options.headless)
             ps2x::writeHostSettings(options.settings);
         std::cerr << settingsErrors;
+        // The save messages speak of this computer instead of the memory card and the console.
+        burnout::registerPcTexts();
         PS2Runtime runtime;
         runtime.setMissingFunctionPolicy(PS2Runtime::MissingFunctionPolicy::Stop);
         const char* gsThread = std::getenv("BDR_GS_THREAD"); // BDR_GS_THREAD=0 overrides settings.ini
@@ -278,7 +282,13 @@ int main(int argc, char** argv) {
             uint32_t callback = 0;
             const uint32_t address = (getRegU32(&ctx, 28) - 0x7DD8u) & (PS2_RAM_SIZE - 1) & ~3u;
             std::memcpy(&callback, rdram + address, sizeof(callback));
-            return callback == 0u || callback == 0x1B49F0u;
+            // The callback is set in races: there Escape asks to quit instead of going back.
+            const bool race = callback == 0x1B49F0u;
+            if (race != ps2x::escapeAsksToQuit()) {
+                ps2x::setEscapeAsksToQuit(race);
+                std::printf(race ? "[game] race\n" : "[game] menus\n");
+            }
+            return callback == 0u || race;
         });
         // loadELF configures roots; apply our explicit mount afterwards.
         auto paths = PS2Runtime::getIoPaths();
