@@ -109,7 +109,7 @@ The first launch writes **`settings.ini`** next to `Play.bat`; the F1 menu chang
 | `volume` | 100 | percent |
 | `show_fps` | false | frames per second in the corner |
 | `key_cross`, `key_l1`... | see Controls | up to three keys, mouse buttons or wheel directions (`MOUSE_LEFT`, `MOUSE_WHEEL_UP`...) per button, or `NONE` |
-| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `ask` shows its 50/60 Hz question (save states keep their own) |
+| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `ask` shows its 50/60 Hz question (a state saved at the other rate switches at the next menu page) |
 
 The game runs at 60 Hz: its 50/60 Hz question is skipped (`refresh_rate`).
 

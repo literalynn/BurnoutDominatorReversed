@@ -171,6 +171,12 @@ int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
 // 0x1838A8 is the page manager's go-to-page (a0 = manager 0x43A6D0, a1 = page name), called by
 // the GoToPage native 0x1893C0.
 //
+// A save state keeps the rate it was taken at. When the game is in the front end (game state
+// 0x51B908 = 0x4C1B38) and its video mode (0x43E7C0 + 0x4A8: 0 = 60 Hz, 2 = 50 Hz) is not the
+// setting, the next page change does the same, plus the front-end simulation step that the game
+// sets on entering the front end (0x208E50: 0x1E6668(2 frames, 0, 0x51B7D0)); the race step
+// follows the mode when the next race starts.
+//
 // The steps are guest calls made from native code. The EE scheduler may stop one of them
 // midway and later resume the guest code alone, without this native frame; so each step returns
 // to a continuation registered in a free function-table slot, and whichever way a step ends,
@@ -182,6 +188,7 @@ struct FrequencySkip {
     int step = 0;
     uint32_t mode = 0;      // 0 = 60 Hz, 2 = 50 Hz (PAL)
     __m128i a0, a1, ra;     // the go-to-page call being completed
+    bool frontEndStep = false;
 } g_skip;
 
 void setArg(R5900Context* ctx, int reg, uint32_t value) {
@@ -210,6 +217,14 @@ void continueFrequencySkip(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtim
             finished = callGuest(rdram, ctx, runtime, 0x245CE8u, 0x1CA5370u, 0u);
         } else if (step == 2) // the frame rate
             finished = callGuest(rdram, ctx, runtime, 0x215978u, 0x491540u, 1u);
+        else if (step == 3 && g_skip.frontEndStep) {
+            const float frames2 = g_skip.mode == 2 ? 40.0f : 100.0f / 3.0f; // ms, as 0x208E50
+            const float zero = 0.0f;
+            std::memcpy(&ctx->f[12], &frames2, sizeof(frames2));
+            std::memcpy(&ctx->f[13], &zero, sizeof(zero));
+            finished = callGuest(rdram, ctx, runtime, 0x1E6668u, 0x51B7D0u, 0u);
+        } else if (step == 3)
+            continue;
         else {
             ctx->r[4] = g_skip.a0;
             ctx->r[5] = g_skip.a1;
@@ -237,10 +252,22 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 return true;
         }
     };
+    const uint32_t wanted = rate == "60" ? 0u : 2u;
     if (rate != "ask" && g_continuation != 0 && isPage("su_frequency")) {
         std::memcpy(rdram + name, "SU_Movie", 9); // the name buffer held "SU_Frequency"
-        g_skip = FrequencySkip{0, rate == "60" ? 0u : 2u, ctx->r[4], ctx->r[5], ctx->r[31]};
+        g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], false};
         std::printf("[game] skipped the 50/60 Hz question: %s Hz\n", rate.c_str());
+        continueFrequencySkip(rdram, ctx, runtime);
+        return;
+    }
+    uint32_t mode = 0, gameState = 0;
+    std::memcpy(&mode, rdram + 0x43EC68u, sizeof(mode));
+    std::memcpy(&gameState, rdram + 0x51B908u, sizeof(gameState));
+    const bool startUp = std::tolower(rdram[name]) == 's' && std::tolower(rdram[name + 1]) == 'u' && rdram[name + 2] == '_';
+    if (rate != "ask" && g_continuation != 0 && !startUp && gameState == 0x4C1B38u && (mode == 0 || mode == 2) &&
+        mode != wanted) {
+        g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], true};
+        std::printf("[game] switched from %s to %s Hz\n", mode == 2 ? "50" : "60", rate.c_str());
         continueFrequencySkip(rdram, ctx, runtime);
         return;
     }
