@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Camera jump log (October 18, 2026)
+
+- `src/burnout_main.cpp`: in windowed play (or with `BDR_CAMERA_WATCH=1`; `=0` turns it off) a host thread samples the race camera's position (0x43EE10) and the player car's (0x43ED30) every 2 ms and logs `[camjump]` when the camera moves much further than the car between two samples, and `[carjump]` when the car jumps (a reset). The addresses were found by following float triples over consecutive race frames: the camera sits about 5 units behind the car and 0.7 above, its target (0x43EA50) as far ahead. Over a scripted race, a paced windowed run and a deterministic one log the same jumps at the same VSyncs, and the ones checked are the game's crash camera cuts (with their white flash). Together with F9 this should tell whether what a player calls a camera jump is one of those.
+
 ## F9 marks a glitch (October 18, 2026)
 
 - `ps2_runtime.cpp`: in the window, F9 writes `[mark] vsync N` and a status line to the log and saves the presented frame to `marks/mark_<vsync>.png` under the working directory, so that something seen while playing (a camera jump) can be located afterwards. `Play.bat` passes `--status-ms 5000`, so `run.log` has a status line every five seconds around it.

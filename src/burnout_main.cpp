@@ -2,9 +2,13 @@
 #include "burnout_profile.h"
 #include "ps2_runtime.h"
 #include "runtime/ee_idle_loops.h"
+#include "runtime/ee_scheduler.h"
 #include "runtime/host_settings.h"
 
+#include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -12,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -148,6 +153,57 @@ int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
     if (result.deadlineReached) return 124;
     return 0;
 }
+// Logs jumps of the race camera, in windowed play (with F9 marks they locate what a player
+// saw) or with BDR_CAMERA_WATCH=1; BDR_CAMERA_WATCH=0 turns it off. 0x43EE10 holds the race camera's position
+// and 0x43ED30 the player car's (followed over consecutive race frames). Sampled every 2 ms
+// from the host; a camera that moves much further than the car between two samples is
+// reported, and so is a car that jumps (a reset after a crash).
+class CameraWatch {
+public:
+    CameraWatch(PS2Runtime& runtime, bool windowed) : m_runtime(runtime) {
+        const char* value = std::getenv("BDR_CAMERA_WATCH");
+        if (value ? (*value && *value != '0') : windowed)
+            m_thread = std::thread([this] { run(); });
+    }
+    ~CameraWatch() {
+        m_stop = true;
+        if (m_thread.joinable())
+            m_thread.join();
+    }
+
+private:
+    struct Vec { float x, y, z; };
+    Vec read(uint32_t address) const {
+        Vec v{};
+        std::memcpy(&v, m_runtime.memory().getRDRAM() + address, sizeof(v));
+        return v;
+    }
+    static float distance(const Vec& a, const Vec& b) {
+        return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
+    }
+    void run() {
+        Vec camera = read(0x43EE10u), car = read(0x43ED30u);
+        while (!m_stop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            const Vec nextCamera = read(0x43EE10u), nextCar = read(0x43ED30u);
+            const float cameraStep = distance(camera, nextCamera), carStep = distance(car, nextCar);
+            if (cameraStep == 0.0f && carStep == 0.0f)
+                continue;
+            const auto vsync = static_cast<unsigned long long>(m_runtime.eeScheduler().currentVSyncTick());
+            if (std::isfinite(cameraStep) && cameraStep > 4.0f && cameraStep > 3.0f * carStep + 2.0f)
+                std::printf("[camjump] vsync=%llu camera (%.1f %.1f %.1f) -> (%.1f %.1f %.1f) moved %.1f, car %.1f\n", vsync,
+                            camera.x, camera.y, camera.z, nextCamera.x, nextCamera.y, nextCamera.z, cameraStep, carStep);
+            else if (std::isfinite(carStep) && carStep > 15.0f)
+                std::printf("[carjump] vsync=%llu car moved %.1f, camera %.1f\n", vsync, carStep, cameraStep);
+            camera = nextCamera;
+            car = nextCar;
+        }
+    }
+
+    PS2Runtime& m_runtime;
+    std::atomic<bool> m_stop{false};
+    std::thread m_thread;
+};
 } // namespace
 
 int main(int argc, char** argv) {
@@ -197,6 +253,7 @@ int main(int argc, char** argv) {
             std::cout << "[BDR] Original ISO: " << options.iso << '\n';
 
         bdr_profile::Sampler profile; // BDR_PROFILE=1
+        CameraWatch cameraWatch(runtime, !options.headless);
         PS2Runtime::RunOptions run;
         run.timeLimit = std::chrono::seconds(options.seconds);
         run.statusInterval = std::chrono::milliseconds(options.statusMs);
