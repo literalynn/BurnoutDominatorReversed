@@ -233,15 +233,28 @@ namespace
         require(read(spu, 1, 5u * 0x10u + 0xAu) == 0, "ENVX is zero once stopped");
     }
 
+    // Core 0 voices to its dry mix, core 0 into core 1, core 1 to the output, all at full scale.
+    void routeCore0ToOutput(Spu2 &spu)
+    {
+        write(spu, 0, Spu2::RegAttr, Spu2::AttrEnable);
+        write(spu, 1, Spu2::RegAttr, Spu2::AttrEnable);
+        write(spu, 0, Spu2::RegMmix, 0x0C00);       // voices to dry left and right
+        write(spu, 1, Spu2::RegMmix, 0x000C);       // external input (core 0) to dry
+        spu.write16(Base + 0x760u, 0x3FFF);         // core 0 master volume
+        spu.write16(Base + 0x762u, 0x3FFF);
+        spu.write16(Base + 0x788u, 0x3FFF);         // core 1 master volume
+        spu.write16(Base + 0x78Au, 0x3FFF);
+        spu.write16(Base + 0x794u, 0x7FFF);         // core 1 external input volume
+        spu.write16(Base + 0x796u, 0x7FFF);
+    }
+
     void testAudioOutputAndRelease()
     {
         Spu2 spu;
         constexpr uint32_t Start = 0x4000u;
         putBlock(spu, Start, 0x08, 0x04, 0x4);
         putBlock(spu, Start + 8u, 0x08, 0x03, 0x4); // loops forever
-        write(spu, 0, Spu2::RegAttr, Spu2::AttrEnable);
-        spu.write16(Base + 0x760u, 0x3FFF);   // master volume left, core 0
-        spu.write16(Base + 0x762u, 0x3FFF);   // master volume right
+        routeCore0ToOutput(spu);
         write(spu, 0, Spu2::RegVmixl, 0x0001);
         write(spu, 0, Spu2::RegVmixr, 0x0001);
         setAddress(spu, 0, Spu2::RegVoiceAddress, Start);
@@ -262,6 +275,110 @@ namespace
         spu.advanceTo(600u * Spu2::CyclesPerSample);
         require(spu.activeVoices() == 0u, "KOFF releases the voice to silence and stops it");
     }
+
+    // A one-shot sample whose loop address the driver points at a silent block: at the
+    // sample's end the voice jumps there instead of repeating the sample.
+    void testWrittenLoopAddressHolds()
+    {
+        Spu2 spu;
+        constexpr uint32_t Start = 0x4000u;
+        constexpr uint32_t Silence = 0x2800u;
+        putBlock(spu, Start, 0x08, 0x04, 0x4);      // loop start flag in the data
+        putBlock(spu, Start + 8u, 0x08, 0x03, 0x4); // loop end + repeat
+        putBlock(spu, Silence, 0x0C, 0x07, 0x0);     // silent block looping on itself
+        routeCore0ToOutput(spu);
+        write(spu, 0, Spu2::RegVmixl, 0x0001);
+        write(spu, 0, Spu2::RegVmixr, 0x0001);
+        setAddress(spu, 0, Spu2::RegVoiceAddress, Start);
+        setAddress(spu, 0, Spu2::RegVoiceAddress + 4u, Silence); // written before the key on
+        write(spu, 0, 0x00, 0x3FFF);
+        write(spu, 0, 0x02, 0x3FFF);
+        write(spu, 0, 0x04, 0x1000);
+        setFastEnvelope(spu, 0, 0);
+        write(spu, 0, Spu2::RegKon, 0x0001);
+        require(read(spu, 0, Spu2::RegVoiceAddress + 6u) == Silence, "key on keeps the written loop address");
+        // KON clears the written state: the loop-start flag of the first block takes over.
+        spu.advanceTo(2u * Spu2::CyclesPerSample);
+        require(read(spu, 0, Spu2::RegVoiceAddress + 6u) == Start, "a loop-start flag after key on sets the loop address");
+
+        // The same with the loop address written after the key on: it holds against the flag.
+        write(spu, 0, Spu2::RegKon, 0x0001);
+        setAddress(spu, 0, Spu2::RegVoiceAddress + 4u, Silence);
+        spu.advanceTo(200u * Spu2::CyclesPerSample);
+        std::vector<int16_t> frames(2u * 400u);
+        spu.readAudio(frames.data(), 400u);
+        require(spu.voiceNextAddress(0, 0) == Silence + 8u, "after the sample the voice loops on the silent block");
+        spu.advanceTo(400u * Spu2::CyclesPerSample);
+        const size_t count = spu.readAudio(frames.data(), 400u);
+        bool silent = count > 0u;
+        for (size_t i = 0; i < count * 2u; ++i)
+            silent = silent && frames[i] == 0;
+        require(silent, "the silent loop plays silence");
+    }
+
+    void testVolumeSweeps()
+    {
+        Spu2::Volume up;
+        up.level = 0;
+        up.set(0x8000u | (8u << 2u) | 3u); // linear increase, shift 8, step +4: +32 per sample
+        for (int i = 0; i < 10; ++i)
+            up.step();
+        require(up.level == 320, "a linear increase adds its step every sample");
+        for (int i = 0; i < 2000; ++i)
+            up.step();
+        require(up.level == 0x7FFF, "an increase saturates at full scale");
+
+        Spu2::Volume down;
+        down.set(0x3FFF);
+        require(down.level == 0x7FFE, "a fixed volume is twice the 15-bit value");
+        down.set(0x8000u | 0x2000u | (8u << 2u) | 0u); // linear decrease, shift 8, step -8: -64
+        down.step();
+        require(down.level == 0x7FFE - 64, "a linear decrease starts from the current level");
+        for (int i = 0; i < 1000; ++i)
+            down.step();
+        require(down.level == 0, "a decrease stops at silence");
+
+        Spu2::Volume slow;
+        slow.level = 0;
+        slow.set(0x8000u | (13u << 2u) | 0u); // shift 13: one step of +7 every 4 samples
+        for (int i = 0; i < 8; ++i)
+            slow.step();
+        require(slow.level == 14, "shifts above 11 step every 2^(shift - 11) samples");
+
+        // A voice playing at a sweeping volume reads back its current level (VOLXL).
+        Spu2 spu;
+        write(spu, 0, 0x00, 0x8000u | (8u << 2u) | 3u);
+        spu.write16(Base + Spu2::RegAttr, Spu2::AttrEnable);
+        spu.advanceTo(10u * Spu2::CyclesPerSample);
+        require(read(spu, 0, 0x0C) == 11u * 32u, "VOLXL reads the current level (one step per sample, from cycle 0)");
+    }
+
+    void testCoreRouting()
+    {
+        Spu2 spu;
+        constexpr uint32_t Start = 0x4000u;
+        putBlock(spu, Start, 0x08, 0x04, 0x4);
+        putBlock(spu, Start + 8u, 0x08, 0x03, 0x4);
+        routeCore0ToOutput(spu);
+        write(spu, 0, Spu2::RegVmixl, 0x0001);
+        write(spu, 0, Spu2::RegVmixr, 0x0001);
+        setAddress(spu, 0, Spu2::RegVoiceAddress, Start);
+        write(spu, 0, 0x00, 0x3FFF);
+        write(spu, 0, 0x02, 0x3FFF);
+        write(spu, 0, 0x04, 0x1000);
+        setFastEnvelope(spu, 0, 0);
+        write(spu, 0, Spu2::RegKon, 0x0001);
+        spu.advanceTo(100u * Spu2::CyclesPerSample);
+        std::vector<int16_t> frames(2u * 200u);
+        size_t count = spu.readAudio(frames.data(), 200u);
+        require(count > 60u && frames[2u * 60u] > 0, "core 0 is heard through core 1");
+        require(static_cast<int16_t>(spu.soundRam(0x800u + 60u)) > 0, "core 0's output is written at 0x800");
+
+        write(spu, 1, Spu2::RegMmix, 0x0000); // core 1 no longer takes its external input
+        spu.advanceTo(200u * Spu2::CyclesPerSample);
+        count = spu.readAudio(frames.data(), 200u);
+        require(count > 50u && frames[2u * 50u] == 0 && frames[2u * 50u + 1u] == 0, "MMIX gates the external input");
+    }
 }
 
 int main()
@@ -275,6 +392,9 @@ int main()
         testMixerOutputClock();
         testVoiceStopsAtLoopEnd();
         testAudioOutputAndRelease();
+        testWrittenLoopAddressHolds();
+        testVolumeSweeps();
+        testCoreRouting();
         std::cout << "spu2 tests passed\n";
         return 0;
     }

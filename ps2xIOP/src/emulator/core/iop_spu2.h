@@ -18,10 +18,12 @@ namespace ps2x::iop::detail
     // file at 0x1F900000 and the transfer paths (TSA + PIO data port, DMA). Time is driven by the
     // IOP cycle count: one output sample every CyclesPerSample cycles (48 kHz).
     //
-    // Modelled: ADPCM decode, ADSR envelopes, pitch, key on/off, loop flags and ENDX, the IRQ
-    // raised when a voice fetches (or a transfer touches) the address in IRQA, STATX/ATTR/SPDIF
-    // IRQ status, volumes and the dry mix to a stereo output ring. Not modelled yet: reverb,
-    // noise, pitch modulation, ADMA streaming and volume sweeps.
+    // Modelled: ADPCM decode with 4-point interpolation across blocks, ADSR envelopes, volume
+    // sweeps, pitch, key on/off, loop addresses (a written loop address holds until the next
+    // key on, as in PCSX2), ENDX, the IRQ raised when a voice fetches (or a transfer or the
+    // mixer touches) the address in IRQA, STATX/ATTR/SPDIF IRQ status, the dry mix of each core
+    // (MMIX gates), core 0 feeding core 1's external input, the memory output buffers and a
+    // stereo output ring. Not modelled yet: reverb, noise, pitch modulation and ADMA streaming.
     class Spu2
     {
     public:
@@ -52,7 +54,11 @@ namespace ps2x::iop::detail
         static constexpr uint32_t RegVoiceAddress = 0x1C0u; // 12 bytes per voice
         static constexpr uint32_t RegEndx = 0x340u;
         static constexpr uint32_t RegStatx = 0x344u;
-        static constexpr uint32_t RegSpdifIrqInfo = 0x7C2u; // absolute offset
+        // Absolute offsets of the per-core volume block (core 1 is at +0x28).
+        static constexpr uint32_t RegMvol = 0x760u;  // MVOLL, MVOLR (volume/sweep format)
+        static constexpr uint32_t RegBvol = 0x76Cu;  // BVOLL, BVOLR: external input (core 0 into core 1)
+        static constexpr uint32_t RegMvolx = 0x770u; // MVOLXL, MVOLXR: current master volume
+        static constexpr uint32_t RegSpdifIrqInfo = 0x7C2u;
 
         static constexpr uint16_t AttrEnable = 0x8000u;
         static constexpr uint16_t AttrIrqEnable = 0x0040u;
@@ -106,6 +112,19 @@ namespace ps2x::iop::detail
         // Decode one 16-byte ADPCM block (8 words) into 28 samples; history is updated.
         static void decodeAdpcm(const uint16_t *block, int32_t &history1, int32_t &history2, int16_t *samples) noexcept;
 
+        // A volume register in the SPU volume format: bit 15 clear, a fixed volume in bits 0-14
+        // (half the level); bit 15 set, a sweep (bit 14 exponential, 13 decrease, 12 negative
+        // phase, bits 2-6 shift, 0-1 step) that moves the current level once per sample.
+        struct Volume
+        {
+            uint16_t reg = 0u;
+            int32_t level = 0; // current level, -0x8000..0x7FFF
+            uint32_t counter = 0u;
+
+            void set(uint16_t value) noexcept;
+            void step() noexcept;
+        };
+
         static constexpr uint64_t kNever = ~uint64_t{0};
 
     private:
@@ -120,8 +139,7 @@ namespace ps2x::iop::detail
 
         struct Voice
         {
-            uint16_t volumeLeft = 0;
-            uint16_t volumeRight = 0;
+            std::array<Volume, 2> volume{};
             uint16_t pitch = 0;
             uint16_t adsr1 = 0;
             uint16_t adsr2 = 0;
@@ -131,14 +149,17 @@ namespace ps2x::iop::detail
 
             bool active = false;
             bool needBlock = false;
+            bool customLoop = false; // the loop address was written since key on
             Phase phase = Phase::Off;
             int32_t level = 0;
             uint32_t counter = 0;
-            uint32_t position = 0; // 12 fractional bits
+            uint32_t position = 0; // 12 fractional bits, into the current block
             uint8_t blockFlags = 0;
             int32_t history1 = 0;
             int32_t history2 = 0;
-            std::array<int16_t, 28> samples{};
+            // The last three samples of the previous block, then this block's 28: the
+            // interpolation reads the four samples ending at the current one.
+            std::array<int16_t, 31> samples{};
         };
 
         struct Core
@@ -150,6 +171,7 @@ namespace ps2x::iop::detail
             bool dmaBusy = false;
             bool dmaDone = false; // transfer finished while the ATTR transfer mode is still set
             uint32_t outPosition = 0; // write position inside the memory output buffers (0..0x1FF)
+            std::array<Volume, 2> master{};
             std::array<Voice, VoiceCount> voices;
         };
 
@@ -165,6 +187,7 @@ namespace ps2x::iop::detail
         void assertIrq(int core);
         void refreshActiveCount() noexcept;
         [[nodiscard]] uint32_t maskOf(int core, uint32_t offset) const noexcept;
+        void loadVersion2(ps2x::StateArchive &archive);
 
         std::vector<uint16_t> m_ram;
         std::array<uint16_t, 0x400> m_raw{}; // register backing store, indexed by byte offset / 2

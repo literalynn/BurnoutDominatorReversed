@@ -177,6 +177,21 @@ namespace ps2x::iop
         m_impl->emulator.runEeCycles(eeCycles);
     }
 
+    size_t IopSubsystem::readAudio(int16_t *destination, size_t frames)
+    {
+        return m_impl->emulator.readAudio(destination, frames);
+    }
+
+    uint64_t IopSubsystem::audioFramesProduced() const noexcept
+    {
+        return m_impl->emulator.audioFramesProduced();
+    }
+
+    uint32_t IopSubsystem::activeAudioVoices() const noexcept
+    {
+        return m_impl->emulator.activeAudioVoices();
+    }
+
     RpcAbi IopSubsystem::selectRpcAbi(const RpcAbiRequest &request) const
     {
         for (const auto &service : m_impl->coreServices)

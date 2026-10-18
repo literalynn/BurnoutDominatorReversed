@@ -23,7 +23,7 @@ namespace ps2_stubs
 namespace
 {
     constexpr char kStateMagic[8] = {'B', 'D', 'R', 'S', 'T', 'A', 'T', 'E'};
-    constexpr uint32_t kStateVersion = 2u;
+    constexpr uint32_t kStateVersion = 3u; // 3: SPU2 voices with volume sweeps and interpolation history
 
     void serializePendingTransfers(ps2x::StateArchive &archive, std::vector<PS2Memory::PendingTransfer> &transfers)
     {

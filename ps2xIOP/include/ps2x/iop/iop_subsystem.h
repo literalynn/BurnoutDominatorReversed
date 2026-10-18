@@ -37,6 +37,11 @@ namespace ps2x::iop
         // loadcore's SearchModuleByName: id of the loaded module with this internal name, or -1.
         [[nodiscard]] int32_t searchModuleByName(std::string_view name) const;
         void runEeCycles(uint64_t eeCycles) noexcept;
+        // The SPU2's mixed output: interleaved stereo int16 at 48 kHz, oldest first; returns
+        // the frames copied. Safe from any thread: the output ring has its own lock.
+        size_t readAudio(int16_t *destination, size_t frames);
+        [[nodiscard]] uint64_t audioFramesProduced() const noexcept;
+        [[nodiscard]] uint32_t activeAudioVoices() const noexcept;
 
         [[nodiscard]] RpcAbi selectRpcAbi(const RpcAbiRequest &request) const;
         [[nodiscard]] bool canBindRpc(uint32_t sid) const noexcept;

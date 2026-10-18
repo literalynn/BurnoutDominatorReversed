@@ -21,6 +21,7 @@
 #include "ps2_host_backend.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
+#include "runtime/host_audio.h"
 #include "runtime/host_settings.h"
 
 #include <iostream>
@@ -551,6 +552,7 @@ PS2Runtime::~PS2Runtime()
             m_memory.setGsWorker(nullptr);
             m_gsWorker.reset();
         }
+        ps2x::stopHostAudio();
         m_iopSubsystem.reset();
         m_iopHost.reset();
 #if defined(PLATFORM_VITA)
@@ -2636,6 +2638,9 @@ void PS2Runtime::printRunStatus(std::ostream &out)
          << " mods=" << iop.emulatorLoadedModules
          << " thr=" << iop.emulatorThreads
          << " rpc=" << iop.emulatorRpcServers << "]";
+    if (m_iopSubsystem)
+        line << " spu[voices=" << m_iopSubsystem->activeAudioVoices()
+             << " out=" << m_iopSubsystem->audioFramesProduced() << "]";
     {
         // Game-thread wait time by cause and VSync rate since the previous status line.
         static bool havePrevious = false;
@@ -2766,9 +2771,11 @@ PS2Runtime::RunResult PS2Runtime::runHeadless(const RunOptions &options)
     std::atomic<bool> gameThreadFailed{false};
     std::thread gameThread = launchGuestThread(*this, gameThreadFinished, gameThreadFailed);
     RunObserver observer(options);
+    ps2x::startHostAudio([iop = m_iopSubsystem.get()](int16_t *frames, size_t count) { return iop ? iop->readAudio(frames, count) : size_t{0}; }, false);
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        ps2x::pumpHostAudio();
         observer.poll(*this, result);
     }
     requestStop();
@@ -2776,6 +2783,7 @@ PS2Runtime::RunResult PS2Runtime::runHeadless(const RunOptions &options)
     {
         gameThread.join();
     }
+    ps2x::stopHostAudio();
     if (options.statusInterval.count() > 0)
     {
         printRunStatus(std::cout);
@@ -2808,6 +2816,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
     std::atomic<bool> gameThreadFailed{false};
     std::thread gameThread = launchGuestThread(*this, gameThreadFinished, gameThreadFailed);
     RunObserver observer(options);
+    ps2x::startHostAudio([iop = m_iopSubsystem.get()](int16_t *frames, size_t count) { return iop ? iop->readAudio(frames, count) : size_t{0}; }, true);
 
     uint64_t tick = 0;
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
@@ -2904,6 +2913,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
     {
         gameThread.join();
     }
+    ps2x::stopHostAudio();
 
     if (m_debugUiInitialized && m_debugUiShutdownCallback)
     {
