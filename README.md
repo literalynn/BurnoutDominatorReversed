@@ -26,8 +26,8 @@ The game's MIPS R5900 code is translated to C++ with [PS2Recomp](https://github.
 | ✅ Save states | F5 / F7, the whole machine |
 | ✅ Gamepads | Xbox, PlayStation 4/5 (also through DS4Windows or DSX) and SDL-compatible pads with vibration, plus keyboard, all usable at any time |
 | ✅ Speed | full speed (50 frames per second) in races on a fast PC; a slower PC runs the game in slow motion rather than skipping frames |
-| 🟡 Known issues | occasional camera jumps |
-| ✅ Sound | music, engines, crashes and menus through the emulated SPU2 (no reverb yet) |
+| 🟡 Known issues | a few late frames in big crashes; no reverb; if the camera still jumps, press F9 when it happens and send the log |
+| ✅ Sound | music, engines, crashes and menus through the emulated SPU2, at the right pitch |
 
 Details: [docs/STATUS.md](docs/STATUS.md).
 
