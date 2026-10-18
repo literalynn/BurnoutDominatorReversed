@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Compressed UNPACKs and the scan-out copy in one pass (October 18, 2026)
+
+- `ps2_vif1_interpreter.cpp`: `unpackToVu` decoded V1-V4 of 16 and 8 bits (normals, colours, texture coordinates) through the general per-field loop built for masks and modes. Without a mask or mode and with CL >= WL they now take a direct path with the same rules (sign or zero extension, V2 as x y x y, V3's w from the element after z when there is one). `gs_parallel_backend.cpp`: the scan-out readback is copied and its alpha set in one pass instead of a copy and a strided byte loop. Same GIF stream (`BDR_GIF_HASH`) and RAM; the unpaced race reaches 5,502-5,505 VSyncs in 75 s against 5,356-5,374 (+2.6%).
+
 ## The IOP keeps to the EE's clock; audio counters (October 18, 2026)
 
 - `ps2xIOP/src/emulator/iop_emulator.cpp`: `IopEmulator::runEeCycles` ran the IOP for EE cycles / 8 past wherever it stood, so the cycles that synchronous calls (`callFunction`, RPC servers run for the EE) took it ahead were never paid back. In a race that put the IOP 1.25% ahead of the EE: the SPU2 mixed 972 samples per VSync instead of 960, and the host resampler played everything that much faster and higher. The IOP now runs up to the EE's clock (`eeTime`, the IOP cycle EE time has reached, set from the IOP clock when a state loads): a lead is paid back before it runs again, and one beyond a VSync of IOP time (module start-up) is forgiven. A race now mixes 960.0 samples per VSync and plays at rate 1.000. Test: `ps2_iop_emulator_tests` checks that the IOP waits for the EE after a synchronous module start and runs again once the EE has passed it.

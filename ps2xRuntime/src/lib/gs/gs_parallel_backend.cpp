@@ -512,12 +512,18 @@ namespace
                 ready.pending = false;
                 lastFrame.width = ready.width;
                 lastFrame.height = ready.height;
-                lastFrame.pixels.resize(size_t(ready.width) * ready.height * 4);
+                const size_t count = size_t(ready.width) * ready.height;
+                lastFrame.pixels.resize(count * 4);
                 const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
-                std::memcpy(lastFrame.pixels.data(), mapped, lastFrame.pixels.size());
+                // One pass: scan-out alpha is not a display value.
+                for (size_t i = 0; i < count; ++i)
+                {
+                    uint32_t pixel;
+                    std::memcpy(&pixel, mapped + i * 4, 4);
+                    pixel |= 0xFF000000u;
+                    std::memcpy(lastFrame.pixels.data() + i * 4, &pixel, 4);
+                }
                 device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
-                for (size_t i = 3; i < lastFrame.pixels.size(); i += 4)
-                    lastFrame.pixels[i] = 0xff; // Scanout alpha is not a display value.
             };
             Readback &current = readbacks[readbackIndex];
             if (!current.buffer || current.buffer->get_create_info().size != bytes)

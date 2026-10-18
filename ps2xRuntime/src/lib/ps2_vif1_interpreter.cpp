@@ -107,6 +107,46 @@ namespace
                 }
                 return totalBytes;
             }
+            // V1-V4 of 16 or 8 bits, same conditions: normals, colours and texture
+            // coordinates. As below: V2 writes x y x y, V3's w takes the element after z.
+            if ((vl == 1u || vl == 2u) && !maskEnable && (regs.mode & 3u) == 0u && cl >= wl)
+            {
+                const uint32_t elementBytes = 4u >> vl;
+                const auto element = [&](const uint8_t *source) -> uint32_t
+                {
+                    if (vl == 1u)
+                    {
+                        uint16_t raw = 0;
+                        std::memcpy(&raw, source, sizeof(raw));
+                        return zeroExtend ? raw : static_cast<uint32_t>(static_cast<int16_t>(raw));
+                    }
+                    return zeroExtend ? *source : static_cast<uint32_t>(static_cast<int8_t>(*source));
+                };
+                for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+                {
+                    const uint32_t destVec = (vuAddr + (writeIndex / wl) * cl + writeIndex % wl) & qwordMask;
+                    const uint8_t *srcVec = srcBase + writeIndex * bytesPerVector;
+                    uint32_t lanes[4];
+                    std::memcpy(lanes, vuData + destVec * 16u, sizeof(lanes));
+                    if (vn == 0u)
+                        lanes[0] = lanes[1] = lanes[2] = lanes[3] = element(srcVec);
+                    else if (vn == 1u)
+                    {
+                        lanes[0] = lanes[2] = element(srcVec);
+                        lanes[1] = lanes[3] = element(srcVec + elementBytes);
+                    }
+                    else
+                    {
+                        lanes[0] = element(srcVec);
+                        lanes[1] = element(srcVec + elementBytes);
+                        lanes[2] = element(srcVec + 2u * elementBytes);
+                        if (vn == 3u || static_cast<size_t>(srcVec - data) + 4u * elementBytes <= sizeBytes)
+                            lanes[3] = element(srcVec + 3u * elementBytes);
+                    }
+                    std::memcpy(vuData + destVec * 16u, lanes, sizeof(lanes));
+                }
+                return totalBytes;
+            }
             uint32_t srcIndex = 0u;
             for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
             {
