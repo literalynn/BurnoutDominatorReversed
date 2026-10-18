@@ -23,4 +23,14 @@ void pumpHostAudio();
 // The playback rate the resampler settles on for a queue `level` frames deep: the queue
 // stays near its target while the rate follows the production speed.
 double hostAudioRateFor(double level);
+
+// What the player heard so far: frames faded out for want of samples (the game fell
+// behind), frames dropped because the queue ran too deep, and the current playback rate.
+struct HostAudioStats
+{
+    uint64_t underrunFrames = 0u;
+    uint64_t droppedFrames = 0u;
+    double rate = 1.0;
+};
+HostAudioStats hostAudioStats();
 }

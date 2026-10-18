@@ -1317,6 +1317,15 @@ int main()
                 "sceSifDmaStat did not report the synchronous transfer as complete")) return 1;
     if (!expect(sifDmaPayload == 0x53494621u,
                 "IOP sceSifSetDma did not copy the payload into EE memory")) return 1;
+    // The module start ran synchronously, ahead of the EE's clock: the EE catches up
+    // before the IOP runs again, so the IOP clock stays at EE cycles / 8.
+    const uint64_t startCycles = iop.debugSnapshot().emulatorCycles;
+    iop.runEeCycles(4u * startCycles);
+    if (!expect(startCycles != 0u && iop.debugSnapshot().emulatorCycles == startCycles,
+                "The IOP ran on while ahead of the EE's clock")) return 1;
+    iop.runEeCycles(8u * startCycles);
+    if (!expect(iop.debugSnapshot().emulatorCycles >= startCycles + startCycles / 2u,
+                "The IOP did not run once the EE's clock passed it")) return 1;
 
     iop.reset();
     writeSifDmaIntrIrx(host, 0x100u);

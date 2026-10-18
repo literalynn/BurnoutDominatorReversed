@@ -33,6 +33,7 @@ namespace
         std::FILE *wav = nullptr;
         uint32_t wavFrames = 0u;
         bool streaming = false;
+        ps2x::HostAudioStats stats;
 #if !defined(PLATFORM_VITA)
         AudioStream stream{};
 #endif
@@ -100,6 +101,7 @@ namespace
         size_t available = state.queue.size() / 2u - state.head;
         if (available > kMaxFrames)
         {
+            state.stats.droppedFrames += available - size_t(kTargetFrames);
             state.head += available - size_t(kTargetFrames);
             available = size_t(kTargetFrames);
             state.position = 0.0;
@@ -110,6 +112,7 @@ namespace
         if (available > 0u)
             state.level += (double(available) - state.level) * std::min(1.0, frames / (0.5 * kSampleRate));
         const double rate = ps2x::hostAudioRateFor(state.level);
+        state.stats.rate = rate;
         const int16_t *in = state.queue.data() + state.head * 2u;
         for (unsigned int i = 0; i < frames; ++i)
         {
@@ -127,6 +130,7 @@ namespace
             else
             {
                 // Underrun: fade out what played last instead of clicking.
+                ++state.stats.underrunFrames;
                 for (int c = 0; c < 2; ++c)
                     state.last[c] = int16_t(state.last[c] * 31 / 32);
             }
@@ -209,6 +213,13 @@ namespace ps2x
             state.streaming = false;
         }
 #endif
+    }
+
+    HostAudioStats hostAudioStats()
+    {
+        HostAudio &state = audio();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        return state.stats;
     }
 
     void pumpHostAudio()

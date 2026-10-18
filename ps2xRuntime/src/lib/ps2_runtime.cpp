@@ -2659,8 +2659,15 @@ void PS2Runtime::printRunStatus(std::ostream &out)
          << " thr=" << iop.emulatorThreads
          << " rpc=" << iop.emulatorRpcServers << "]";
     if (m_iopSubsystem)
+    {
+        const ps2x::HostAudioStats audio = ps2x::hostAudioStats();
+        char rate[16];
+        std::snprintf(rate, sizeof(rate), "%.3f", audio.rate);
         line << " spu[voices=" << m_iopSubsystem->activeAudioVoices()
-             << " out=" << m_iopSubsystem->audioFramesProduced() << "]";
+             << " out=" << m_iopSubsystem->audioFramesProduced()
+             << " underrun=" << audio.underrunFrames << " dropped=" << audio.droppedFrames
+             << " rate=" << rate << "]";
+    }
     line << " ff=" << m_eeScheduler->fastForwardVBlanks();
     {
         // Game-thread wait time by cause and VSync rate since the previous status line.

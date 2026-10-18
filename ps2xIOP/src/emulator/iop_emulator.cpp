@@ -187,6 +187,7 @@ namespace ps2x::iop::detail
             totalCycles = 0;
             totalInstructions = 0;
             eeCycleCarry = 0;
+            eeTime = 0;
             activeCpu = nullptr;
             lastError.clear();
             servicingDmaInterrupts = false;
@@ -1010,6 +1011,9 @@ namespace ps2x::iop::detail
         uint64_t totalCycles = 0;
         uint64_t totalInstructions = 0;
         uint64_t eeCycleCarry = 0;
+        // The IOP cycle the EE's clock has reached (EE cycles / 8). Calls run synchronously
+        // for the EE (callFunction) take the IOP past it; the EE then catches up first.
+        uint64_t eeTime = 0;
         CpuState *activeCpu = nullptr;
         std::string lastError;
         bool servicingDmaInterrupts = false;
@@ -1100,10 +1104,16 @@ namespace ps2x::iop::detail
     void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
     {
         const uint64_t total = m_impl->eeCycleCarry + eeCycles;
-        const uint64_t iopCycles = total / 8u;
         m_impl->eeCycleCarry = total % 8u;
-        if (iopCycles)
-            m_impl->runCycles(iopCycles);
+        // Up to the EE's clock, not a slice past wherever the IOP stands: what synchronous
+        // calls ran ahead (1.25% in a race, the SPU2 playing that much fast) is paid back.
+        m_impl->eeTime += total / 8u;
+        // Beyond a VSync of IOP time (module start-up at boot) the lead is forgiven.
+        constexpr uint64_t kMaxLead = kIopClockHz / 50u;
+        if (m_impl->totalCycles > m_impl->eeTime + kMaxLead)
+            m_impl->eeTime = m_impl->totalCycles - kMaxLead;
+        if (m_impl->totalCycles < m_impl->eeTime)
+            m_impl->runCycles(m_impl->eeTime - m_impl->totalCycles);
     }
 
     RpcResult IopEmulator::handleRpc(const RpcRequest &request)
@@ -1301,6 +1311,8 @@ namespace ps2x::iop::detail
         archive.value(impl.totalCycles);
         archive.value(impl.totalInstructions);
         archive.value(impl.eeCycleCarry);
+        if (archive.loading())
+            impl.eeTime = impl.totalCycles; // not saved: a loaded state starts in step
         archive.value(impl.secrMcCommandHandler);
         archive.value(impl.secrMcDevIdHandler);
         archive.value(impl.checkKelfPathCallback);
