@@ -724,6 +724,7 @@ void register_ps2_runtime_io_tests()
             ps2x::HostSettings &settings = ps2x::hostSettings();
             const ps2x::HostSettings saved = settings;
             settings.superSampling = 8;
+            settings.highResolution = false;
             settings.aspect = "16:9";
             settings.volume = 40;
             settings.keys[4] = {ps2x::kMouseInput, 'J', ps2x::kMouseWheelDown};
@@ -734,6 +735,7 @@ void register_ps2_runtime_io_tests()
             t.IsTrue(ps2x::loadHostSettings(path, errors), "the written file loads");
             t.Equals(errors, std::string(), "the written file has no bad line");
             t.Equals(settings.superSampling, 8, "super_sampling round-trips");
+            t.IsTrue(!settings.highResolution, "high_resolution round-trips");
             t.Equals(settings.aspect, std::string("16:9"), "aspect round-trips");
             t.Equals(settings.volume, 40, "volume round-trips");
             t.Equals(settings.keys[4][0], ps2x::kMouseInput, "a mouse button binding round-trips");

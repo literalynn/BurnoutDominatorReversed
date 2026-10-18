@@ -21,6 +21,7 @@ namespace
     enum MainRow
     {
         RowVolume,
+        RowResolution,
         RowAspect,
         RowFps,
         RowFullscreen,
@@ -113,6 +114,7 @@ namespace
         switch (row)
         {
         case RowVolume: return "Sound volume";
+        case RowResolution: return "Resolution";
         case RowAspect: return "Picture shape";
         case RowFps: return "Show FPS";
         case RowFullscreen: return "Full screen (F11)";
@@ -126,12 +128,27 @@ namespace
         }
     }
 
+    // Resolution presets: 640x512 at one sample, then 1280x1024 from 4, 8 or 16 samples a pixel.
+    constexpr int kPresetSamples[] = {1, 4, 8, 16};
+
+    int resolutionPreset(const ps2x::HostSettings &s)
+    {
+        if (!s.highResolution || s.superSampling < 4)
+            return 0;
+        return s.superSampling == 4 ? 1 : s.superSampling == 8 ? 2 : 3;
+    }
+
     std::string mainValue(int row)
     {
         const ps2x::HostSettings &s = ps2x::hostSettings();
         switch (row)
         {
         case RowVolume: return std::to_string(s.volume) + "%";
+        case RowResolution:
+        {
+            const int preset = resolutionPreset(s);
+            return preset == 0 ? "640x512 (PS2)" : preset == 1 ? "1280x1024" : "1280x1024, " + std::to_string(s.superSampling) + "x AA";
+        }
         case RowAspect: return s.aspect == "stretch" ? "Stretch" : s.aspect;
         case RowFps: return onOff(s.showFps);
         case RowFullscreen: return onOff(IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
@@ -154,6 +171,13 @@ namespace
         case RowVolume:
             s.volume = std::clamp(s.volume + 5 * (step == 0 ? 1 : step), 0, 100);
             break;
+        case RowResolution:
+        {
+            const int preset = (resolutionPreset(s) + (step < 0 ? 3 : 1)) % 4;
+            s.superSampling = kPresetSamples[preset];
+            s.highResolution = preset > 0;
+            break;
+        }
         case RowAspect:
         {
             static const char *kShapes[] = {"4:3", "16:9", "stretch"};

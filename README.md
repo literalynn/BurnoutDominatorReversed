@@ -82,7 +82,7 @@ The mouse works in the menus: wheel to move, left click to select, right click t
 
 | Key | Action |
 |---|---|
-| **F1** | settings menu (the game pauses): volume, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
+| **F1** | settings menu (the game pauses): volume, resolution, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
 | **Escape** | back in the menus; in a race, asks whether to quit (so does the window's close button) |
 | **F11** or **Alt+Enter** | full screen |
 | **F5** / **F7** | save / load state |
@@ -99,7 +99,8 @@ The first launch writes **`settings.ini`** next to `Play.bat`; the F1 menu chang
 | `vsync`, `fps_limit` | true, 0 | display sync and cap |
 | `aspect` | 4:3 | `4:3`, `16:9` (with in-game widescreen) or `stretch` |
 | `smooth_scaling` | true | bilinear enlargement |
-| `super_sampling` | 4 | anti-aliasing: 1, 2, 4, 8 or 16 samples per pixel |
+| `super_sampling` | 4 | samples per pixel: 1, 2, 4, 8 or 16 |
+| `high_resolution` | true | 1280x1024 instead of the PS2's 640x512 (needs 4 samples or more; 8 and 16 smooth the edges) |
 | `progressive_scan` | true | whole frames, no interlacing lines |
 | `fast_loading` | true | loading screens run faster than real time |
 | `stick_deadzone` | 12 | percent |

@@ -133,6 +133,7 @@ namespace
         };
         Readback readbacks[2];
         unsigned readbackIndex = 0;
+        int superSampling = 1; // the rate paraLLEl-GS renders at
         PresentationFrame lastFrame; // the frame shown
 
         struct Lock
@@ -303,7 +304,13 @@ namespace
         {
             Lock lock(mutex);
             ParallelGS::GSOptions options{};
-            options.super_sampling = ParallelGS::SuperSampling(ps2x::hostSettings().superSampling);
+            superSampling = ps2x::hostSettings().superSampling;
+            options.super_sampling = ParallelGS::SuperSampling(superSampling);
+            // The F1 menu changes the rate in flight. Sampled render targets keep their samples:
+            // Burnout copies its frame through full-screen passes (the last one doubles the
+            // brightness into a 16-bit buffer), and the high-resolution scan-out needs them.
+            options.dynamic_super_sampling = true;
+            options.super_sampled_textures = true;
             if (!gs.init(&vulkan.device, options))
                 throw std::runtime_error("paraLLEl-GS initialization failed");
             gs.set_signal_interface(this);
@@ -448,6 +455,11 @@ namespace
             Lock lock(mutex);
             traceCall('P', 0, reinterpret_cast<const uint8_t *>(&request), sizeof(request));
             gs.flush();
+            if (const int samples = ps2x::hostSettings().superSampling; samples != superSampling)
+            {
+                gs.set_super_sampling_rate(ParallelGS::SuperSampling(samples), true, true);
+                superSampling = samples;
+            }
             auto &p = gs.get_priv_register_state();
             p.qwords_lo[0] = request.pmode;
             p.qwords_lo[2] = priv.smode1;
@@ -465,11 +477,11 @@ namespace
             info.dst_stage = VK_PIPELINE_STAGE_2_COPY_BIT;
             info.dst_access = VK_ACCESS_2_TRANSFER_READ_BIT;
             info.crtc_offsets = true;
-            // Player setting: whole frames without field blending. paraLLEl-GS's high-resolution
-            // scan-out is not offered: Burnout copies its frame through post-processing passes, and
-            // the doubled scan-out came out duplicated side by side.
+            // Player settings: whole frames without field blending, and twice the resolution from
+            // the super samples.
             info.force_progressive = ps2x::hostSettings().progressiveScan;
             info.anti_blur = ps2x::hostSettings().progressiveScan;
+            info.high_resolution_scanout = ps2x::hostSettings().highResolution;
             if (std::getenv("BDR_PGS_TRACE"))
                 std::printf("[pgs-present] pmode=%llx smode1=%llx smode2=%llx dispfb1=%llx display1=%llx dispfb2=%llx display2=%llx bg=%llx\n",
                             (unsigned long long)request.pmode, (unsigned long long)priv.smode1, (unsigned long long)request.smode2,

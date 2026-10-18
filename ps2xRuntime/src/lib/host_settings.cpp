@@ -126,6 +126,8 @@ namespace ps2x
             }
             if (key == "progressive_scan")
                 return parseBool(value, s.progressiveScan);
+            if (key == "high_resolution")
+                return parseBool(value, s.highResolution);
             if (key == "gs_thread")
                 return parseBool(value, s.gsThread);
             if (key == "fast_loading")
@@ -258,6 +260,9 @@ namespace ps2x
                 "# more GPU work. progressive_scan shows whole frames instead of interlaced fields (no line combing).\n"
                 "super_sampling = " << s.superSampling << "\n"
                 "progressive_scan = " << (s.progressiveScan ? "true" : "false") << "\n"
+                "# high_resolution shows twice the PS2 resolution (1280x1024), built from the super samples:\n"
+                "# it needs super_sampling 4 or more (8 and 16 also smooth the edges). F1 changes both.\n"
+                "high_resolution = " << (s.highResolution ? "true" : "false") << "\n"
                 "\n"
                 "# gs_thread runs the PS2 graphics units (VIF1, VU1, GS) on a second CPU core.\n"
                 "gs_thread = " << (s.gsThread ? "true" : "false") << "\n"
