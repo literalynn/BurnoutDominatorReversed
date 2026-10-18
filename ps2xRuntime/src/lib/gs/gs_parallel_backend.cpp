@@ -130,15 +130,19 @@ namespace
             Vulkan::BufferHandle buffer;
             Vulkan::Fence fence;
             uint32_t width = 0, height = 0;
+            uint64_t serial = 0; // present that queued it
             bool pending = false;
         };
         Readback readbacks[2];
         unsigned readbackIndex = 0;
         PresentationFrame lastFrame; // shown again while no newer readback has landed
+        uint64_t lastSerial = 0;     // present that lastFrame comes from
         // How long a present without a backlog waits for its own readback before
-        // showing the previous frame. The GPU usually lands a frame within 2 ms.
-        const uint64_t presentWaitNs = std::getenv("BDR_PGS_PRESENT_WAIT_US") ? uint64_t(std::atoi(std::getenv("BDR_PGS_PRESENT_WAIT_US"))) * 1000u : 2000000u;
-        unsigned presents = 0, presentsLanded = 0;
+        // showing the previous frame. With 2 ms, one race frame in 20 missed it: the screen
+        // showed the previous frame twice and then skipped that one (a judder); 8 ms lands
+        // them all and the worker still idles.
+        const uint64_t presentWaitNs = std::getenv("BDR_PGS_PRESENT_WAIT_US") ? uint64_t(std::atoi(std::getenv("BDR_PGS_PRESENT_WAIT_US"))) * 1000u : 8000000u;
+        unsigned presents = 0, presentsLanded = 0, presentsStale = 0;
 
         struct Lock
         {
@@ -515,6 +519,15 @@ namespace
             // A readback that has not landed is picked up at a later present, and the last
             // frame is shown meanwhile; see the wait bound below.
             const auto copyOut = [&](Readback &ready) {
+                ready.pending = false;
+                // A readback that lands after a newer one was shown would step the picture
+                // back one frame (the camera jumps back, then forward again).
+                if (ready.serial < lastSerial)
+                {
+                    ++presentsStale;
+                    return;
+                }
+                lastSerial = ready.serial;
                 lastFrame.width = ready.width;
                 lastFrame.height = ready.height;
                 lastFrame.pixels.resize(size_t(ready.width) * ready.height * 4);
@@ -523,7 +536,6 @@ namespace
                 device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
                 for (size_t i = 3; i < lastFrame.pixels.size(); i += 4)
                     lastFrame.pixels[i] = 0xff; // Scanout alpha is not a display value.
-                ready.pending = false;
             };
             Readback &current = readbacks[readbackIndex];
             if (current.pending)
@@ -550,6 +562,7 @@ namespace
             device.submit(cmd, &current.fence);
             current.width = width;
             current.height = height;
+            current.serial = presents + 1u;
             current.pending = true;
 
             // The previous frame if it has landed, then this one if it lands within the
@@ -570,10 +583,10 @@ namespace
                 copyOut(current);
             }
             if (++presents % 500 == 0 && std::getenv("BDR_PGS_PRESENT_STATS"))
-                std::printf("[pgs-present] %u of the last 500 presents landed within %llu us\n", presentsLanded,
-                            (unsigned long long)(presentWaitNs / 1000u));
+                std::printf("[pgs-present] %u of the last 500 presents landed within %llu us, %u stale readbacks skipped\n",
+                            presentsLanded, (unsigned long long)(presentWaitNs / 1000u), presentsStale);
             if (presents % 500 == 0)
-                presentsLanded = 0;
+                presentsLanded = presentsStale = 0;
             return lastFrame;
         }
 

@@ -1541,7 +1541,9 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
         return;
     }
 
-    m_vu0.reset();
+    // No reset(): the state is replaced below and execute() clears the pipelines; the VU0 clock
+    // just keeps counting. Resetting twice cost about 4% of the EE thread in races.
+    const uint64_t startCycle = m_vu0.state().cycles;
     copyVu0ContextToState(ctx, m_vu0.state());
     // The EE waits for VU0 (VPU_STAT, QMFC2.I) until the microprogram ends, so it runs to its
     // E bit here. The cap only stops a program that never ends.
@@ -1550,7 +1552,7 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
                   vu0Data, PS2_VU0_DATA_SIZE,
                   m_gs, &m_memory,
                   startPC, 0u, ctx->vu0_itop, kVu0CycleCap);
-    if (m_vu0.state().cycles >= kVu0CycleCap)
+    if (m_vu0.state().cycles - startCycle >= kVu0CycleCap)
         std::cerr << "[vu0] microprogram 0x" << std::hex << startPC << std::dec << " did not end" << std::endl;
     copyVu0StateToContext(m_vu0.state(), ctx);
 }
