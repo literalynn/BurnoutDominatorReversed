@@ -1643,6 +1643,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             m_pendingVif0Transfers.push_back(std::move(pt));
                         }
                     }
+                    transferBuffers().give(std::move(chainBuf)); // an empty chain's buffer
                     // else if (channelBase == 0x10009000u)
                     // {
 
@@ -2019,6 +2020,7 @@ void PS2Memory::processPendingTransfers()
         if (!p.chainData.empty())
         {
             processVIF0Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
+            transferBuffers().give(std::move(p.chainData));
         }
         else if (p.qwc > 0)
         {
