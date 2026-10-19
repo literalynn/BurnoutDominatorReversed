@@ -70,6 +70,21 @@ namespace
         static TransferBuffers buffers;
         return buffers;
     }
+
+    // BDR_GIF_HASH=1: a running hash of every GIF packet, printed every 2^18 packets. Two builds
+    // that must draw the same thing print the same lines for the same deterministic run.
+    void hashGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes)
+    {
+        static const bool hashPackets = std::getenv("BDR_GIF_HASH") != nullptr;
+        if (!hashPackets)
+            return;
+        static uint64_t hash = 1469598103934665603ull, packets = 0;
+        hash = (hash ^ static_cast<uint64_t>(pathId)) * 1099511628211ull;
+        for (uint32_t i = 0; i < sizeBytes; ++i)
+            hash = (hash ^ data[i]) * 1099511628211ull;
+        if ((++packets & 0x3FFFFu) == 0u)
+            std::printf("[gifhash] packets %llu hash %016llx\n", (unsigned long long)packets, (unsigned long long)hash);
+    }
 }
 
 std::vector<uint8_t> ps2x::takeTransferBuffer(size_t bytes)
@@ -1900,6 +1915,14 @@ void PS2Memory::processPendingTransfers()
     {
         const auto submit = [this](std::vector<uint8_t> &data)
         {
+            // What submitGifPacket does with a masked PATH3 packet, but the queue keeps
+            // the DMA buffer itself instead of a copy.
+            if (data.size() >= 16u && (m_path3Masked || (m_path3Window && !m_path3MaskedFifo.empty())))
+            {
+                hashGifPacket(GifPathId::Path3, data.data(), static_cast<uint32_t>(data.size()));
+                m_path3MaskedFifo.push_back(std::move(data));
+                return;
+            }
             submitGifPacket(GifPathId::Path3, data.data(), static_cast<uint32_t>(data.size()), false);
             transferBuffers().give(std::move(data));
         };
@@ -2269,9 +2292,27 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
         cut = q;
     }
 
-    std::vector<uint8_t> bytes = transferBuffers().take(cut * 16u);
-    bytes.reserve(cut * 16u);
-    while (bytes.size() < cut * 16u)
+    std::vector<uint8_t> bytes;
+    const uint8_t *released = nullptr;
+    if (cut != 0u && m_path3MaskedFifo.front().size() - m_path3FifoHead >= cut * 16u)
+    {
+        // All in the first queued chunk: read in place (`bytes` keeps a finished chunk alive).
+        auto &packet = m_path3MaskedFifo.front();
+        released = packet.data() + m_path3FifoHead;
+        m_path3FifoHead += cut * 16u;
+        if (m_path3FifoHead == packet.size())
+        {
+            bytes = std::move(packet);
+            m_path3MaskedFifo.erase(m_path3MaskedFifo.begin());
+            m_path3FifoHead = 0u;
+        }
+    }
+    else
+    {
+        bytes = transferBuffers().take(cut * 16u);
+        bytes.reserve(cut * 16u);
+    }
+    while (!released && bytes.size() < cut * 16u)
     {
         auto &packet = m_path3MaskedFifo.front();
         const size_t take = std::min(packet.size() - m_path3FifoHead, cut * 16u - bytes.size());
@@ -2289,13 +2330,17 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
     {
         // A packet PATH3 has started ends before the GIF serves PATH2 (continuous mode): it
         // goes out now instead of being sorted behind a DIRECT that follows in the window.
-        if (m_gifArbiter)
+        if (!released)
+            released = bytes.data();
+        if (m_gifArbiter && m_gifArbiter->empty())
+            m_gifArbiter->process(GifPathId::Path3, released, static_cast<uint32_t>(cut * 16u));
+        else if (m_gifArbiter)
         {
-            m_gifArbiter->submit(GifPathId::Path3, bytes.data(), static_cast<uint32_t>(cut * 16u), false);
+            m_gifArbiter->submit(GifPathId::Path3, released, static_cast<uint32_t>(cut * 16u), false);
             m_gifArbiter->drain();
         }
         else if (m_gifPacketCallback)
-            m_gifPacketCallback(bytes.data(), static_cast<uint32_t>(cut * 16u));
+            m_gifPacketCallback(released, static_cast<uint32_t>(cut * 16u));
     }
     transferBuffers().give(std::move(bytes));
     return static_cast<uint32_t>(cut);
@@ -2315,18 +2360,7 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
 {
     if (!data || sizeBytes < 16)
         return;
-    // BDR_GIF_HASH=1: a running hash of every GIF packet, printed every 2^18 packets. Two builds
-    // that must draw the same thing print the same lines for the same deterministic run.
-    static const bool hashPackets = std::getenv("BDR_GIF_HASH") != nullptr;
-    if (hashPackets)
-    {
-        static uint64_t hash = 1469598103934665603ull, packets = 0;
-        hash = (hash ^ static_cast<uint64_t>(pathId)) * 1099511628211ull;
-        for (uint32_t i = 0; i < sizeBytes; ++i)
-            hash = (hash ^ data[i]) * 1099511628211ull;
-        if ((++packets & 0x3FFFFu) == 0u)
-            std::printf("[gifhash] packets %llu hash %016llx\n", (unsigned long long)packets, (unsigned long long)hash);
-    }
+    hashGifPacket(pathId, data, sizeBytes);
 
     if (pathId == GifPathId::Path3)
     {
