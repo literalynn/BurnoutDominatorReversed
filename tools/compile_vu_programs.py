@@ -482,23 +482,35 @@ def emit_routine(routine, name, max_pairs, status_unseen=False):
 
     # Pairs are named by block and position, which lets each one see the pairs
     # issued before it in the block, and before the block on every way into it
-    # when all are known: blocks of this routine with three pairs or more. The
+    # when all are known: through blocks of this routine only, since the
     # routine's entry is also reached from outside, with anything pending.
     sources = {start: [] for start in routine.blocks}
     for start, (_, terminator) in routine.blocks.items():
         for target in successors(terminator):
             sources[target].append(start)
 
-    def entry_tails(start):
+    def tails_into(start, count):
+        """The last count pairs issued before block start on each way into it
+        (word tuples, oldest first), or None if a way is unknown."""
         if start == routine.entry or not sources[start]:
-            return []
+            return None
         tails = set()
         for source in sources[start]:
             body = routine.blocks[source][0]
-            if len(body) < 3:
-                return []
-            tails.add(tuple(pairs[i].word for i in body[-3:]))
-        return sorted(tails)
+            if not body:
+                return None
+            words = tuple(pairs[i].word for i in body[-count:])
+            if len(words) < count:
+                earlier = tails_into(source, count - len(words))
+                if earlier is None:
+                    return None
+                tails.update(tail + words for tail in earlier)
+            else:
+                tails.add(words)
+        return tails
+
+    def entry_tails(start):
+        return sorted(tails_into(start, 3) or [])
 
     tables = []
     lines = []
