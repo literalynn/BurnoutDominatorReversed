@@ -416,6 +416,94 @@ PS2_VU_FORCE_INLINE __m128 productSum(__m128 acc, __m128 left, __m128 right)
     return Subtract ? _mm_sub_ps(acc, product) : _mm_add_ps(acc, product);
 #endif
 }
+
+// The interpreter's exact FMAC path computes in long double; where that is double,
+// exactLanes below gives its results.
+inline constexpr bool kExactInDouble = std::numeric_limits<long double>::digits == std::numeric_limits<double>::digits;
+
+enum class Exact { Add, Subtract, Multiply, ProductAdd, ProductSubtract };
+
+// normalizeOperand on four lanes: a denormal becomes a signed zero, infinity and NaN +-FLT_MAX.
+PS2_VU_FORCE_INLINE __m128 normalizeOperands(__m128 value)
+{
+    const __m128i bits = _mm_castps_si128(value);
+    const __m128i magnitude = _mm_and_si128(bits, _mm_set1_epi32(0x7FFFFFFF));
+    const __m128i sign = _mm_xor_si128(bits, magnitude);
+    const __m128i denormal = _mm_cmplt_epi32(magnitude, _mm_set1_epi32(0x00800000));
+    const __m128i special = _mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF));
+    const __m128i kept = _mm_andnot_si128(_mm_or_si128(denormal, special), bits);
+    const __m128i limit = _mm_and_si128(special, _mm_or_si128(sign, _mm_set1_epi32(0x7F7FFFFF)));
+    return _mm_castsi128_ps(_mm_or_si128(_mm_or_si128(kept, _mm_and_si128(denormal, sign)), limit));
+}
+
+// computeUpper's results for an instruction whose lanes the fast checks did not all
+// clear: the float result of the normalized operands stands unless the result in
+// double (the product exact, the sum rounded in the VU mode) is zero, below FLT_MIN
+// or above FLT_MAX, as normalizeFmacExactResult has it; Z, S, U and O come from the
+// double result. Writes four lanes to value and returns their MAC conditions in the
+// queue's layout. Out of line: the generated code calls it rarely.
+template <Exact Kind>
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+uint32_t exactLanes(__m128 left, __m128 right, __m128 acc, float *value)
+{
+    const __m128 l = normalizeOperands(left), r = normalizeOperands(right);
+    const auto low = [](__m128 v) { return _mm_cvtps_pd(v); };
+    const auto high = [](__m128 v) { return _mm_cvtps_pd(_mm_movehl_ps(v, v)); };
+    __m128 single;
+    __m128d resultLow, resultHigh;
+    if constexpr (Kind == Exact::Add)
+    {
+        single = _mm_add_ps(l, r);
+        resultLow = _mm_add_pd(low(l), low(r));
+        resultHigh = _mm_add_pd(high(l), high(r));
+    }
+    else if constexpr (Kind == Exact::Subtract)
+    {
+        single = _mm_sub_ps(l, r);
+        resultLow = _mm_sub_pd(low(l), low(r));
+        resultHigh = _mm_sub_pd(high(l), high(r));
+    }
+    else if constexpr (Kind == Exact::Multiply)
+    {
+        single = _mm_mul_ps(l, r);
+        resultLow = _mm_mul_pd(low(l), low(r));
+        resultHigh = _mm_mul_pd(high(l), high(r));
+    }
+    else
+    {
+        constexpr bool subtract = Kind == Exact::ProductSubtract;
+        const __m128 a = normalizeOperands(acc);
+        single = productSum<subtract>(a, l, r);
+        const __m128d productLow = _mm_mul_pd(low(l), low(r)), productHigh = _mm_mul_pd(high(l), high(r));
+        resultLow = subtract ? _mm_sub_pd(low(a), productLow) : _mm_add_pd(low(a), productLow);
+        resultHigh = subtract ? _mm_sub_pd(high(a), productHigh) : _mm_add_pd(high(a), productHigh);
+    }
+    // Lane masks from the two halves' 64-bit masks, and their sign bits.
+    const auto lanes = [](__m128d lo, __m128d hi) {
+        return _mm_shuffle_ps(_mm_castpd_ps(lo), _mm_castpd_ps(hi), _MM_SHUFFLE(2, 0, 2, 0));
+    };
+    const __m128d magnitudeMask = _mm_castsi128_pd(_mm_set1_epi64x(0x7FFFFFFFFFFFFFFFll));
+    const __m128d magnitudeLow = _mm_and_pd(resultLow, magnitudeMask), magnitudeHigh = _mm_and_pd(resultHigh, magnitudeMask);
+    const __m128d maximum = _mm_set1_pd(static_cast<double>(std::numeric_limits<float>::max()));
+    const __m128d minimum = _mm_set1_pd(static_cast<double>(std::numeric_limits<float>::min()));
+    const __m128 huge = lanes(_mm_cmpgt_pd(magnitudeLow, maximum), _mm_cmpgt_pd(magnitudeHigh, maximum));
+    const __m128 tiny = lanes(_mm_cmplt_pd(magnitudeLow, minimum), _mm_cmplt_pd(magnitudeHigh, minimum));
+    const __m128 zero = lanes(_mm_cmpeq_pd(resultLow, _mm_setzero_pd()), _mm_cmpeq_pd(resultHigh, _mm_setzero_pd()));
+    const __m128 sign = _mm_and_ps(_mm_shuffle_ps(_mm_castpd_ps(resultLow), _mm_castpd_ps(resultHigh), _MM_SHUFFLE(3, 1, 3, 1)),
+                                   _mm_castsi128_ps(_mm_set1_epi32(std::numeric_limits<int32_t>::min())));
+    const __m128 limit = _mm_or_ps(sign, _mm_castsi128_ps(_mm_set1_epi32(0x7F7FFFFF)));
+    const __m128 kept = _mm_andnot_ps(_mm_or_ps(huge, tiny), single);
+    _mm_storeu_ps(value, _mm_or_ps(_mm_or_ps(kept, _mm_and_ps(tiny, sign)), _mm_and_ps(huge, limit)));
+    const uint32_t z = static_cast<uint32_t>(_mm_movemask_ps(tiny));
+    const uint32_t s = static_cast<uint32_t>(_mm_movemask_ps(sign));
+    const uint32_t u = static_cast<uint32_t>(_mm_movemask_ps(_mm_andnot_ps(zero, tiny)));
+    const uint32_t o = static_cast<uint32_t>(_mm_movemask_ps(huge));
+    return z | s << 4u | u << 8u | o << 12u;
+}
 }
 #endif
 
@@ -1423,7 +1511,18 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                                                  _mm_cmplt_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF)));
             const __m128i safe = _mm_or_si128(normal, _mm_and_si128(zero, exactZero));
             if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>)
-                return false;
+            {
+                // Without status readers no product condition is needed (VU1).
+                if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
+                {
+                    constexpr auto kind = simpleAdd ? fast::Exact::Add : simpleSub ? fast::Exact::Subtract : fast::Exact::Multiply;
+                    const uint32_t conditions = fast::exactLanes<kind>(left, right, _mm_setzero_ps(), value);
+                    fmacFlags<Hint>(conditions & (static_cast<uint32_t>(fast::kLanes<dest>) * 0x1111u), 0u);
+                    return true;
+                }
+                else
+                    return false;
+            }
             _mm_storeu_ps(value, result);
             if constexpr (dest != 0u)
                 fmacFlags<Hint>(fast::layout<dest>(fast::mask(zero), _mm_movemask_ps(result), 0), 0u);
@@ -1449,7 +1548,17 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
             const __m128i zero = _mm_cmpeq_epi32(_mm_and_si128(bits, magnitudeMask), none);
             const __m128i safe = _mm_or_si128(_mm_andnot_si128(risky, resultSafe), _mm_and_si128(zero, zeroProduct));
             if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>)
-                return false;
+            {
+                if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
+                {
+                    constexpr auto kind = subtract ? fast::Exact::ProductSubtract : fast::Exact::ProductAdd;
+                    const uint32_t conditions = fast::exactLanes<kind>(left, right, _mm_loadu_ps(m_state.acc), value);
+                    fmacFlags<Hint>(conditions & (static_cast<uint32_t>(fast::kLanes<dest>) * 0x1111u), 0u);
+                    return true;
+                }
+                else
+                    return false;
+            }
             _mm_storeu_ps(value, result);
             if constexpr (dest != 0u)
             {
