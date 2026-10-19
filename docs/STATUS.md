@@ -1,6 +1,6 @@
 # Project status
 
-The full reverse-engineering goal is not reached yet. This repository holds the reproducible work, the recompilation pipeline and the observations verified on the original disc. It does not claim a playable port or recovered original source code.
+The game is playable from start to finish and stable; work now goes into speed and modding. This repository holds the reproducible work, the recompilation pipeline and the observations verified on the original disc. It does not claim recovered original source code.
 
 ## Observed identity
 

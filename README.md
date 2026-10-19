@@ -8,7 +8,7 @@
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue)
 ![graphics](https://img.shields.io/badge/GPU-Vulkan-red)
 ![license](https://img.shields.io/badge/license-GPLv3-green)
-![status](https://img.shields.io/badge/status-work%20in%20progress-orange)
+![status](https://img.shields.io/badge/status-playable-brightgreen)
 
 </div>
 
@@ -18,6 +18,8 @@ The game's MIPS R5900 code is translated to C++ with [PS2Recomp](https://github.
 
 ## Status
 
+**The whole game is playable and stable.** Work now goes into speed and modding.
+
 | | |
 |---|---|
 | ✅ Boot, intro videos, menus, World Tour, car select | right graphics |
@@ -25,11 +27,18 @@ The game's MIPS R5900 code is translated to C++ with [PS2Recomp](https://github.
 | ✅ Memory card | profile created and saved after every event |
 | ✅ Save states | F5 / F7, the whole machine |
 | ✅ Gamepads | Xbox, PlayStation 4/5 (also through DS4Windows or DSX) and SDL-compatible pads with vibration, plus keyboard, all usable at any time |
-| ✅ Speed | full speed (50 frames per second) in races on a fast PC; a slower PC runs the game in slow motion rather than skipping frames |
-| 🟡 Known issues | a few late frames in big crashes; no reverb; if the camera still jumps, press F9 when it happens and send the log |
-| ✅ Sound | music, engines, crashes and menus through the emulated SPU2, at the right pitch |
+| ✅ Speed | 60 frames per second in six-car races on a fast PC; when frames come late the game runs extra simulation steps instead of slowing down (`keep_speed`) |
+| ✅ Graphics | up to 4x the PS2 resolution, supersampling, FXAA, 16:9 |
+| ✅ Sound | music, engines, crashes and menus through the emulated SPU2, at the right pitch, even when the game slows down |
+| 🟡 Limits | no SPU2 reverb; no frame interpolation, so a slow PC shows fewer frames, not slower ones |
 
 Details: [docs/STATUS.md](docs/STATUS.md).
+
+## System requirements
+
+The CPU's single-core speed matters most: the game code and the VU1 graphics programs each run on one thread. On a Ryzen 7 9800X3D each of them takes about 12 ms of a 16.7 ms frame in a six-car race, and the game keeps 55-60 frames per second with only 2 or 4 CPU threads. A CPU with clearly lower single-core speed will drop under 60 in busy races; `keep_speed` keeps the race at the right speed with fewer frames. Four CPU threads are enough.
+
+The graphics card needs Vulkan. The PS2 resolution with 1 sample a pixel is light; 2x (4 samples) and 4x (16 samples) need a dedicated GPU. Lower `super_sampling` in F1 if the frame rate drops.
 
 ## Install (Windows)
 
@@ -82,7 +91,7 @@ The mouse works in the menus: wheel to move, left click to select, right click t
 
 | Key | Action |
 |---|---|
-| **F1** | settings menu (the game pauses): volume, resolution, anti-aliasing, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, stick dead zone, keyboard and mouse controls |
+| **F1** | settings menu (the game pauses): volume, resolution, anti-aliasing, 4:3 / 16:9 / stretch, FPS counter, full screen, smoothing, vibration, fast loading, keep speed, stick dead zone, keyboard and mouse controls |
 | **Escape** | back in the menus; in a race, asks whether to quit (so does the window's close button) |
 | **F11** or **Alt+Enter** | full screen |
 | **F5** / **F7** | save / load state |
@@ -130,7 +139,8 @@ The game runs at 60 Hz: its 50/60 Hz question is skipped (`refresh_rate`).
 
 Contributions are welcome, from code to bug reports. Where help matters most:
 
-- **Speed**: the VU1 microprograms dominate a race frame. They are compiled ahead of time by [`tools/compile_vu_programs.py`](tools/compile_vu_programs.py) into C++ that is cycle-accurate but far from lean.
+- **Speed**, for smaller PCs: the VU1 microprograms dominate a race frame. They are compiled ahead of time by [`tools/compile_vu_programs.py`](tools/compile_vu_programs.py) into C++ that is cycle-accurate but far from lean. `BDR_STOP_AT_VSYNC` measures a build's CPU time on a replay ([docs/BOOT.md](docs/BOOT.md)).
+- **Modding**: [`disc_patches.cpp`](ps2xRuntime/src/lib/disc_patches.cpp) changes disc files as the game reads them (the PC save texts use it), without touching the ISO.
 - **Sound**: the SPU2 ([`ps2xIOP/src/emulator/core/iop_spu2.cpp`](ps2xIOP/src/emulator/core/iop_spu2.cpp)) needs reverb and testing by ear.
 - **Linux and macOS**: builds, controllers, packaging.
 - **Bug reports**: what you saw, when, your hardware, and if you can a save state (F5) taken just before it.
