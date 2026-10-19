@@ -28,6 +28,69 @@ enum VIFCmd : uint8_t
 
 namespace
 {
+    // V1-V4 of 16 or 8 bits without mask or mode, every write with its source vector
+    // (CL >= WL): normals, colours and texture coordinates. V2 writes x y x y; V3's w
+    // takes the element after z, or keeps its value when the data ends there. One
+    // instance per format, so no element tests the format again.
+    template <uint32_t Vl, uint32_t Vn, bool ZeroExtend>
+    void unpackNarrow(uint8_t *vuData, uint32_t qwordMask, uint32_t vuAddr, uint32_t cl, uint32_t wl,
+                      const uint8_t *srcBase, const uint8_t *data, uint32_t sizeBytes, uint32_t writeVectorCount)
+    {
+        constexpr uint32_t elementBytes = 4u >> Vl;
+        constexpr uint32_t bytesPerVector = (Vn + 1u) * elementBytes;
+        const auto element = [](const uint8_t *source) -> uint32_t
+        {
+            if constexpr (Vl == 1u)
+            {
+                uint16_t raw;
+                std::memcpy(&raw, source, sizeof(raw));
+                return ZeroExtend ? raw : static_cast<uint32_t>(static_cast<int16_t>(raw));
+            }
+            else
+                return ZeroExtend ? *source : static_cast<uint32_t>(static_cast<int8_t>(*source));
+        };
+        uint32_t blockStart = vuAddr, row = 0u;
+        for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+        {
+            uint8_t *destination = vuData + ((blockStart + row) & qwordMask) * 16u;
+            if (++row == wl)
+            {
+                row = 0u;
+                blockStart += cl;
+            }
+            const uint8_t *srcVec = srcBase + writeIndex * bytesPerVector;
+            uint32_t lanes[4];
+            if constexpr (Vn == 0u)
+                lanes[0] = lanes[1] = lanes[2] = lanes[3] = element(srcVec);
+            else if constexpr (Vn == 1u)
+            {
+                lanes[0] = lanes[2] = element(srcVec);
+                lanes[1] = lanes[3] = element(srcVec + elementBytes);
+            }
+            else
+            {
+                if constexpr (Vn == 2u)
+                    std::memcpy(&lanes[3], destination + 12u, sizeof(lanes[3]));
+                lanes[0] = element(srcVec);
+                lanes[1] = element(srcVec + elementBytes);
+                lanes[2] = element(srcVec + 2u * elementBytes);
+                if (Vn == 3u || static_cast<size_t>(srcVec - data) + 4u * elementBytes <= sizeBytes)
+                    lanes[3] = element(srcVec + 3u * elementBytes);
+            }
+            std::memcpy(destination, lanes, sizeof(lanes));
+        }
+    }
+
+    using NarrowUnpack = void (*)(uint8_t *, uint32_t, uint32_t, uint32_t, uint32_t, const uint8_t *, const uint8_t *,
+                                  uint32_t, uint32_t);
+    template <uint32_t Vl, uint32_t Vn>
+    constexpr NarrowUnpack narrowPair[2] = {&unpackNarrow<Vl, Vn, false>, &unpackNarrow<Vl, Vn, true>};
+    // [vl - 1][vn][zero extension]
+    constexpr const NarrowUnpack *narrowUnpacks[2][4] = {
+        {narrowPair<1, 0>, narrowPair<1, 1>, narrowPair<1, 2>, narrowPair<1, 3>},
+        {narrowPair<2, 0>, narrowPair<2, 1>, narrowPair<2, 2>, narrowPair<2, 3>},
+    };
+
     // UNPACK into VU data memory (PCSX2 Vif_Unpack.cpp), shared by VIF0 and VIF1. qwordMask is
     // 0x3FF for VU1 and 0xFF for VU0; only VIF1 adds TOPS (FLG). Returns the source bytes used.
     uint32_t unpackToVu(VIFRegisters &regs, uint8_t *vuData, uint32_t qwordMask, bool useTops,
@@ -118,50 +181,10 @@ namespace
                 }
                 return totalBytes;
             }
-            // V1-V4 of 16 or 8 bits, same conditions: normals, colours and texture
-            // coordinates. As below: V2 writes x y x y, V3's w takes the element after z.
             if ((vl == 1u || vl == 2u) && !maskEnable && (regs.mode & 3u) == 0u && cl >= wl)
             {
-                const uint32_t elementBytes = 4u >> vl;
-                const auto element = [&](const uint8_t *source) -> uint32_t
-                {
-                    if (vl == 1u)
-                    {
-                        uint16_t raw = 0;
-                        std::memcpy(&raw, source, sizeof(raw));
-                        return zeroExtend ? raw : static_cast<uint32_t>(static_cast<int16_t>(raw));
-                    }
-                    return zeroExtend ? *source : static_cast<uint32_t>(static_cast<int8_t>(*source));
-                };
-                uint32_t blockStart = vuAddr, row = 0u;
-                for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
-                {
-                    const uint32_t destVec = (blockStart + row) & qwordMask;
-                    if (++row == wl)
-                    {
-                        row = 0u;
-                        blockStart += cl;
-                    }
-                    const uint8_t *srcVec = srcBase + writeIndex * bytesPerVector;
-                    uint32_t lanes[4];
-                    std::memcpy(lanes, vuData + destVec * 16u, sizeof(lanes));
-                    if (vn == 0u)
-                        lanes[0] = lanes[1] = lanes[2] = lanes[3] = element(srcVec);
-                    else if (vn == 1u)
-                    {
-                        lanes[0] = lanes[2] = element(srcVec);
-                        lanes[1] = lanes[3] = element(srcVec + elementBytes);
-                    }
-                    else
-                    {
-                        lanes[0] = element(srcVec);
-                        lanes[1] = element(srcVec + elementBytes);
-                        lanes[2] = element(srcVec + 2u * elementBytes);
-                        if (vn == 3u || static_cast<size_t>(srcVec - data) + 4u * elementBytes <= sizeBytes)
-                            lanes[3] = element(srcVec + 3u * elementBytes);
-                    }
-                    std::memcpy(vuData + destVec * 16u, lanes, sizeof(lanes));
-                }
+                narrowUnpacks[vl - 1u][vn][zeroExtend ? 1 : 0](vuData, qwordMask, vuAddr, cl, wl, srcBase, data, sizeBytes,
+                                                               writeVectorCount);
                 return totalBytes;
             }
             uint32_t srcIndex = 0u;
