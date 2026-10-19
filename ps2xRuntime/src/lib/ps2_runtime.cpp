@@ -2182,6 +2182,11 @@ uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 
 __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
+    // An aligned quadword in the scratchpad at 0x70000000, where PS2Memory does nothing but
+    // copy, without its region tests: Burnout moves most of its per-object data through the
+    // scratchpad with LQ and SQ.
+    if (vaddr - PS2_SCRATCHPAD_BASE < PS2_SCRATCHPAD_SIZE && (vaddr & 15u) == 0u)
+        return _mm_loadu_si128(reinterpret_cast<const __m128i *>(m_memory.getScratchpad() + (vaddr - PS2_SCRATCHPAD_BASE)));
     try
     {
         return m_memory.read128(vaddr);
@@ -2251,6 +2256,11 @@ void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m
     alignas(16) uint64_t _parts[2];
     _mm_storeu_si128(reinterpret_cast<__m128i *>(_parts), value);
     ps2TraceGuestWrite(rdram, vaddr, 16u, _parts[0], _parts[1], "WRITE128", ctx);
+    if (vaddr - PS2_SCRATCHPAD_BASE < PS2_SCRATCHPAD_SIZE && (vaddr & 15u) == 0u)
+    {
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(m_memory.getScratchpad() + (vaddr - PS2_SCRATCHPAD_BASE)), value);
+        return;
+    }
     try
     {
         m_memory.write128(vaddr, value);
