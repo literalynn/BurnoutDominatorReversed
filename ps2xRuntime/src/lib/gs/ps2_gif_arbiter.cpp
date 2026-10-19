@@ -1,4 +1,5 @@
 #include "runtime/gs/ps2_gif_arbiter.h"
+#include "runtime/transfer_buffers.h"
 #include <algorithm>
 #include <cstring>
 
@@ -27,8 +28,8 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
     pkt.pathId = pathId;
     pkt.path2DirectHl = (pathId == GifPathId::Path2) && path2DirectHl;
     pkt.path3Image = (pathId == GifPathId::Path3) && isImagePacket(data, sizeBytes);
-    pkt.data.resize(sizeBytes);
-    std::memcpy(pkt.data.data(), data, sizeBytes);
+    pkt.data = ps2x::takeTransferBuffer(sizeBytes);
+    pkt.data.assign(data, data + sizeBytes);
     m_queue.push_back(std::move(pkt));
 }
 
@@ -58,6 +59,7 @@ void GifArbiter::drain()
         {
             m_processFn(pkt.pathId, pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
         }
+        ps2x::giveTransferBuffer(std::move(pkt.data));
     }
     m_queue.clear();
 }

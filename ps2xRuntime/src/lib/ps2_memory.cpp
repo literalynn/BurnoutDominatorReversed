@@ -2,6 +2,7 @@
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_ipu.h"
 #include "runtime/ps2_address.h"
+#include "runtime/transfer_buffers.h"
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
 #include <atomic>
@@ -25,8 +26,10 @@ namespace
     public:
         // The largest buffer: a display list then fits without growing, which
         // would copy it and map new pages again.
-        std::vector<uint8_t> take()
+        std::vector<uint8_t> take(size_t bytes = SIZE_MAX)
         {
+            if (bytes < kSmallest)
+                return {};
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_free.empty())
                 return {};
@@ -41,7 +44,7 @@ namespace
 
         std::vector<uint8_t> copy(const uint8_t *begin, const uint8_t *end)
         {
-            std::vector<uint8_t> buffer = take();
+            std::vector<uint8_t> buffer = take(static_cast<size_t>(end - begin));
             buffer.assign(begin, end);
             return buffer;
         }
@@ -49,7 +52,7 @@ namespace
         void give(std::vector<uint8_t> &&buffer)
         {
             // Small buffers come from the heap's own pages.
-            if (buffer.capacity() < 256u * 1024u)
+            if (buffer.capacity() < kSmallest)
                 return;
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_free.size() < 16u)
@@ -57,6 +60,7 @@ namespace
         }
 
     private:
+        static constexpr size_t kSmallest = 256u * 1024u;
         std::mutex m_mutex;
         std::vector<std::vector<uint8_t>> m_free;
     };
@@ -66,6 +70,20 @@ namespace
         static TransferBuffers buffers;
         return buffers;
     }
+}
+
+std::vector<uint8_t> ps2x::takeTransferBuffer(size_t bytes)
+{
+    return transferBuffers().take(bytes);
+}
+
+void ps2x::giveTransferBuffer(std::vector<uint8_t> &&buffer)
+{
+    transferBuffers().give(std::move(buffer));
+}
+
+namespace
+{
 
     inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
     {
@@ -2190,6 +2208,8 @@ void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
         if (packet.size() >= head + 16u)
             emit(packet.data() + head, static_cast<uint32_t>(packet.size() - head));
     }
+    for (auto &packet : m_path3MaskedFifo)
+        transferBuffers().give(std::move(packet));
     m_path3MaskedFifo.clear();
     m_path3FifoHead = 0;
 
@@ -2247,7 +2267,7 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
         cut = q;
     }
 
-    std::vector<uint8_t> bytes;
+    std::vector<uint8_t> bytes = transferBuffers().take(cut * 16u);
     bytes.reserve(cut * 16u);
     while (bytes.size() < cut * 16u)
     {
@@ -2258,6 +2278,7 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
         m_path3FifoHead += take;
         if (m_path3FifoHead == packet.size())
         {
+            transferBuffers().give(std::move(packet));
             m_path3MaskedFifo.erase(m_path3MaskedFifo.begin());
             m_path3FifoHead = 0u;
         }
@@ -2274,6 +2295,7 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
         else if (m_gifPacketCallback)
             m_gifPacketCallback(bytes.data(), static_cast<uint32_t>(cut * 16u));
     }
+    transferBuffers().give(std::move(bytes));
     return static_cast<uint32_t>(cut);
 }
 
@@ -2309,7 +2331,7 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
         // During an unmask window queued packets keep their place: the window releases them.
         if (m_path3Masked || (m_path3Window && !m_path3MaskedFifo.empty()))
         {
-            m_path3MaskedFifo.emplace_back(data, data + sizeBytes);
+            m_path3MaskedFifo.push_back(transferBuffers().copy(data, data + sizeBytes));
             return;
         }
         flushMaskedPath3Packets(false);
