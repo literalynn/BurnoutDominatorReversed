@@ -70,8 +70,10 @@ namespace ps2x::iop::detail
         void sleepCurrent(IopCpuState &cpu);
         void delayCurrentUntil(uint64_t wakeCycle, IopCpuState &cpu);
 
-        [[nodiscard]] IopThread *beginNextReady(uint64_t currentCycle);
-        [[nodiscard]] uint64_t nextWakeCycle(uint64_t fallback) const;
+        // The next thread to run, now Running; or nullptr, and nextWake lowered to the
+        // earliest wake cycle of a delayed thread. One pass over the threads: the
+        // scheduler asks at every SPU2 sample when nothing runs.
+        [[nodiscard]] IopThread *beginNextReady(uint64_t currentCycle, uint64_t &nextWake);
         void endTimeslice(IopThread &thread, uint32_t returnSentinel);
         void cleanupDeadThreads();
         [[nodiscard]] IopThread *createInternalCall(uint32_t entry, uint32_t gp, uint32_t returnAddress);

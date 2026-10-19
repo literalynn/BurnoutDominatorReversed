@@ -855,13 +855,20 @@ namespace ps2x::iop::detail
         cpu.yielded = true;
     }
 
-    IopThread *IopKernel::beginNextReady(uint64_t currentCycle)
+    IopThread *IopKernel::beginNextReady(uint64_t currentCycle, uint64_t &nextWake)
     {
         IopThread *next = nullptr;
         for (auto &[id, thread] : m_threads)
         {
-            if (thread.state == IopThreadState::Delay && thread.wakeCycle <= currentCycle)
+            if (thread.state == IopThreadState::Delay)
+            {
+                if (thread.wakeCycle > currentCycle)
+                {
+                    nextWake = std::min(nextWake, thread.wakeCycle);
+                    continue;
+                }
                 thread.state = IopThreadState::Ready;
+            }
             if (thread.state != IopThreadState::Ready)
                 continue;
             if (next == nullptr || thread.priority < next->priority ||
@@ -876,17 +883,6 @@ namespace ps2x::iop::detail
         next->cpu.stopped = false;
         next->cpu.yielded = false;
         return next;
-    }
-
-    uint64_t IopKernel::nextWakeCycle(uint64_t fallback) const
-    {
-        uint64_t nextWake = fallback;
-        for (const auto &[id, thread] : m_threads)
-        {
-            if (thread.state == IopThreadState::Delay)
-                nextWake = std::min(nextWake, thread.wakeCycle);
-        }
-        return nextWake;
     }
 
     void IopKernel::endTimeslice(IopThread &thread, uint32_t returnSentinel)

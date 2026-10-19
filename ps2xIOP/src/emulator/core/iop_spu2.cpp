@@ -78,10 +78,8 @@ namespace ps2x::iop::detail
     }
 
     // PCSX2's V_VolumeSlide::Update.
-    void Spu2::Volume::step() noexcept
+    void Spu2::Volume::sweep() noexcept
     {
-        if ((reg & 0x8000u) == 0u)
-            return;
         const bool exponential = (reg & 0x4000u) != 0u;
         const bool decrease = (reg & 0x2000u) != 0u;
         const bool negative = (reg & 0x1000u) != 0u;

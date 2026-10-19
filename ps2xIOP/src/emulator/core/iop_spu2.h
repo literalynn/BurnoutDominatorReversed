@@ -124,7 +124,13 @@ namespace ps2x::iop::detail
             uint32_t counter = 0u;
 
             void set(uint16_t value) noexcept;
-            void step() noexcept;
+            // Called for every voice at every sample; only a sweeping volume changes.
+            void step() noexcept
+            {
+                if ((reg & 0x8000u) != 0u)
+                    sweep();
+            }
+            void sweep() noexcept;
         };
 
         static constexpr uint64_t kNever = ~uint64_t{0};
