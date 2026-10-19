@@ -148,7 +148,7 @@ Nothing in the game is skipped or faked: SDK functions are replaced by native co
 
 ## The road to playable
 
-The first builds stopped before the menus; once the game reached its races, they ran at one frame per second with corrupted textures and never started. Some of the bugs that stood between that and a playable game:
+The first builds stopped before the menus. Once the game got further, its first race drew one frame per second with corrupted textures, and the race clock never moved. Some of the bugs that stood between that and a playable game:
 
 - `PABSW` read the wrong register, so the track streamer loaded the wrong sections and drew meshes with the wrong microcode.
 - `SQRT.S` read the wrong operand: every square root in the game was wrong, car bodies were squashed flat and the chase camera sat at bumper height.
