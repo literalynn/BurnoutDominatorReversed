@@ -24,6 +24,9 @@
 #include <string>
 #include <vector>
 #include <ps2_log.h>
+#if defined(_M_X64) || defined(__x86_64__)
+#include <xmmintrin.h>
+#endif
 
 namespace
 {
@@ -502,10 +505,18 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeMemory = memory;
 
     // The game thread already rounds toward zero (EeScheduler::run); setting MXCSR
-    // again at every VU0 call is not free.
+    // again at every VU0 call is not free. On x86-64 floating point is SSE only: its
+    // rounding field is set inline, without the C library's x87 round trip.
+#if defined(_M_X64) || defined(__x86_64__)
+    const unsigned previousCsr = _mm_getcsr();
+    const bool useVuRounding = (previousCsr & _MM_ROUND_MASK) != _MM_ROUND_TOWARD_ZERO;
+    if (useVuRounding)
+        _mm_setcsr((previousCsr & ~_MM_ROUND_MASK) | _MM_ROUND_TOWARD_ZERO);
+#else
     const int previousRoundingMode = std::fegetround();
     const bool changeRounding = previousRoundingMode != FE_TOWARDZERO;
     const bool useVuRounding = changeRounding && std::fesetround(FE_TOWARDZERO) == 0;
+#endif
     const uint64_t budgetEnd = m_cycle + maxCycles;
     bool programEnded = false;
     const bool trackedCode = memory != nullptr && codeSize <= kMaxDecodedPairs * 8u &&
@@ -572,8 +583,13 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         m_pendingHaltT = false;
     }
     m_state.cycles = m_cycle;
+#if defined(_M_X64) || defined(__x86_64__)
+    if (useVuRounding) // the exception flags raised meanwhile stay, as with fesetround
+        _mm_setcsr((_mm_getcsr() & ~_MM_ROUND_MASK) | (previousCsr & _MM_ROUND_MASK));
+#else
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
+#endif
     const uint64_t pairsAfter = m_compiledPairsExecuted + m_interpretedPairsExecuted;
     if (ps2_vu_detail::profileRegions)
         ps2_vu_detail::regionCounters.total[m_unit == Unit::VU1 ? 1u : 0u] += pairsAfter - pairsBefore;

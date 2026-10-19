@@ -2,6 +2,7 @@
 #include "runtime/gs/gs_cpu_backend.h"
 #include "ps2_log.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/transfer_buffers.h"
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -622,7 +623,7 @@ void GS::latchHostPresentationFrame(const GSPresentationRequest &request)
     const bool usedPreferred = frame.usedPreferred;
     {
         std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
-        m_hostPresentationFrame = std::move(frame.pixels);
+        m_hostPresentationFrame.swap(frame.pixels);
         m_hostPresentationWidth = width;
         m_hostPresentationHeight = height;
         m_hostPresentationDisplayFbp = displayFbp;
@@ -631,6 +632,7 @@ void GS::latchHostPresentationFrame(const GSPresentationRequest &request)
         m_hasHostPresentationFrame = hasFrame;
         m_presentationSerial.fetch_add(1u, std::memory_order_acq_rel);
     }
+    ps2x::giveTransferBuffer(std::move(frame.pixels)); // the previous frame's, for the backend's next
 
     if (hasFrame)
     {

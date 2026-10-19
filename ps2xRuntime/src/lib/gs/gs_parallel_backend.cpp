@@ -9,6 +9,7 @@
 #include "runtime/gs/ps2_gs_memory.h"
 #include "runtime/host_settings.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/transfer_buffers.h"
 #include "ps2_log.h"
 #include "gs_interface.hpp"
 #include "context.hpp"
@@ -140,7 +141,6 @@ namespace
         unsigned readbackIndex = 0;
         int superSampling = 1; // the rate paraLLEl-GS renders at
         bool presentCurrent = false; // Present waits for this frame's readback
-        PresentationFrame lastFrame; // the frame shown
 
         struct Lock
         {
@@ -526,13 +526,17 @@ namespace
             const uint32_t height = scanout.image->get_height();
             const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
             auto &device = vulkan.device;
+            // The frontend gives its previous frame's buffer back: a new one of 1 to 5 MiB
+            // a frame mapped fresh pages, and freeing it unmapped them on the GS worker.
+            PresentationFrame frame;
             const auto copyOut = [&](Readback &ready) {
                 ready.fence->wait();
                 ready.pending = false;
-                lastFrame.width = ready.width;
-                lastFrame.height = ready.height;
+                frame.width = ready.width;
+                frame.height = ready.height;
                 const size_t count = size_t(ready.width) * ready.height;
-                lastFrame.pixels.resize(count * 4);
+                frame.pixels = ps2x::takeTransferBuffer(count * 4);
+                frame.pixels.resize(count * 4);
                 const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
                 // One pass: scan-out alpha is not a display value.
                 for (size_t i = 0; i < count; ++i)
@@ -540,7 +544,7 @@ namespace
                     uint32_t pixel;
                     std::memcpy(&pixel, mapped + i * 4, 4);
                     pixel |= 0xFF000000u;
-                    std::memcpy(lastFrame.pixels.data() + i * 4, &pixel, 4);
+                    std::memcpy(frame.pixels.data() + i * 4, &pixel, 4);
                 }
                 device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
             };
@@ -569,7 +573,7 @@ namespace
             Readback &previous = readbacks[readbackIndex ^ 1u];
             readbackIndex ^= 1u;
             copyOut(previous.pending && !presentCurrent ? previous : current);
-            return lastFrame;
+            return frame;
         }
 
         uint32_t ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const override
