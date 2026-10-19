@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 #include <ps2_log.h>
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_MSC_VER) && defined(_M_X64)
 #include <xmmintrin.h>
 #endif
 
@@ -505,9 +505,10 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeMemory = memory;
 
     // The game thread already rounds toward zero (EeScheduler::run); setting MXCSR
-    // again at every VU0 call is not free. On x86-64 floating point is SSE only: its
-    // rounding field is set inline, without the C library's x87 round trip.
-#if defined(_M_X64) || defined(__x86_64__)
+    // again at every VU0 call is not free. With MSVC on x86-64 floating point is SSE only
+    // (long double is double): its rounding field is set inline, without the C library's
+    // x87 round trip. Elsewhere long double is x87, which the exact paths use.
+#if defined(_MSC_VER) && defined(_M_X64)
     const unsigned previousCsr = _mm_getcsr();
     const bool useVuRounding = (previousCsr & _MM_ROUND_MASK) != _MM_ROUND_TOWARD_ZERO;
     if (useVuRounding)
@@ -583,7 +584,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         m_pendingHaltT = false;
     }
     m_state.cycles = m_cycle;
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_MSC_VER) && defined(_M_X64)
     if (useVuRounding) // the exception flags raised meanwhile stay, as with fesetround
         _mm_setcsr((_mm_getcsr() & ~_MM_ROUND_MASK) | (previousCsr & _MM_ROUND_MASK));
 #else
