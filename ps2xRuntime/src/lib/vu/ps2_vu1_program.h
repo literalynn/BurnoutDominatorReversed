@@ -113,9 +113,15 @@ struct Access
     static ScalarEntry &fdiv(VU1Interpreter &vu) { return vu.m_fdiv; }
     static std::array<ScalarEntry, 2> &efu(VU1Interpreter &vu) { return vu.m_efu; }
     static uint64_t efuResourceReady(const VU1Interpreter &vu) { return vu.m_efuResourceReady; }
+    // VU1Interpreter::queueQ without its normalizeResult, which stays out of line:
+    // compiled DIV and RSQRT normalize their result already, and SQRT of a normalized
+    // operand is a normal number or zero.
     static PS2_VU_FORCE_INLINE void queueQ(VU1Interpreter &vu, float value, uint32_t latency, uint32_t statusDi)
     {
-        vu.queueQ(value, latency, statusDi);
+        vu.m_fdiv.valid = true;
+        vu.m_fdiv.readyCycle = vu.m_cycle + latency;
+        vu.m_fdiv.value = value;
+        vu.m_fdiv.statusDi = statusDi & 0x30u;
     }
     static void queueP(VU1Interpreter &vu, float value, uint32_t latency) { vu.queueP(value, latency); }
     static uint64_t codeGeneration(const VU1Interpreter &vu)
