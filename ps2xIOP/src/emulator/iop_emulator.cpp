@@ -286,6 +286,8 @@ namespace ps2x::iop::detail
 
         void schedulePendingDma()
         {
+            if (!memory.dmaStartPending()) // after every instruction
+                return;
             if (const auto dma = memory.takeDmaStart())
             {
                 pendingDmaInterrupts[dma->irq] = totalCycles + dma->delayCycles;

@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <deque>
 #include <utility>
@@ -58,9 +59,34 @@ namespace ps2x::iop::detail
         // hardware register ranges. Survives reset().
         void setHardwareWriteHook(std::function<void(uint32_t, uint32_t)> hook) { m_hardwareWriteHook = std::move(hook); }
 
-        [[nodiscard]] uint8_t read8(uint32_t address) const;
-        [[nodiscard]] uint16_t read16(uint32_t address) const;
-        [[nodiscard]] uint32_t read32(uint32_t address) const;
+        // RAM inline (every instruction fetch comes here), the rest out of line.
+        [[nodiscard]] uint8_t read8(uint32_t address) const
+        {
+            const uint32_t phys = physicalAddress(address);
+            return phys < RamSize ? m_ram[phys] : readSlow8(address);
+        }
+        [[nodiscard]] uint16_t read16(uint32_t address) const
+        {
+            const uint32_t phys = physicalAddress(address);
+            if (phys + 1u < RamSize)
+            {
+                uint16_t value;
+                std::memcpy(&value, m_ram.data() + phys, sizeof(value));
+                return value;
+            }
+            return readSlow16(address);
+        }
+        [[nodiscard]] uint32_t read32(uint32_t address) const
+        {
+            const uint32_t phys = physicalAddress(address);
+            if ((phys & 3u) == 0u && phys + 3u < RamSize)
+            {
+                uint32_t value;
+                std::memcpy(&value, m_ram.data() + phys, sizeof(value));
+                return value;
+            }
+            return readSlow32(address);
+        }
         void write8(uint32_t address, uint8_t value);
         void write16(uint32_t address, uint16_t value);
         void write32(uint32_t address, uint32_t value);
@@ -86,6 +112,7 @@ namespace ps2x::iop::detail
         void setInterruptMask(uint32_t value) noexcept { m_interruptMask = value; }
         void setInterruptControl(uint32_t value) noexcept { m_interruptControl = value & 1u; }
 
+        [[nodiscard]] bool dmaStartPending() const noexcept { return m_dmaStart.has_value(); }
         [[nodiscard]] std::optional<DmaStart> takeDmaStart() noexcept;
         [[nodiscard]] Spu2 &spu() const noexcept { return m_spu; }
         void setSio2IrqCallback(std::function<void()> callback) { m_sio2Irq = std::move(callback); }
@@ -107,12 +134,16 @@ namespace ps2x::iop::detail
         [[nodiscard]] const DualShock2 &controller(uint32_t port) const noexcept { return m_pads[port & 1u]; }
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
 
-        [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
+        [[nodiscard]] static constexpr uint32_t physicalAddress(uint32_t address) noexcept { return address & 0x1FFFFFFFu; }
 
     private:
         [[nodiscard]] uint32_t readHardware32(uint32_t address) const;
         void writeHardware32(uint32_t address, uint32_t value);
         void markOwned(uint32_t address, size_t size);
+
+        [[nodiscard]] uint8_t readSlow8(uint32_t address) const;
+        [[nodiscard]] uint16_t readSlow16(uint32_t address) const;
+        [[nodiscard]] uint32_t readSlow32(uint32_t address) const;
 
         std::vector<uint8_t> m_ram;
         std::vector<uint8_t> m_owned;

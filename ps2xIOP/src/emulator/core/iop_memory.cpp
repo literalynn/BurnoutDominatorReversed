@@ -50,12 +50,7 @@ namespace ps2x::iop::detail
         m_hardware[0x1F808270u] = 0xFu;     // RECV2: idle ports
     }
 
-    uint32_t IopMemory::physicalAddress(uint32_t address) noexcept
-    {
-        return address & 0x1FFFFFFFu;
-    }
-
-    uint8_t IopMemory::read8(uint32_t address) const
+    uint8_t IopMemory::readSlow8(uint32_t address) const
     {
         const uint32_t phys = physicalAddress(address);
         if (phys < RamSize)
@@ -71,7 +66,7 @@ namespace ps2x::iop::detail
         return static_cast<uint8_t>(value >> ((phys & 3u) * 8u));
     }
 
-    uint16_t IopMemory::read16(uint32_t address) const
+    uint16_t IopMemory::readSlow16(uint32_t address) const
     {
         const uint32_t phys = physicalAddress(address);
         if (phys + 1u < RamSize)
@@ -85,7 +80,7 @@ namespace ps2x::iop::detail
         return static_cast<uint16_t>(read8(address) | (static_cast<uint16_t>(read8(address + 1u)) << 8u));
     }
 
-    uint32_t IopMemory::read32(uint32_t address) const
+    uint32_t IopMemory::readSlow32(uint32_t address) const
     {
         const uint32_t phys = physicalAddress(address);
         if ((phys & 3u) == 0u && phys + 3u < RamSize)
