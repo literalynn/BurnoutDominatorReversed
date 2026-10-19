@@ -19,16 +19,21 @@ namespace
     // DMA copies (a VIF1 display list is about 1 MiB) are built on the EE thread
     // and freed on the GS worker. Above 512 KiB the heap maps fresh pages for each
     // one, which the copy then faults in, and unmaps them on free: reused buffers
-    // avoid both.
+    // avoid both. Sixteen cover the transfers of the frames the worker is behind.
     class TransferBuffers
     {
     public:
+        // The largest buffer: a display list then fits without growing, which
+        // would copy it and map new pages again.
         std::vector<uint8_t> take()
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_free.empty())
                 return {};
-            std::vector<uint8_t> buffer = std::move(m_free.back());
+            const auto largest = std::max_element(m_free.begin(), m_free.end(),
+                [](const std::vector<uint8_t> &a, const std::vector<uint8_t> &b) { return a.capacity() < b.capacity(); });
+            std::vector<uint8_t> buffer = std::move(*largest);
+            *largest = std::move(m_free.back());
             m_free.pop_back();
             buffer.clear();
             return buffer;
@@ -47,7 +52,7 @@ namespace
             if (buffer.capacity() < 256u * 1024u)
                 return;
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_free.size() < 8u)
+            if (m_free.size() < 16u)
                 m_free.push_back(std::move(buffer));
         }
 

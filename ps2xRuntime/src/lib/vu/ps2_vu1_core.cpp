@@ -130,8 +130,8 @@ void VU1Interpreter::progressXgkick()
         // the state ends as one qword per pass would leave it.
         uint32_t qwords = 1u;
         if (m_xgkick.currentTagEnd != 0u)
-            qwords = std::min({1u + m_xgkick.cycleCredit / 2u, (m_xgkick.currentTagEnd - qwordOffset) / 16u,
-                               m_activeVuDataSize / 16u});
+            qwords = std::min(std::min(1u + m_xgkick.cycleCredit / 2u, (m_xgkick.currentTagEnd - qwordOffset) / 16u),
+                              m_activeVuDataSize / 16u);
         m_xgkick.cycleCredit -= 2u * (qwords - 1u);
         const uint32_t bytes = qwords * 16u;
         const uint32_t source = (m_xgkick.sourceAddress + qwordOffset) % m_activeVuDataSize;
@@ -303,7 +303,24 @@ bool VU1Interpreter::pipelinesPending() const
 void VU1Interpreter::flushPipelines()
 {
     while (pipelinesPending())
+    {
+        // Once PATH1 is all that is left, nothing else touches VU memory or the
+        // registers: the cycles the current GIF tag still needs pass at once,
+        // which copies the same qwords and ends on the same cycle as one at a time.
+        if (m_xgkick.active && m_activeVuData && !m_fdiv.valid && !m_efu[0].valid && !m_efu[1].valid &&
+            (m_activeFlags | m_activeStores | m_activeVfWrites | m_activeViWrites | m_activeAccWrites) == 0u)
+        {
+            const uint32_t qwords =
+                m_xgkick.currentTagEnd == 0u ? 1u : (m_xgkick.currentTagEnd - m_xgkick.copiedBytes) / 16u;
+            const uint32_t cycles = 2u * qwords > m_xgkick.cycleCredit ? 2u * qwords - m_xgkick.cycleCredit : 1u;
+            m_cycle += cycles;
+            m_state.cycles = m_cycle;
+            m_xgkick.cycleCredit += cycles - 1u; // progressXgkick adds the last cycle's
+            progressXgkick();
+            continue;
+        }
         advanceOneCycle();
+    }
 }
 
 uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedInstructionPair &decoded) const

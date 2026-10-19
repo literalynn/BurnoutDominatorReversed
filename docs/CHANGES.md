@@ -2,6 +2,12 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Less fixed cost around VU1 programs (October 19, 2026)
+
+- `ps2_vu1_core.cpp`: at the end of every VU1 program `flushPipelines` stepped one cycle at a time until PATH1 had copied the program's last GIF packet: `commitReadyPipelines` and `progressXgkick` once a cycle, about a fifth of the GS worker's time in a race. Once PATH1 is all that is still pending, nothing else writes VU memory or the registers, so the cycles the current GIF tag needs now pass at once: the same qwords are copied and the transfer ends on the same cycle. The bulk copy of `progressXgkick` took its minimum over an initializer list, which MSVC calls out of line; plain `std::min` again.
+- `ps2_memory.cpp`: `TransferBuffers` hands out its largest buffer and keeps up to 16: a smaller one made a display list grow, copy itself and map new pages again (the EE thread spent about 12% of its busy time there).
+- Same GIF stream on the deterministic race; GS worker CPU over 1,500 race VSyncs, three alternated runs: 19.4, 19.0, 14.6 s before, 16.6, 13.0, 12.4 s after.
+
 ## The game keeps its speed when drawing falls behind (October 19, 2026)
 
 - `EeScheduler.cpp`: COP0 Count was never advanced, so Burnout's frame governor (0x1E6728, called by 0x209338 with 1 to 4 steps, 2 to 8 in its 30 Hz mode) always ran one simulation step per drawn frame and the race slowed down with the frame rate. With the `keep_speed` setting (on by default), `accountCycles` sets the running context's Count to the EE cycles plus the host time the game thread spent waiting for the GS worker (emulated time stands still then; on a console it would have passed while the frame was drawn). The governor then runs more steps per drawn frame. When the extra steps make the EE the bottleneck, the waits stop and so does the correction. `BDR_DETERMINISTIC` replays count EE cycles only. The governor's accumulator is reset at the start of a race (0x1E66F8 from 0x208390), so the setting takes effect from the next race ([FINDINGS.md](FINDINGS.md) E019). With the GS worker slowed to about 31 frames per second (a test-only 15 ms sleep per frame), 600 frames of a race ran 706 steps without it and 930 with it, 61% and 83% of the game's speed.
