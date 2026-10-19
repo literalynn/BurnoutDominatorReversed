@@ -98,12 +98,23 @@ namespace
             // source word after z, or keeps its value when the data ends there.
             if (vl == 0u && vn >= 2u && !maskEnable && (regs.mode & 3u) == 0u && cl >= wl)
             {
+                // Write `writeIndex` goes to block writeIndex / WL, row writeIndex % WL,
+                // both kept as counters: two divisions a vector cost more than its copy.
+                uint32_t blockStart = vuAddr, row = 0u;
                 for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
                 {
-                    const uint32_t destVec = (vuAddr + (writeIndex / wl) * cl + writeIndex % wl) & qwordMask;
+                    uint8_t *destination = vuData + ((blockStart + row) & qwordMask) * 16u;
+                    if (++row == wl)
+                    {
+                        row = 0u;
+                        blockStart += cl;
+                    }
                     const uint8_t *srcVec = srcBase + writeIndex * bytesPerVector;
-                    const bool whole = vn == 3u || static_cast<size_t>(srcVec - data) + 16u <= sizeBytes;
-                    std::memcpy(vuData + destVec * 16u, srcVec, whole ? 16u : 12u);
+                    // Constant sizes, which the compiler copies inline.
+                    if (vn == 3u || static_cast<size_t>(srcVec - data) + 16u <= sizeBytes)
+                        std::memcpy(destination, srcVec, 16u);
+                    else
+                        std::memcpy(destination, srcVec, 12u);
                 }
                 return totalBytes;
             }
@@ -122,9 +133,15 @@ namespace
                     }
                     return zeroExtend ? *source : static_cast<uint32_t>(static_cast<int8_t>(*source));
                 };
+                uint32_t blockStart = vuAddr, row = 0u;
                 for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
                 {
-                    const uint32_t destVec = (vuAddr + (writeIndex / wl) * cl + writeIndex % wl) & qwordMask;
+                    const uint32_t destVec = (blockStart + row) & qwordMask;
+                    if (++row == wl)
+                    {
+                        row = 0u;
+                        blockStart += cl;
+                    }
                     const uint8_t *srcVec = srcBase + writeIndex * bytesPerVector;
                     uint32_t lanes[4];
                     std::memcpy(lanes, vuData + destVec * 16u, sizeof(lanes));

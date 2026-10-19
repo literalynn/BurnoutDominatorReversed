@@ -779,6 +779,33 @@ private:
             m_flagHead = m_run.commitFlags(m_flagHead, m_flagTail, m_cycle);
     }
 
+    // A CLIP reader (Writes 8) or a MAC reader (1) sees the newest due result of its
+    // kind; the others stay queued for the next full commit, which a long walk does.
+    template <uint32_t Writes>
+    PS2_VU_FORCE_INLINE void latestAt()
+    {
+        if (Writes == 8u && m_run.m_clipQueued == 0u)
+            return;
+        const Run::PendingFlags *entry = m_flagTail;
+        for (uint32_t steps = 0u; entry != m_flagHead; ++steps)
+        {
+            if (steps == 8u)
+            {
+                flagsAt();
+                return;
+            }
+            --entry;
+            if ((entry->writes & Writes) != 0u && entry->issue + 4u <= m_cycle)
+            {
+                if constexpr (Writes == 8u)
+                    m_state.clip = entry->value;
+                else
+                    m_state.mac = reverseLanes(entry->value);
+                return;
+            }
+        }
+    }
+
     PS2_VU_FORCE_INLINE void cancelSameCycle(uint32_t writes)
     {
         m_run.cancelSameCycle(m_flagHead, m_flagTail, m_cycle, writes);
@@ -1385,7 +1412,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     }
     else if constexpr (opcode == 0x10u) // FCEQ
     {
-        flagsAt();
+        latestAt<8u>();
         viResult = (m_state.clip & 0xFFFFFFu) == (Lower & 0xFFFFFFu) ? 1 : 0;
     }
     else if constexpr (opcode == 0x11u) // FCSET
@@ -1396,12 +1423,12 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     }
     else if constexpr (opcode == 0x12u) // FCAND
     {
-        flagsAt();
+        latestAt<8u>();
         viResult = (m_state.clip & Lower & 0xFFFFFFu) != 0u ? 1 : 0;
     }
     else if constexpr (opcode == 0x13u) // FCOR
     {
-        flagsAt();
+        latestAt<8u>();
         viResult = ((m_state.clip | Lower) & 0xFFFFFFu) == 0xFFFFFFu ? 1 : 0;
     }
     else if constexpr (opcode >= 0x14u && opcode <= 0x17u) // FSEQ, FSSET, FSAND, FSOR
@@ -1429,7 +1456,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     }
     else if constexpr (opcode == 0x18u || opcode == 0x1Au || opcode == 0x1Bu) // FMEQ, FMAND, FMOR
     {
-        flagsAt();
+        latestAt<1u>();
         const uint32_t mask = static_cast<uint16_t>(m_state.vi[viS]);
         if constexpr (opcode == 0x18u)
             viResult = (m_state.mac & 0xFFFFu) == mask ? 1 : 0;
@@ -1440,7 +1467,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
     }
     else if constexpr (opcode == 0x1Cu) // FCGET
     {
-        flagsAt();
+        latestAt<8u>();
         viResult = static_cast<int32_t>(m_state.clip & 0x0FFFu);
     }
     else if constexpr (opcode == 0x20u || opcode == 0x21u) // B, BAL
