@@ -36,7 +36,7 @@ Details: [docs/STATUS.md](docs/STATUS.md).
 
 ## System requirements
 
-The CPU's single-core speed matters most: the game code and the VU1 graphics programs each run on one thread. On a Ryzen 7 9800X3D a six-car race at 60 Hz takes on average about 5.6 ms of a 16.7 ms frame on the VU1 thread and 4.7 ms on the game thread (a replay of 1,500 frames, `BDR_STOP_AT_VSYNC`), and the game keeps 55-60 frames per second with only 2 or 4 CPU threads. A CPU with clearly lower single-core speed will drop under 60 in busy races; `keep_speed` keeps the race at the right speed with fewer frames. Four CPU threads are enough.
+The CPU's single-core speed matters most: the game code and the VU1 graphics programs each run on one thread. On a Ryzen 7 9800X3D a six-car race at 60 Hz takes on average about 5.6 ms of a 16.7 ms frame on the VU1 thread and 4.3 ms on the game thread (a replay of 1,500 frames, `BDR_STOP_AT_VSYNC`), and the game keeps 55-60 frames per second with only 2 or 4 CPU threads. A CPU with clearly lower single-core speed will drop under 60 in busy races; `keep_speed` keeps the race at the right speed with fewer frames. Four CPU threads are enough.
 
 The graphics card needs Vulkan. The PS2 resolution with 1 sample a pixel is light; 2x (4 samples) and 4x (16 samples) need a dedicated GPU. Lower `super_sampling` in F1 if the frame rate drops.
 
