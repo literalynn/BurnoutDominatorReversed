@@ -1495,6 +1495,16 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
             else
                 result = _mm_mul_ps(left, right);
             const __m128i magnitude = _mm_and_si128(_mm_castps_si128(result), magnitudeMask);
+            const __m128i normal = _mm_and_si128(_mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x00800000)),
+                                                 _mm_cmplt_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF)));
+            if ((fast::mask(normal) & fast::kLanes<dest>) == fast::kLanes<dest>) [[likely]]
+            {
+                // Every result normal: no zero flag, and no exact zero to check.
+                _mm_storeu_ps(value, result);
+                if constexpr (dest != 0u)
+                    fmacFlags<Hint>(fast::layout<dest>(0, _mm_movemask_ps(result), 0), 0u);
+                return true;
+            }
             const __m128i leftZero = _mm_cmpeq_epi32(_mm_and_si128(leftBits, magnitudeMask), none);
             const __m128i rightZero = _mm_cmpeq_epi32(_mm_and_si128(rightBits, magnitudeMask), none);
             __m128i exactZero;
@@ -1507,8 +1517,6 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                 exactZero = _mm_or_si128(_mm_and_si128(leftZero, rightZero), _mm_cmpeq_epi32(leftBits, opposing));
             }
             const __m128i zero = _mm_cmpeq_epi32(magnitude, none);
-            const __m128i normal = _mm_and_si128(_mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x00800000)),
-                                                 _mm_cmplt_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF)));
             const __m128i safe = _mm_or_si128(normal, _mm_and_si128(zero, exactZero));
             if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>)
             {
