@@ -614,6 +614,20 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         return;
 
     uint32_t pos = 0;
+    // Out of the loop: a function's static is checked for initialization at each pass.
+    // BDR_TRACE_VIF1=first,count: every VIF1 code of VSync ticks first..first+count,
+    // with the TOPS/ITOPS/BASE/OFST state it runs with.
+    static const std::pair<uint64_t, uint64_t> traceWindow = []
+    {
+        const char *value = std::getenv("BDR_TRACE_VIF1");
+        uint64_t first = 0, count = 0;
+        if (value && std::sscanf(value, "%llu,%llu", reinterpret_cast<unsigned long long *>(&first),
+                                 reinterpret_cast<unsigned long long *>(&count)) == 2)
+            return std::make_pair(first, first + count);
+        return std::make_pair(uint64_t{1}, uint64_t{0});
+    }();
+    static const int traceDataLevel = std::getenv("BDR_TRACE_VIF1_DATA") ? std::atoi(std::getenv("BDR_TRACE_VIF1_DATA")) : 0;
+    static const bool traceData = traceDataLevel != 0;
 
     while (pos + 4 <= sizeBytes)
     {
@@ -664,17 +678,6 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 releasePath3Window();
         }
 
-        // BDR_TRACE_VIF1=first,count: every VIF1 code of VSync ticks first..first+count,
-        // with the TOPS/ITOPS/BASE/OFST state it runs with.
-        static const std::pair<uint64_t, uint64_t> traceWindow = []
-        {
-            const char *value = std::getenv("BDR_TRACE_VIF1");
-            uint64_t first = 0, count = 0;
-            if (value && std::sscanf(value, "%llu,%llu", reinterpret_cast<unsigned long long *>(&first),
-                                     reinterpret_cast<unsigned long long *>(&count)) == 2)
-                return std::make_pair(first, first + count);
-            return std::make_pair(uint64_t{1}, uint64_t{0});
-        }();
         if (const uint64_t tick = gs_regs.vsyncTick.load(std::memory_order_relaxed);
             tick >= traceWindow.first && tick <= traceWindow.second)
             std::printf("[vif1] v=%llu pos=0x%x/0x%x cmd=%08x op=%02x num=%u imm=%04x tops=%03x itops=%03x base=%03x ofst=%03x dbf=%u cycle=%04x mode=%u\n",
@@ -683,8 +686,6 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         (vif1_regs.stat >> 7) & 1u, vif1_regs.cycle & 0xFFFFu, vif1_regs.mode & 3u);
         // BDR_TRACE_VIF1_DATA=1: also the first qword of short (1 to 5 qword) V4-32 UNPACKs, the microcode's parameters;
         // =2: the first 16 bytes of every UNPACK.
-        static const int traceDataLevel = std::getenv("BDR_TRACE_VIF1_DATA") ? std::atoi(std::getenv("BDR_TRACE_VIF1_DATA")) : 0;
-        static const bool traceData = traceDataLevel != 0;
         if (const uint64_t tick = gs_regs.vsyncTick.load(std::memory_order_relaxed);
             traceData && tick >= traceWindow.first && tick <= traceWindow.second && pos + 16u <= sizeBytes &&
             (traceDataLevel >= 2 ? (opcode & 0x60u) == 0x60u : ((opcode & 0x6Fu) == 0x6Cu && num >= 1u && num <= 5u)))
