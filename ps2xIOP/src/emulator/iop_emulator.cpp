@@ -612,7 +612,8 @@ namespace ps2x::iop::detail
                 }
             }
 
-            if (const auto import = imports.decode(cpu.pc))
+            // Import stubs start with jr $ra: other instructions skip the out-of-line decode.
+            if (const auto import = memory.read32(cpu.pc) == 0x03E00008u ? imports.decode(cpu.pc) : std::nullopt)
             {
                 const ImportDisposition disposition = dispatchImport(*import, cpu);
                 ++totalInstructions;
