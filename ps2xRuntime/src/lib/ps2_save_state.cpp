@@ -158,11 +158,6 @@ void VU1Interpreter::serialize(ps2x::StateArchive &archive)
         m_decodedCodeCacheValid = false;
 }
 
-void GSRasterBackend::SerializeState(ps2x::StateArchive &)
-{
-    throw std::runtime_error("save states need the paraLLEl-GS backend");
-}
-
 void GS::serialize(ps2x::StateArchive &archive)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);

@@ -13,4 +13,11 @@ namespace ps2x
     std::vector<uint8_t> takeTransferBuffer(size_t bytes = SIZE_MAX);
     // Keeps a buffer of 256 KiB or more for later; smaller ones are just freed.
     void giveTransferBuffer(std::vector<uint8_t> &&buffer);
+
+    inline std::vector<uint8_t> copyToTransferBuffer(const uint8_t *begin, const uint8_t *end)
+    {
+        std::vector<uint8_t> buffer = takeTransferBuffer(static_cast<size_t>(end - begin));
+        buffer.assign(begin, end);
+        return buffer;
+    }
 }

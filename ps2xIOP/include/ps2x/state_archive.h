@@ -146,7 +146,7 @@ namespace ps2x
             if (m_loading)
             {
                 if (present)
-                    o.emplace();
+                    o = T{}; // emplace() trips Clang on nested types with member initializers
                 else
                     o.reset();
             }

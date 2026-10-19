@@ -15,6 +15,7 @@ add_library(ps2_gs_cache_backend_under_test STATIC
     "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gs_cpu_backend.cpp"
     "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gs_frontend.cpp"
     "${PS2_GS_RUNTIME_DIR}/src/lib/gs/ps2_gs_memory.cpp"
+    "${PS2_GS_RUNTIME_DIR}/src/lib/transfer_buffers.cpp"
 )
 target_include_directories(ps2_gs_cache_backend_under_test PUBLIC "${PS2_GS_RUNTIME_DIR}/include")
 target_compile_features(ps2_gs_cache_backend_under_test PUBLIC cxx_std_20)

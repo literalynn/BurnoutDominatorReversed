@@ -11,6 +11,7 @@
 #include <cstring>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 
 namespace
 {
@@ -1922,4 +1923,10 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
         m_preferredDisplayDestFbp = ctx.frame.fbp;
         m_hasPreferredDisplaySource = true;
     }
+}
+
+// The default for backends without save states (ps2_save_state.cpp has the others).
+void GSRasterBackend::SerializeState(ps2x::StateArchive &)
+{
+    throw std::runtime_error("save states need the paraLLEl-GS backend");
 }

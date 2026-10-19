@@ -2,6 +2,7 @@
 #define PS2_GS_FRONTEND_H
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>

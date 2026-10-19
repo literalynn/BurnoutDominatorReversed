@@ -2,6 +2,13 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The CI builds again (October 19, 2026)
+
+The three CI builds had failed since the save states (October 15):
+- `ps2x/state_archive.h`: Clang rejects `std::optional<T>::emplace()` for `IopMemory::DmaStart`, a nested type with default member initializers (its default constructibility is taken as false while the enclosing class is incomplete); `optional` assigns `T{}` instead.
+- `runtime/gs/gs_frontend.h`: includes `<atomic>`, which GCC's headers do not bring in otherwise.
+- `transfer_buffers.cpp` (new), `ps2_memory.cpp`, `gs_frontend.cpp`, `ps2_save_state.cpp`, `ps2xTest/gs_cache/CMakeLists.txt`: the GS cache tests link the frontend and the CPU backend without the rest of the runtime. The reused transfer buffers move out of `ps2_memory.cpp` into their own file and the base `GSRasterBackend::SerializeState` (it throws) into `gs_frontend.cpp`, and the tests link both.
+
 ## Less fixed cost around VU1 programs (October 19, 2026)
 
 - `ps2_vu1_core.cpp`: at the end of every VU1 program `flushPipelines` stepped one cycle at a time until PATH1 had copied the program's last GIF packet: `commitReadyPipelines` and `progressXgkick` once a cycle, about a fifth of the GS worker's time in a race. Once PATH1 is all that is still pending, nothing else writes VU memory or the registers, so the cycles the current GIF tag needs now pass at once: the same qwords are copied and the transfer ends on the same cycle. The bulk copy of `progressXgkick` took its minimum over an initializer list, which MSVC calls out of line; plain `std::min` again.
