@@ -649,6 +649,24 @@ private:
             target[3] = value[3];
     }
 
+    // A partial write as one 16-byte blend: lane stores followed by a full
+    // read of the register defeat store forwarding, which costs more than the
+    // instruction.
+    template <uint8_t Mask>
+    static PS2_VU_FORCE_INLINE void writeLanes(void *target, const void *value)
+    {
+#if PS2_VU_PROGRAM_SSE
+        float *to = static_cast<float *>(target);
+        const float *from = static_cast<const float *>(value);
+        if constexpr (Mask == 0xFu)
+            _mm_storeu_ps(to, _mm_loadu_ps(from));
+        else if constexpr (Mask != 0u)
+            _mm_storeu_ps(to, _mm_blend_ps(_mm_loadu_ps(to), _mm_loadu_ps(from), fast::kLanes<Mask>));
+#else
+        applyLanes<Mask>(static_cast<uint32_t *>(target), static_cast<const uint32_t *>(value));
+#endif
+    }
+
     template <uint8_t Mask>
     static PS2_VU_FORCE_INLINE void setReady(uint32_t *lanes, uint32_t ready)
     {
@@ -675,10 +693,7 @@ private:
         const bool ahead = m_kickActive && m_run.kickReads(addr);
         if (ahead) [[unlikely]]
             m_kickActive = m_run.advanceKick(m_cycle, m_state.pc);
-        uint32_t lanes[4];
-        std::memcpy(lanes, m_data + addr, sizeof(lanes));
-        applyLanes<Dest>(lanes, words);
-        std::memcpy(m_data + addr, lanes, sizeof(lanes));
+        writeLanes<Dest>(m_data + addr, words);
         if (ahead && m_kickActive) [[unlikely]]
             m_run.scheduleKick();
     }
@@ -884,18 +899,18 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
     {
         constexpr uint32_t latency = decoded.lowerUsage.vfLatency != 0u ? decoded.lowerUsage.vfLatency
                                                                         : decoded.lowerUsage.latency;
-        applyLanes<lowerLanes>(m_state.vf[lowerReg], lowerValue);
+        writeLanes<lowerLanes>(m_state.vf[lowerReg], lowerValue);
         setReady<lowerLanes>(m_run.m_vfReady[lowerReg].data(), m_cycle + latency);
     }
     if constexpr (upperReg != 0u)
     {
         constexpr uint32_t latency = decoded.upperUsage.vfLatency != 0u ? decoded.upperUsage.vfLatency
                                                                         : decoded.upperUsage.latency;
-        applyLanes<upperLanes>(m_state.vf[upperReg], upperValue);
+        writeLanes<upperLanes>(m_state.vf[upperReg], upperValue);
         setReady<upperLanes>(m_run.m_vfReady[upperReg].data(), m_cycle + latency);
     }
     if constexpr (accLanes != 0u)
-        applyLanes<accLanes>(m_state.acc, upperValue);
+        writeLanes<accLanes>(m_state.acc, upperValue);
     if constexpr (viReg != 0u)
     {
         constexpr uint32_t latency = decoded.lowerUsage.viLatency != 0u ? decoded.lowerUsage.viLatency

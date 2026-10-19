@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Compiled VU1 code (October 19, 2026)
+
+- `ps2_vu1_program.h`: a partial write to a VF register, ACC or VU memory (`.x`, `.yz`...) was stored lane by lane; the next full read of that register, often the next pair, then could not be forwarded from the store buffer and waited for the stores to complete. `Frame::writeLanes` writes the register as one 16-byte blend (`_mm_blend_ps`; the lane stores stay without SSE). The GIF stream of a deterministic race is identical (4.2 million packets); in the owner's 6-car race at 60 Hz, unpaced and limited by the VU1 worker, four alternated 40 s runs reached +34, +146, +239 and +205 VSyncs over the previous build.
+
 ## Scratchpad 0x70002000 is not the IPU (October 19, 2026)
 
 - `ps2_memory.cpp`: `read64` tested for the IPU registers with `address & 0x1FFFFFFF`, so a 64-bit read of the scratchpad at 0x70002000-0x7000203F (and of the 0x30002000 RAM mirror) returned IPU_CMD, IPU_CTRL, IPU_BP or IPU_TOP. Burnout builds its visible-object lists there (12-byte entries) and appends them with `ldl/ldr/sdl/sdr`, whose read-modify-write then wrote IPU_BP into the neighbouring entry: a car part got LOD 96, the renderer drew a vertex buffer as its mesh table, the VIF1 list called vertex colours as DMA addresses and stopped there, and the city track's 3D flashed ([FINDINGS.md](FINDINGS.md) E018). The test now uses `Ps2PhysicalAddress`, which drops the top bits only for KSEG0/KSEG1. Test in `ps2xTest/src/ps2_ipu_tests.cpp`: a 64-bit scratchpad write at 0x70002020 reads back, and IPU_CMD reads through KSEG1.
