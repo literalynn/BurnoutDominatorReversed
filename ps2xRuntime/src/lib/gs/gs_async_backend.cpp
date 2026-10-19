@@ -3,9 +3,9 @@
 #include "ThreadNaming.h"
 
 #include <condition_variable>
-#include <deque>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -207,7 +207,9 @@ namespace
         void run()
         {
             ThreadNaming::SetCurrentThreadName("GsSubmit");
-            std::deque<Job> batch;
+            // Vectors, swapped with the queue, keep their room: MSVC's deque holds a Job a block
+            // and allocated one at every packet.
+            std::vector<Job> batch;
             std::unique_lock<std::mutex> lock(m_mutex);
             for (;;)
             {
@@ -270,7 +272,7 @@ namespace
         mutable std::mutex m_mutex;
         mutable std::condition_variable m_pushed;
         mutable std::condition_variable m_drained;
-        std::deque<Job> m_queue;
+        std::vector<Job> m_queue;
         PresentationFrame m_presented; // the last frame presented, until Present takes it
         std::vector<std::vector<uint8_t>> m_spare;
         size_t m_queuedBytes = 0u;
