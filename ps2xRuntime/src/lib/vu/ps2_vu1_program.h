@@ -1087,6 +1087,83 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
     }
     return 0u;
 }
+#elif PS2_VU_PROGRAM_SSE
+// The same instructions in SSE2, with the results of computeUpper's arithmetic.
+template <uint32_t Upper>
+PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
+{
+    constexpr uint32_t code = upperCode(Upper);
+    constexpr bool special = (Upper & 0x3Fu) >= 0x3Cu;
+    constexpr uint8_t fs = static_cast<uint8_t>((Upper >> 11u) & 31u);
+    constexpr uint8_t ft = static_cast<uint8_t>((Upper >> 16u) & 31u);
+    const __m128i source = _mm_castps_si128(_mm_loadu_ps(m_state.vf[fs]));
+    if constexpr (special && code >= 0x10u && code <= 0x13u) // ITOF0, ITOF4, ITOF12, ITOF15
+    {
+        // The conversion rounds in the VU mode as the scalar one does; scaling by a
+        // power of two is exact.
+        constexpr float scale = code == 0x10u ? 1.0f : code == 0x11u ? 1.0f / 16.0f : code == 0x12u ? 1.0f / 4096.0f : 1.0f / 32768.0f;
+        __m128 result = _mm_cvtepi32_ps(source);
+        if constexpr (code != 0x10u)
+            result = _mm_mul_ps(result, _mm_set1_ps(scale));
+        _mm_storeu_ps(value, result);
+    }
+    else if constexpr (special && code >= 0x14u && code <= 0x17u) // FTOI0, FTOI4, FTOI12, FTOI15
+    {
+        // floatToInt(normalizeOperand(x), scale): the scaling is exact in float too, and
+        // an overflow gives FLT_MAX or infinity. Denormals truncate to 0 either way. Out of
+        // range the conversion gives INT_MIN, which a positive value (NaN and infinity
+        // included, as they stand for FLT_MAX) turns into INT_MAX.
+        constexpr float scale = code == 0x14u ? 1.0f : code == 0x15u ? 16.0f : code == 0x16u ? 4096.0f : 32768.0f;
+        __m128 scaled = _mm_castsi128_ps(source);
+        if constexpr (code != 0x14u)
+            scaled = _mm_mul_ps(scaled, _mm_set1_ps(scale));
+        const __m128i positiveOverflow = _mm_cmpgt_epi32(_mm_castps_si128(scaled), _mm_set1_epi32(0x4EFFFFFF));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(value), _mm_xor_si128(_mm_cvttps_epi32(scaled), positiveOverflow));
+    }
+    else if constexpr (special && code == 0x1Du) // ABS of normalizeOperand: a denormal gives 0, NaN and infinity FLT_MAX
+    {
+        const __m128i magnitude = _mm_and_si128(source, _mm_set1_epi32(0x7FFFFFFF));
+        const __m128i normal = _mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x007FFFFF));
+        const __m128i huge = _mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF));
+        const __m128i result = _mm_or_si128(_mm_andnot_si128(huge, magnitude), _mm_and_si128(huge, _mm_set1_epi32(0x7F7FFFFF)));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(value), _mm_and_si128(result, normal));
+    }
+    else if constexpr (special && code == 0x1Fu) // CLIP, on the raw bit patterns
+    {
+        uint32_t w;
+        std::memcpy(&w, &m_state.vf[ft][3], sizeof(w));
+        const int32_t limit = (w & 0x7F800000u) != 0u ? static_cast<int32_t>(w & 0x7FFFFFFFu) : 0x007FFFFF;
+        const __m128i bound = _mm_set1_epi32(limit);
+        const uint32_t above = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(source, bound))));
+        const uint32_t below = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(
+            _mm_cmpgt_epi32(_mm_xor_si128(source, _mm_set1_epi32(std::numeric_limits<int32_t>::min())), bound))));
+        // Lane n's +limit and -limit flags are bits 2n and 2n + 1; w is not compared.
+        return (above & 1u) | ((below & 1u) << 1u) | ((above & 2u) << 1u) | ((below & 2u) << 2u) |
+               ((above & 4u) << 2u) | ((below & 4u) << 3u);
+    }
+    else // MAX and MINI with a broadcast, I or a whole vector
+    {
+        static_assert(!special, "unexpected upper instruction without FMAC flags");
+        constexpr bool max = code <= 0x13u || code == 0x1Du || code == 0x2Bu;
+        __m128i right;
+        if constexpr (code <= 0x17u)
+            right = _mm_castps_si128(_mm_set1_ps(m_state.vf[ft][code & 3u]));
+        else if constexpr (code == 0x1Du || code == 0x1Fu)
+            right = _mm_castps_si128(_mm_set1_ps(m_state.i));
+        else
+            right = _mm_castps_si128(_mm_loadu_ps(m_state.vf[ft]));
+        // maxBits and minBits: integer order, reversed when both are negative.
+        const __m128i bothNegative = _mm_srai_epi32(_mm_and_si128(source, right), 31);
+        const __m128i greater = _mm_cmpgt_epi32(source, right);
+        const __m128i less = _mm_cmpgt_epi32(right, source);
+        const __m128i larger = _mm_or_si128(_mm_and_si128(bothNegative, less), _mm_andnot_si128(bothNegative, greater));
+        const __m128i smaller = _mm_or_si128(_mm_and_si128(bothNegative, greater), _mm_andnot_si128(bothNegative, less));
+        const __m128i pickSource = max ? larger : smaller;
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(value),
+                         _mm_or_si128(_mm_and_si128(pickSource, source), _mm_andnot_si128(pickSource, right)));
+    }
+    return 0u;
+}
 #else
 // The same instructions lane by lane, in computeUpper's arithmetic. Inlining
 // computeUpper itself cost more compile time than the rest of a routine.
