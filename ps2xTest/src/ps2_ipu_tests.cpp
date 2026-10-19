@@ -46,6 +46,16 @@ void register_ps2_ipu_tests()
             t.Equals(m.read32(ctrl) & 0x800000FFu, 0u, "reset clears BUSY and FIFO counts");
         });
 
+        test.Run("64-bit reads reach the IPU through KSEG1, not through the scratchpad", [](TestCase &t) {
+            PS2Memory m;
+            t.IsTrue(m.initialize(), "memory initialization");
+            m.write64(0x70002020u, 0x0123456789ABCDEFull);
+            t.Equals(m.read64(0x70002020u), uint64_t{0x0123456789ABCDEFull}, "scratchpad 0x2020 is not IPU_BP");
+            input(m, {0x00, 0x00, 0x01, 0xB3});
+            m.write32(cmd, 0x40000000u);
+            t.Equals(m.read64(cmd | 0xA0000000u), uint64_t{0x1B3}, "IPU_CMD through KSEG1");
+        });
+
         test.Run("VDEC decodes MPEG values and reports invalid codes", [](TestCase &t) {
             PS2Memory m;
             t.IsTrue(m.initialize(), "memory initialization");

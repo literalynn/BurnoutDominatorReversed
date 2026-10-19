@@ -830,7 +830,8 @@ uint32_t PS2Memory::read32(uint32_t address)
 
 uint64_t PS2Memory::read64(uint32_t address)
 {
-    const uint32_t ipuAddress = address & 0x1FFFFFFFu;
+    // Only KSEG0/KSEG1 drop their top bits: 0x70002000 is the scratchpad, not the IPU.
+    const uint32_t ipuAddress = Ps2PhysicalAddress(address);
     if (ipuAddress >= Ps2Ipu::kRegisterBase && ipuAddress < Ps2Ipu::kRegisterEnd)
         return m_ipu->read64(ipuAddress);
     if (address & 7)

@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Scratchpad 0x70002000 is not the IPU (October 19, 2026)
+
+- `ps2_memory.cpp`: `read64` tested for the IPU registers with `address & 0x1FFFFFFF`, so a 64-bit read of the scratchpad at 0x70002000-0x7000203F (and of the 0x30002000 RAM mirror) returned IPU_CMD, IPU_CTRL, IPU_BP or IPU_TOP. Burnout builds its visible-object lists there (12-byte entries) and appends them with `ldl/ldr/sdl/sdr`, whose read-modify-write then wrote IPU_BP into the neighbouring entry: a car part got LOD 96, the renderer drew a vertex buffer as its mesh table, the VIF1 list called vertex colours as DMA addresses and stopped there, and the city track's 3D flashed ([FINDINGS.md](FINDINGS.md) E018). The test now uses `Ps2PhysicalAddress`, which drops the top bits only for KSEG0/KSEG1. Test in `ps2xTest/src/ps2_ipu_tests.cpp`: a 64-bit scratchpad write at 0x70002020 reads back, and IPU_CMD reads through KSEG1.
+
 ## The sound keeps its pitch when the game slows down (October 18, 2026)
 
 - `host_audio.cpp`, `runtime/host_audio.h`: the host played the SPU2 output resampled at the speed it was produced, so a game running at 80% sounded 20% slower and lower. `ps2x::TimeStretch` (WSOLA, as SoundTouch does: 25 ms segments, 5 ms crossfades, each segment taken at the offset within 8 ms of its nominal place whose start best correlates with the previous segment's end, channel sums, normalized) now changes the tempo and keeps the pitch; the tempo follows the queue depth as the rate did. The queue aims at 100 ms instead of 40 (a segment reads 33 ms, and a slow game leaves longer gaps between the VSync bursts). Test: a 440 Hz tone stretched to 80% tempo comes out 1.25 times longer and still at 440 Hz. In a 4x race at 46-51 VSyncs per second, with another game running on the same PC, the fade-outs for want of samples were as frequent before as after; they need the game itself to keep up.
