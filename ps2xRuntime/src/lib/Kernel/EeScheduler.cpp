@@ -2,6 +2,7 @@
 
 #include "ps2_log.h"
 #include "runtime/ps2_wait_stats.h"
+#include "runtime/host_settings.h"
 #include "runtime/ee_unwind.h"
 #include "ps2_runtime_macros.h"
 
@@ -185,6 +186,23 @@ namespace
     }
 
     constexpr uint64_t kVBlankPeriodCycles = microsecondsToEeCycles(16667u);
+
+    // With keep_speed, COP0 Count runs at the EE clock, plus the host time the
+    // game thread spent waiting for the GS worker: emulated time stands still
+    // then, and on a console that time would have passed while the frame was
+    // drawn. A game that times its frames with Count (Burnout's governor at
+    // 0x1E6728) then runs more simulation steps per drawn frame and keeps its
+    // speed when drawing is the bottleneck. Once the extra steps make the EE the
+    // bottleneck, the waits stop and so does the correction. Replays
+    // (BDR_DETERMINISTIC) count EE cycles only. Without keep_speed Count is left
+    // alone, as before (FINDINGS.md E019).
+    uint64_t g_countWaitBaseNs = 0u;
+    bool g_countRuns = false;
+
+    uint64_t countWaitNs()
+    {
+        return ps2_wait_stats::g_waitNs[static_cast<size_t>(ps2_wait_stats::Wait::GsWorker)].load(std::memory_order_relaxed);
+    }
     constexpr uint64_t kPalVBlankPeriodCycles = microsecondsToEeCycles(20000u);
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
@@ -249,6 +267,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_insideInterrupt = false;
     m_pendingEeTimerInterrupts = 0u;
     m_eeCycle = 0u;
+    g_countWaitBaseNs = countWaitNs();
     m_deviceCycleDebt = 0u;
     m_sliceEndCycle = kDefaultTimeSliceCycles;
     m_stopRequested.store(false, std::memory_order_release);
@@ -614,6 +633,12 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
+    if (GuestThread *running = g_countRuns ? currentThread() : nullptr)
+    {
+        static const bool replay = deterministicTiming();
+        const uint64_t waitedCycles = replay ? 0u : (countWaitNs() - g_countWaitBaseNs) / 1000u * (kEeClockHz / 1000u) / 1000u;
+        running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle + waitedCycles);
+    }
     m_deviceCycleDebt += elapsed;
     if (m_deviceCycleDebt >= kDeviceBatchCycles)
     {
@@ -2189,6 +2214,7 @@ void EeScheduler::processEvent(const EeEvent &event)
         break;
     case EeEventType::VBlankStart:
         ++m_vsyncTick;
+        g_countRuns = ps2x::hostSettings().keepSpeed;
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         // BDR_RDRAM_DUMP=vsync,file: EE RAM at that VSync tick, for offline inspection.
         if (static const char *dump = std::getenv("BDR_RDRAM_DUMP"); dump && std::strtoull(dump, nullptr, 10) == m_vsyncTick)

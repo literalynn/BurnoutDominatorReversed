@@ -24,6 +24,7 @@ namespace ps2x
         bool hudSmoothing = true;    // the HUD's bilinear art interpolated per sample at 2x and 4x (no menu row)
         bool gsThread = true;        // VIF1, VU1 and GS submission on a second thread
         bool fastLoading = true;     // run faster than real time while the game is silent and idle
+        bool keepSpeed = true;       // COP0 Count runs: the game steps more when frames come late
         float stickDeadzone = 0.12f;
         bool vibration = true;       // the game's pad vibration on the host gamepad
         std::string gamepadMappings; // extra SDL_GameControllerDB mappings file

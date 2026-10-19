@@ -64,35 +64,46 @@ HANDLE openGameThread() {
     return openThread(wanted && wanted[0] ? wanted : "GameThread");
 }
 
+// The return addresses of a context, walked with the loaded modules' unwind tables only.
+int unwind(CONTEXT context, uint64_t* pcs, int capacity) {
+    int depth = 0;
+    for (; depth < capacity && context.Rip != 0; ++depth) {
+        pcs[depth] = context.Rip;
+        DWORD64 imageBase = 0;
+        RUNTIME_FUNCTION* function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+        if (!function) {
+            // A leaf function: the return address is at the top of the stack.
+            context.Rip = *reinterpret_cast<const uint64_t*>(context.Rsp);
+            context.Rsp += 8;
+            continue;
+        }
+        void* handlerData = nullptr;
+        DWORD64 establisherFrame = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function, &context, &handlerData,
+                         &establisherFrame, nullptr);
+    }
+    return depth;
+}
+
+void printFrames(const uint64_t* pcs, int depth);
+
 // Prints the call stack of a thread, suspended while it is walked.
 void printStack(HANDLE thread) {
     // Nothing may allocate or take a lock while the target is suspended (it may hold the
-    // heap or DbgHelp lock): unwind with the loaded modules' unwind tables only, then
-    // resume before naming the frames.
+    // heap or DbgHelp lock): unwind first, then resume before naming the frames.
     uint64_t pcs[48];
     int depth = 0;
     if (SuspendThread(thread) != static_cast<DWORD>(-1)) {
         CONTEXT context{};
         context.ContextFlags = CONTEXT_FULL;
-        if (GetThreadContext(thread, &context)) {
-            for (; depth < 48 && context.Rip != 0; ++depth) {
-                pcs[depth] = context.Rip;
-                DWORD64 imageBase = 0;
-                RUNTIME_FUNCTION* function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
-                if (!function) {
-                    // A leaf function: the return address is at the top of the stack.
-                    context.Rip = *reinterpret_cast<const uint64_t*>(context.Rsp);
-                    context.Rsp += 8;
-                    continue;
-                }
-                void* handlerData = nullptr;
-                DWORD64 establisherFrame = 0;
-                RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function, &context, &handlerData,
-                                 &establisherFrame, nullptr);
-            }
-        }
+        if (GetThreadContext(thread, &context))
+            depth = unwind(context, pcs, 48);
         ResumeThread(thread);
     }
+    printFrames(pcs, depth);
+}
+
+void printFrames(const uint64_t* pcs, int depth) {
     HANDLE process = GetCurrentProcess();
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
     if (!SymInitialize(process, nullptr, TRUE))
@@ -115,8 +126,28 @@ void printStack(HANDLE thread) {
     std::fflush(stdout);
     SymCleanup(process);
 }
+
+LONG WINAPI reportCrash(EXCEPTION_POINTERS* exception) {
+    const EXCEPTION_RECORD& record = *exception->ExceptionRecord;
+    std::printf("[crash] exception 0x%08lx at 0x%llx", static_cast<unsigned long>(record.ExceptionCode),
+                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(record.ExceptionAddress)));
+    if (record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record.NumberParameters >= 2)
+        std::printf(" (%s 0x%llx)", record.ExceptionInformation[0] == 1 ? "write" : "read",
+                    static_cast<unsigned long long>(record.ExceptionInformation[1]));
+    std::printf("\n");
+    uint64_t pcs[48];
+    const int depth = unwind(*exception->ContextRecord, pcs, 48);
+    printFrames(pcs, depth);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 } // namespace
 #endif
+
+void installCrashReport() {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(&reportCrash);
+#endif
+}
 
 double threadCpuSeconds(const char* name) {
 #ifdef _WIN32

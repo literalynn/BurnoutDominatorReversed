@@ -2,6 +2,14 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The game keeps its speed when drawing falls behind (October 19, 2026)
+
+- `EeScheduler.cpp`: COP0 Count was never advanced, so Burnout's frame governor (0x1E6728, called by 0x209338 with 1 to 4 steps, 2 to 8 in its 30 Hz mode) always ran one simulation step per drawn frame and the race slowed down with the frame rate. With the `keep_speed` setting (on by default), `accountCycles` sets the running context's Count to the EE cycles plus the host time the game thread spent waiting for the GS worker (emulated time stands still then; on a console it would have passed while the frame was drawn). The governor then runs more steps per drawn frame. When the extra steps make the EE the bottleneck, the waits stop and so does the correction. `BDR_DETERMINISTIC` replays count EE cycles only. The governor's accumulator is reset at the start of a race (0x1E66F8 from 0x208390), so the setting takes effect from the next race ([FINDINGS.md](FINDINGS.md) E019). With the GS worker slowed to about 31 frames per second (a test-only 15 ms sleep per frame), 600 frames of a race ran 706 steps without it and 930 with it, 61% and 83% of the game's speed.
+- `runtime/ps2_wait_stats.h`, `gs_worker.cpp`, `ps2_runtime.cpp`: the game thread's waits for the GS worker (`GsWorker::enqueuePresent`, `sync`) are counted, as `worker=` in the `[status]` line; they were missing from it.
+- `host_settings.*`, `settings_menu.cpp`: `keep_speed` (default true) and the "Keep speed when slow (next race)" row; round-trip test.
+- `src/burnout_profile.cpp`, `src/burnout_main.cpp`: on Windows an unhandled exception prints its code, address and symbolized call stack (`[crash]`, `[stack]` lines).
+- A copy of the executable runs markedly slower for its first few runs (25 VSyncs per second instead of 60 on 4 cores in the same replay); compare builds with warm executables or with the same file name (`abbench.sh` copies each variant to one name).
+
 ## Compiled VU1 code (October 19, 2026)
 
 - `ps2_vu1_program.h`: a partial write to a VF register, ACC or VU memory (`.x`, `.yz`...) was stored lane by lane; the next full read of that register, often the next pair, then could not be forwarded from the store buffer and waited for the stores to complete. `Frame::writeLanes` writes the register as one 16-byte blend (`_mm_blend_ps`; the lane stores stay without SSE). The GIF stream of a deterministic race is identical (4.2 million packets); in the owner's 6-car race at 60 Hz, unpaced and limited by the VU1 worker, four alternated 40 s runs reached +34, +146, +239 and +205 VSyncs over the previous build.

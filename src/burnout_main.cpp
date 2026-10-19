@@ -485,6 +485,7 @@ int main(int argc, char** argv) {
         else
             std::cout << "[BDR] Original ISO: " << options.iso << '\n';
 
+        bdr_profile::installCrashReport();
         bdr_profile::Sampler profile; // BDR_PROFILE=1
         CameraWatch cameraWatch(runtime, !options.headless);
         StopAtVsync stopAtVsync(runtime);

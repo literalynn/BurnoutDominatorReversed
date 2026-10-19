@@ -136,6 +136,8 @@ namespace ps2x
                 return parseBool(value, s.gsThread);
             if (key == "fast_loading")
                 return parseBool(value, s.fastLoading);
+            if (key == "keep_speed")
+                return parseBool(value, s.keepSpeed);
             if (key == "vibration")
                 return parseBool(value, s.vibration);
             if (key == "stick_deadzone")
@@ -277,6 +279,9 @@ namespace ps2x
                 "gs_thread = " << (s.gsThread ? "true" : "false") << "\n"
                 "# fast_loading runs loading screens (silent, mostly idle) faster than real time.\n"
                 "fast_loading = " << (s.fastLoading ? "true" : "false") << "\n"
+                "# keep_speed keeps the game's speed when the graphics cannot keep up: the game runs more\n"
+                "# simulation steps per drawn frame instead of slowing down. It starts with the next race.\n"
+                "keep_speed = " << (s.keepSpeed ? "true" : "false") << "\n"
                 "\n"
                 "# Gamepads: any Xbox, PlayStation 4/5 or SDL-compatible pad works next to the keyboard.\n"
                 "# stick_deadzone is a percentage. gamepad_mappings may name an extra gamecontrollerdb.txt file.\n"

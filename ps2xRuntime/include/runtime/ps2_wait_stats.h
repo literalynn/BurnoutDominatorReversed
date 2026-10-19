@@ -16,6 +16,7 @@ namespace ps2_wait_stats
         EePacing, // an event is due in EE cycles but not yet in host time
         GsDrain,  // waiting for the GS raster workers
         GsLock,   // GS backend held by another thread (presentation)
+        GsWorker, // the GS worker thread is still on earlier frames
         Count
     };
 

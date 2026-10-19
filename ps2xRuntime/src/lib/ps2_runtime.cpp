@@ -2707,7 +2707,8 @@ void PS2Runtime::printRunStatus(std::ostream &out)
         }
         else if (elapsedNs > 0.0)
         {
-            static constexpr const char *kNames[] = {"idle", "pace", "gs", "gslock"};
+            static constexpr const char *kNames[] = {"idle", "pace", "gs", "gslock", "worker"};
+            static_assert(std::size(kNames) == static_cast<size_t>(ps2_wait_stats::Wait::Count));
             line << " wait[";
             for (size_t i = 0; i < previousWaits.size(); ++i)
             {

@@ -1,6 +1,7 @@
 #include "runtime/gs_worker.h"
 
 #include "ThreadNaming.h"
+#include "runtime/ps2_wait_stats.h"
 
 GsWorker::~GsWorker()
 {
@@ -49,6 +50,7 @@ void GsWorker::enqueuePresent(Job job)
         return;
     }
     {
+        ps2_wait_stats::Scope wait(ps2_wait_stats::Wait::GsWorker);
         std::unique_lock<std::mutex> lock(m_mutex);
         m_drained.wait(lock, [this] { return m_queuedPresents < kFramesAhead || m_stop; });
         m_queue.emplace_back(std::move(job), true);
@@ -61,6 +63,7 @@ void GsWorker::sync()
 {
     if (!m_thread.joinable() || onWorkerThread())
         return;
+    ps2_wait_stats::Scope wait(ps2_wait_stats::Wait::GsWorker);
     std::unique_lock<std::mutex> lock(m_mutex);
     m_drained.wait(lock, [this] { return (m_queue.empty() && !m_busy) || m_stop; });
 }

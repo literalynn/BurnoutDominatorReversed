@@ -11,6 +11,10 @@ namespace bdr_profile {
 // if there is none. Windows only.
 double threadCpuSeconds(const char* name);
 
+// On Windows: an unhandled exception (an access violation...) prints its code,
+// address and call stack before the process ends.
+void installCrashReport();
+
 class Sampler {
 public:
     Sampler();
