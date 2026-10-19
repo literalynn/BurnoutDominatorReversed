@@ -481,7 +481,25 @@ def emit_routine(routine, name, max_pairs, status_unseen=False):
         return f"return p.exit(0x{0x10000 | chunk << 8 | entries[chunk].index(target):05X}u);"
 
     # Pairs are named by block and position, which lets each one see the pairs
-    # issued before it in the block.
+    # issued before it in the block, and before the block on every way into it
+    # when all are known: blocks of this routine with three pairs or more. The
+    # routine's entry is also reached from outside, with anything pending.
+    sources = {start: [] for start in routine.blocks}
+    for start, (_, terminator) in routine.blocks.items():
+        for target in successors(terminator):
+            sources[target].append(start)
+
+    def entry_tails(start):
+        if start == routine.entry or not sources[start]:
+            return []
+        tails = set()
+        for source in sources[start]:
+            body = routine.blocks[source][0]
+            if len(body) < 3:
+                return []
+            tails.add(tuple(pairs[i].word for i in body[-3:]))
+        return sorted(tails)
+
     tables = []
     lines = []
 
@@ -491,7 +509,12 @@ def emit_routine(routine, name, max_pairs, status_unseen=False):
         hints = flag_hints(pairs, body, status_unseen)
         if body:
             words = ", ".join(f"0x{pairs[i].word:016x}ull" for i in body)
-            tables.append(f"constexpr Block<{len(body)}> {table}{{{pc(start)}, {{{words}}}}};")
+            tails = entry_tails(start)
+            if tails:
+                entries = ", ".join("{" + ", ".join(f"0x{word:016x}ull" for word in tail) + "}" for tail in tails)
+                tables.append(f"constexpr Block<{len(body)}, {len(tails)}> {table}{{{pc(start)}, {{{words}}}, {{{entries}}}}};")
+            else:
+                tables.append(f"constexpr Block<{len(body)}> {table}{{{pc(start)}, {{{words}}}}};")
 
         def emit_pair(index, next_pc, checked=True):
             hint = hints.get(index - start)

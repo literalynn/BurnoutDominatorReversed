@@ -155,11 +155,16 @@ inline constexpr uint8_t lane(uint32_t component) { return static_cast<uint8_t>(
 
 // A block's pairs, which run straight through from pc. Generated code names
 // a pair by its block and position, so each pair can see the ones before it.
-template <size_t N>
+// When every way into the block is a block of the routine with three pairs or
+// more (never the routine's entry), entries holds the last three pairs of each,
+// oldest first, and the reads at the block's start can see those too.
+template <size_t N, size_t Entries = 0>
 struct Block
 {
+    static constexpr size_t kEntries = Entries;
     uint32_t pc;
     uint64_t words[N]; // lower | upper << 32
+    uint64_t entries[Entries > 0 ? Entries : 1][3];
 };
 
 // Per-pair hints from compile_vu_programs.py. kFlagsUnseen: no flag reader
@@ -196,15 +201,21 @@ constexpr uint8_t viWritten(const Access::Usage &usage)
 template <const auto &Code, uint32_t Index>
 constexpr uint32_t settledReads()
 {
-    const auto decodeAt = [](uint32_t index) {
-        const uint64_t word = Code.words[index];
+    const auto decode = [](uint64_t word) {
         return Access::decode(static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32u));
     };
-    const uint32_t window = std::min(Index, kMaxWriteLatency - 1u);
-    const auto vfLaneSettled = [&](uint8_t reg, uint8_t laneBit) {
+    // The pair issued `back` pairs before pair Index, through entry way `way` once
+    // past the block's start; and how far back pairs are known on that way.
+    const auto decodeBack = [&](uint32_t way, uint32_t back) {
+        return back <= Index ? decode(Code.words[Index - back]) : decode(Code.entries[way][3u - (back - Index)]);
+    };
+    constexpr uint32_t known = Code.kEntries > 0u ? Index + 3u : Index;
+    constexpr uint32_t window = std::min(known, kMaxWriteLatency - 1u);
+    constexpr uint32_t ways = Code.kEntries > 0u ? static_cast<uint32_t>(Code.kEntries) : 1u;
+    const auto vfLaneSettledOn = [&](uint32_t way, uint8_t reg, uint8_t laneBit) {
         for (uint32_t back = 1u; back <= window; ++back)
         {
-            const auto earlier = decodeAt(Index - back);
+            const auto earlier = decodeBack(way, back);
             const auto &upper = earlier.upperUsage, &lower = earlier.lowerUsage;
             // A lower write to the register the upper half also writes is dropped.
             if (upper.vfWrite.reg == reg && (upper.vfWrite.lanes & laneBit) != 0u)
@@ -213,23 +224,31 @@ constexpr uint32_t settledReads()
                 (lower.vfWrite.lanes & laneBit) != 0u)
                 return back >= vfWriteLatency(lower);
         }
-        return Index >= kMaxWriteLatency - 1u;
+        return known >= kMaxWriteLatency - 1u;
     };
     const auto vfSettled = [&](uint8_t reg, uint8_t lanes) {
-        for (uint32_t component = 0u; component < 4u; ++component)
-            if ((lanes & lane(component)) != 0u && !vfLaneSettled(reg, lane(component)))
-                return false;
+        for (uint32_t way = 0u; way < ways; ++way)
+            for (uint32_t component = 0u; component < 4u; ++component)
+                if ((lanes & lane(component)) != 0u && !vfLaneSettledOn(way, reg, lane(component)))
+                    return false;
         return true;
     };
-    const auto viSettled = [&](uint8_t reg) {
+    const auto viSettledOn = [&](uint32_t way, uint8_t reg) {
         for (uint32_t back = 1u; back <= window; ++back)
         {
-            const auto earlier = decodeAt(Index - back);
+            const auto earlier = decodeBack(way, back);
             if (viWritten(earlier.lowerUsage) == reg)
                 return back >= viWriteLatency(earlier.lowerUsage);
         }
-        return Index >= kMaxWriteLatency - 1u;
+        return known >= kMaxWriteLatency - 1u;
     };
+    const auto viSettled = [&](uint8_t reg) {
+        for (uint32_t way = 0u; way < ways; ++way)
+            if (!viSettledOn(way, reg))
+                return false;
+        return true;
+    };
+    const auto decodeAt = [&](uint32_t index) { return decode(Code.words[index]); };
 
     const auto current = decodeAt(Index);
     uint32_t settled = 0u;
