@@ -447,6 +447,29 @@ void Run::commitP(uint32_t cycle)
         }
 }
 
+// Whether a VF lane's result lands after `cycle`: most hand-backs have none.
+static bool anyLater(const std::array<std::array<uint32_t, 4>, 32> &ready, uint32_t cycle)
+{
+#if PS2_VU_PROGRAM_SSE
+    const __m128i bias = _mm_set1_epi32(INT32_MIN); // unsigned order through signed compares
+    const __m128i now = _mm_xor_si128(_mm_set1_epi32(static_cast<int32_t>(cycle)), bias);
+    __m128i later = _mm_setzero_si128();
+    for (const auto &lanes : ready)
+        later = _mm_or_si128(later, _mm_cmpgt_epi32(
+            _mm_xor_si128(_mm_loadu_si128(reinterpret_cast<const __m128i *>(lanes.data())), bias), now));
+    return _mm_movemask_epi8(later) != 0;
+#elif PS2_VU_PROGRAM_NEON
+    uint32x4_t latest = vdupq_n_u32(0u);
+    for (const auto &lanes : ready)
+        latest = vmaxq_u32(latest, vld1q_u32(lanes.data()));
+    return vmaxvq_u32(latest) > cycle;
+#else
+    (void)ready;
+    (void)cycle;
+    return true;
+#endif
+}
+
 void Run::handBack()
 {
     // The interpreter steps PATH1 from its clock on.
@@ -465,7 +488,7 @@ void Run::handBack()
                           fmac ? statusOf(entry.cum) : 0u, (entry.writes & 8u) != 0u ? entry.value : 0u,
                           static_cast<uint8_t>(entry.writes));
     }
-    for (uint8_t reg = 1u; reg < 32u; ++reg)
+    for (uint8_t reg = anyLater(m_vfReady, m_cycle) ? 1u : 32u; reg < 32u; ++reg)
     {
         // Lanes written by one pair share a result cycle and an entry.
         uint8_t done = 0u;

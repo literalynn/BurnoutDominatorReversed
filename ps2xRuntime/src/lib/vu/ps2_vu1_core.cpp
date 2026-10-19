@@ -60,13 +60,21 @@ VU1Interpreter::VU1Interpreter(Unit unit)
 
 void VU1Interpreter::resetScheduler()
 {
-    m_flagPipeline = {};
-    m_fdiv = {};
-    m_efu = {};
-    m_storePipeline = {};
-    m_vfWritePipeline = {};
-    m_viWritePipeline = {};
-    m_accWritePipeline = {};
+    // With nothing in flight the pipeline entries are read only through their active
+    // bits, and a latest-write sequence only against a queued write's, which is newer
+    // as the count goes on: clearing them at every VU0 call changes nothing.
+    const bool idle = !m_fdiv.valid && !m_efu[0].valid && !m_efu[1].valid && !m_xgkick.active &&
+                      (m_activeFlags | m_activeStores | m_activeVfWrites | m_activeViWrites | m_activeAccWrites) == 0u;
+    if (!idle)
+    {
+        m_flagPipeline = {};
+        m_fdiv = {};
+        m_efu = {};
+        m_storePipeline = {};
+        m_vfWritePipeline = {};
+        m_viWritePipeline = {};
+        m_accWritePipeline = {};
+    }
     m_activeFlags = m_activeStores = m_activeVfWrites = m_activeViWrites = m_activeAccWrites = 0u;
     // Reset the PATH1 transfer state but not its 64 KiB packet buffer: every
     // byte is copied in before it is read or submitted, and clearing it here
@@ -82,10 +90,13 @@ void VU1Interpreter::resetScheduler()
     m_vfReady = {};
     m_viReady = {};
     m_accReady = {};
-    m_vfLatestWrite = {};
-    m_viLatestWrite = {};
-    m_accLatestWrite = {};
-    m_nextWriteSequence = 0;
+    if (!idle)
+    {
+        m_vfLatestWrite = {};
+        m_viLatestWrite = {};
+        m_accLatestWrite = {};
+        m_nextWriteSequence = 0;
+    }
     m_efuResourceReady = 0;
     m_workingClip = m_state.clip;
     m_viBranchBackupValue = 0;
@@ -490,8 +501,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeGs = &gs;
     m_activeMemory = memory;
 
+    // The game thread already rounds toward zero (EeScheduler::run); setting MXCSR
+    // again at every VU0 call is not free.
     const int previousRoundingMode = std::fegetround();
-    const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
+    const bool changeRounding = previousRoundingMode != FE_TOWARDZERO;
+    const bool useVuRounding = changeRounding && std::fesetround(FE_TOWARDZERO) == 0;
     const uint64_t budgetEnd = m_cycle + maxCycles;
     bool programEnded = false;
     const bool trackedCode = memory != nullptr && codeSize <= kMaxDecodedPairs * 8u &&
