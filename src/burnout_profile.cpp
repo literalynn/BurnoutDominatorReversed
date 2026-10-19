@@ -28,10 +28,8 @@ namespace bdr_profile {
 namespace {
 constexpr size_t kMaxSamples = 1u << 21;
 
-// Opens the thread named by BDR_PROFILE_THREAD, "GameThread" by default.
-HANDLE openGameThread() {
-    const char* wanted = std::getenv("BDR_PROFILE_THREAD");
-    const std::string name = wanted && wanted[0] ? wanted : "GameThread";
+// Opens the thread with that name.
+HANDLE openThread(const std::string& name) {
     const std::wstring wideName(name.begin(), name.end());
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snapshot == INVALID_HANDLE_VALUE)
@@ -58,6 +56,12 @@ HANDLE openGameThread() {
     }
     CloseHandle(snapshot);
     return found;
+}
+
+// Opens the thread named by BDR_PROFILE_THREAD, "GameThread" by default.
+HANDLE openGameThread() {
+    const char* wanted = std::getenv("BDR_PROFILE_THREAD");
+    return openThread(wanted && wanted[0] ? wanted : "GameThread");
 }
 
 // Prints the call stack of a thread, suspended while it is walked.
@@ -113,6 +117,24 @@ void printStack(HANDLE thread) {
 }
 } // namespace
 #endif
+
+double threadCpuSeconds(const char* name) {
+#ifdef _WIN32
+    HANDLE thread = openThread(name);
+    if (!thread)
+        return -1.0;
+    FILETIME created, exited, kernel, user;
+    const bool ok = GetThreadTimes(thread, &created, &exited, &kernel, &user) != FALSE;
+    CloseHandle(thread);
+    const auto ticks = [](const FILETIME& time) {
+        return (static_cast<uint64_t>(time.dwHighDateTime) << 32u) | time.dwLowDateTime;
+    };
+    return ok ? static_cast<double>(ticks(kernel) + ticks(user)) * 1e-7 : -1.0;
+#else
+    (void)name;
+    return -1.0;
+#endif
+}
 
 struct Sampler::State {
     std::atomic<bool> stop{false};

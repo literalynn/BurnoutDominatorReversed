@@ -147,6 +147,61 @@ void traceCalls(PS2Runtime& runtime, const std::vector<uint32_t>& addresses) {
     }
 }
 
+// BDR_STOP_AT_VSYNC=from,to: stop the run at VSync `to` and print the wall time and
+// the CPU time of the game, GS worker and GS submission threads since VSync
+// `from`. With BDR_DETERMINISTIC=1 a replay does the same work every time, so the
+// CPU times compare builds better than VSyncs per second do.
+class StopAtVsync {
+public:
+    explicit StopAtVsync(PS2Runtime& runtime) : m_runtime(runtime) {
+        const char* value = std::getenv("BDR_STOP_AT_VSYNC");
+        if (!value || std::sscanf(value, "%llu,%llu", &m_from, &m_to) != 2 || m_to <= m_from)
+            return;
+        m_thread = std::thread([this] { run(); });
+    }
+    ~StopAtVsync() {
+        m_stop = true;
+        if (m_thread.joinable())
+            m_thread.join();
+    }
+
+private:
+    static constexpr std::array<const char*, 3> kThreads{"GameThread", "GsWorker", "GsSubmit"};
+
+    void run() {
+        const auto reach = [this](unsigned long long vsync) {
+            while (!m_stop && m_runtime.memory().gs().vsyncTick.load(std::memory_order_acquire) < vsync)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return !m_stop;
+        };
+        if (!reach(m_from))
+            return;
+        std::array<double, kThreads.size()> start{};
+        for (size_t i = 0; i < kThreads.size(); ++i)
+            start[i] = bdr_profile::threadCpuSeconds(kThreads[i]);
+        // Read from another thread: close enough for a count.
+        const uint64_t compiled = m_runtime.vu1().compiledPairsExecuted();
+        const uint64_t interpreted = m_runtime.vu1().interpretedPairsExecuted();
+        const auto begin = std::chrono::steady_clock::now();
+        if (!reach(m_to))
+            return;
+        std::printf("[bench] vsync %llu to %llu: %.3f s", m_from, m_to,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
+        for (size_t i = 0; i < kThreads.size(); ++i)
+            std::printf(", %s %.3f s", kThreads[i], bdr_profile::threadCpuSeconds(kThreads[i]) - start[i]);
+        std::printf(", VU1 pairs %llu compiled, %llu interpreted\n",
+                    static_cast<unsigned long long>(m_runtime.vu1().compiledPairsExecuted() - compiled),
+                    static_cast<unsigned long long>(m_runtime.vu1().interpretedPairsExecuted() - interpreted));
+        std::fflush(stdout);
+        m_runtime.requestStop();
+    }
+
+    PS2Runtime& m_runtime;
+    unsigned long long m_from = 0, m_to = 0;
+    std::atomic<bool> m_stop{false};
+    std::thread m_thread;
+};
+
 int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
     std::cout << "[BDR] result: deadline=" << result.deadlineReached
               << " finished=" << result.gameThreadFinished
@@ -432,6 +487,7 @@ int main(int argc, char** argv) {
 
         bdr_profile::Sampler profile; // BDR_PROFILE=1
         CameraWatch cameraWatch(runtime, !options.headless);
+        StopAtVsync stopAtVsync(runtime);
         PS2Runtime::RunOptions run;
         run.timeLimit = std::chrono::seconds(options.seconds);
         run.statusInterval = std::chrono::milliseconds(options.statusMs);

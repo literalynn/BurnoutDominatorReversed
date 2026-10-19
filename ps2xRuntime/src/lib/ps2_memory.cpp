@@ -16,6 +16,52 @@
 
 namespace
 {
+    // DMA copies (a VIF1 display list is about 1 MiB) are built on the EE thread
+    // and freed on the GS worker. Above 512 KiB the heap maps fresh pages for each
+    // one, which the copy then faults in, and unmaps them on free: reused buffers
+    // avoid both.
+    class TransferBuffers
+    {
+    public:
+        std::vector<uint8_t> take()
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_free.empty())
+                return {};
+            std::vector<uint8_t> buffer = std::move(m_free.back());
+            m_free.pop_back();
+            buffer.clear();
+            return buffer;
+        }
+
+        std::vector<uint8_t> copy(const uint8_t *begin, const uint8_t *end)
+        {
+            std::vector<uint8_t> buffer = take();
+            buffer.assign(begin, end);
+            return buffer;
+        }
+
+        void give(std::vector<uint8_t> &&buffer)
+        {
+            // Small buffers come from the heap's own pages.
+            if (buffer.capacity() < 256u * 1024u)
+                return;
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_free.size() < 8u)
+                m_free.push_back(std::move(buffer));
+        }
+
+    private:
+        std::mutex m_mutex;
+        std::vector<std::vector<uint8_t>> m_free;
+    };
+
+    TransferBuffers &transferBuffers()
+    {
+        static TransferBuffers buffers;
+        return buffers;
+    }
+
     inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
     {
         if (static_cast<uint64_t>(offset) + static_cast<uint64_t>(bytes) > static_cast<uint64_t>(regionSize))
@@ -1351,7 +1397,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     // Dominator's VIF1 display lists pass 4096 tags (about 1.4 MiB) at speed.
                     const int kMaxChainTags = 1 << 20;
                     constexpr size_t kMaxChainBytes = 64u * 1024u * 1024u;
-                    std::vector<uint8_t> chainBuf;
+                    std::vector<uint8_t> chainBuf = transferBuffers().take();
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
                     {
@@ -1828,19 +1874,27 @@ void PS2Memory::processPendingTransfers()
     // queued here, and the worker runs the same calls on its thread.
     const auto gifSubmit = [this](std::vector<uint8_t> bytes)
     {
+        const auto submit = [this](std::vector<uint8_t> &data)
+        {
+            submitGifPacket(GifPathId::Path3, data.data(), static_cast<uint32_t>(data.size()), false);
+            transferBuffers().give(std::move(data));
+        };
         if (m_gsWorker)
-            m_gsWorker->enqueue([this, bytes = std::move(bytes)]
-                                { submitGifPacket(GifPathId::Path3, bytes.data(), static_cast<uint32_t>(bytes.size()), false); });
+            m_gsWorker->enqueue([submit, bytes = std::move(bytes)]() mutable { submit(bytes); });
         else
-            submitGifPacket(GifPathId::Path3, bytes.data(), static_cast<uint32_t>(bytes.size()), false);
+            submit(bytes);
     };
     const auto vif1Submit = [this](std::vector<uint8_t> bytes)
     {
+        const auto submit = [this](std::vector<uint8_t> &data)
+        {
+            processVIF1Data(data.data(), static_cast<uint32_t>(data.size()));
+            transferBuffers().give(std::move(data));
+        };
         if (m_gsWorker)
-            m_gsWorker->enqueue([this, bytes = std::move(bytes)]
-                                { processVIF1Data(bytes.data(), static_cast<uint32_t>(bytes.size())); });
+            m_gsWorker->enqueue([submit, bytes = std::move(bytes)]() mutable { submit(bytes); });
         else
-            processVIF1Data(bytes.data(), static_cast<uint32_t>(bytes.size()));
+            submit(bytes);
     };
     const auto drainGif = [this]
     {
@@ -1904,7 +1958,7 @@ void PS2Memory::processPendingTransfers()
                         break;
                     m_seenGifCopy = true;
                     m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-                    gifSubmit(std::vector<uint8_t>(m_scratchpad + srcPhys, m_scratchpad + srcPhys + chunk));
+                    gifSubmit(transferBuffers().copy(m_scratchpad + srcPhys, m_scratchpad + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }
@@ -1923,7 +1977,7 @@ void PS2Memory::processPendingTransfers()
                         break;
                     m_seenGifCopy = true;
                     m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-                    gifSubmit(std::vector<uint8_t>(m_rdram + srcPhys, m_rdram + srcPhys + chunk));
+                    gifSubmit(transferBuffers().copy(m_rdram + srcPhys, m_rdram + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }
@@ -2026,7 +2080,7 @@ void PS2Memory::processPendingTransfers()
                         chunk = PS2_SCRATCHPAD_SIZE - srcPhys;
                     if (chunk == 0)
                         break;
-                    vif1Submit(std::vector<uint8_t>(m_scratchpad + srcPhys, m_scratchpad + srcPhys + chunk));
+                    vif1Submit(transferBuffers().copy(m_scratchpad + srcPhys, m_scratchpad + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }
@@ -2043,7 +2097,7 @@ void PS2Memory::processPendingTransfers()
                         chunk = PS2_RAM_SIZE - srcPhys;
                     if (chunk == 0)
                         break;
-                    vif1Submit(std::vector<uint8_t>(m_rdram + srcPhys, m_rdram + srcPhys + chunk));
+                    vif1Submit(transferBuffers().copy(m_rdram + srcPhys, m_rdram + srcPhys + chunk));
                     bytesLeft -= chunk;
                     srcPhys += chunk;
                 }

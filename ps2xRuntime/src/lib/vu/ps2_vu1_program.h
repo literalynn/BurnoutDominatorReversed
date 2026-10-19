@@ -162,6 +162,14 @@ struct Block
     uint64_t words[N]; // lower | upper << 32
 };
 
+// Per-pair hints from compile_vu_programs.py. kFlagsUnseen: no flag reader
+// and no block exit can see this pair's FMAC result before a later one
+// replaces it, so it does not queue; its sticky conditions still count.
+// kStatusUnseen: no VU1 program reads the status register (FSEQ, FSAND,
+// FSOR), so the sticky conditions are not built either.
+inline constexpr uint32_t kFlagsUnseen = 1u;
+inline constexpr uint32_t kStatusUnseen = 2u;
+
 // No compiled pair writes a VF or VI register with a longer latency.
 inline constexpr uint32_t kMaxWriteLatency = 4u;
 
@@ -567,12 +575,12 @@ public:
     // Issue pair Index of a block. NextPc is where the interpreter's PC would
     // stand after it; it only matters if a GIF callback rewrites microcode, in
     // which case this returns false and the routine must return leaveStale().
-    template <const auto &Code, uint32_t Index>
+    template <const auto &Code, uint32_t Index, uint32_t Hint = 0u>
     PS2_VU_FORCE_INLINE bool pair(uint32_t nextPc)
     {
         constexpr uint64_t word = Code.words[Index];
         return issue<(Code.pc + Index * 8u) & 0x3FFFu, static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32u),
-                     settledReads<Code, Index>()>(nextPc);
+                     settledReads<Code, Index>(), Hint>(nextPc);
     }
 
     // Return to the driver, which continues with the routine at pc.
@@ -718,7 +726,7 @@ private:
         return ready;
     }
 
-    template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled>
+    template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled, uint32_t Hint>
     PS2_VU_FORCE_INLINE bool issue(uint32_t nextPc);
 
     // The latest cycle an operand of the pair becomes ready, ignoring the
@@ -729,11 +737,11 @@ private:
     template <uint32_t Pc, uint32_t Lower, uint32_t Upper>
     PS2_VU_FORCE_INLINE bool stale(uint32_t nextPc);
 
-    template <uint32_t Upper>
+    template <uint32_t Upper, uint32_t Hint>
     PS2_VU_FORCE_INLINE void upper(float *value);
 
 #if PS2_VU_PROGRAM_NEON || PS2_VU_PROGRAM_SSE
-    template <uint32_t Upper>
+    template <uint32_t Upper, uint32_t Hint>
     PS2_VU_FORCE_INLINE bool fastUpper(float *value);
 #endif
 
@@ -754,6 +762,15 @@ private:
         else if (writes == 8u)
             ++m_run.m_clipQueued;
         *m_flagTail++ = {m_cycle, writes, value, m_cum};
+    }
+
+    template <uint32_t Hint>
+    PS2_VU_FORCE_INLINE void fmacFlags(uint32_t value, uint32_t sticky)
+    {
+        if constexpr ((Hint & kFlagsUnseen) == 0u)
+            pushFlags(3u, value, (Hint & kStatusUnseen) != 0u ? 0u : sticky);
+        else if constexpr ((Hint & kStatusUnseen) == 0u)
+            m_cum |= value | sticky;
     }
 
     PS2_VU_FORCE_INLINE void flagsAt()
@@ -840,7 +857,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::pairReady() const
     return ready;
 }
 
-template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled>
+template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled, uint32_t Hint>
 PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
 {
     static constexpr Access::Decoded decoded = Access::decode(Lower, Upper);
@@ -876,7 +893,7 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
         if constexpr (upperReadsQ(Upper))
             if (qDue())
                 commitQ();
-        upper<Upper>(upperValue);
+        upper<Upper, Hint>(upperValue);
     }
 
     float lowerValue[4];
@@ -958,7 +975,7 @@ PS2_VU_FORCE_INLINE bool Frame::stale(uint32_t nextPc)
     return false;
 }
 
-template <uint32_t Upper>
+template <uint32_t Upper, uint32_t Hint>
 PS2_VU_FORCE_INLINE void Frame::upper(float *value)
 {
     if constexpr (!upperPublishesFlags(Upper))
@@ -973,7 +990,7 @@ PS2_VU_FORCE_INLINE void Frame::upper(float *value)
     else
     {
 #if PS2_VU_PROGRAM_NEON || PS2_VU_PROGRAM_SSE
-        if (fastUpper<Upper>(value))
+        if (fastUpper<Upper, Hint>(value))
             return;
 #endif
         m_run.exactUpper(Upper);
@@ -1120,7 +1137,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
 // computeUpper's vector cases with the same range checks, but with the flags
 // built straight into the MAC layout. Results the checks do not clear take
 // the exact path.
-template <uint32_t Upper>
+template <uint32_t Upper, uint32_t Hint>
 PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
 {
     constexpr uint32_t code = upperCode(Upper);
@@ -1195,7 +1212,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                 return false;
             vst1q_f32(value, result);
             if constexpr (dest != 0u)
-                pushFlags(3u, fast::layout<dest>(zero, fast::negative(bits), vdupq_n_u32(0u)), 0u);
+                fmacFlags<Hint>(fast::layout<dest>(zero, fast::negative(bits), vdupq_n_u32(0u)), 0u);
             return true;
         }
         else
@@ -1228,7 +1245,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                 const uint32x4_t tiny = vcltq_u32(product, vdupq_n_u32(0x00800000u));
                 const uint32_t conditions = fast::layout<dest>(tiny, fast::negative(veorq_u32(leftBits, rightBits)),
                                                                vbicq_u32(tiny, zeroProduct));
-                pushFlags(3u, fast::layout<dest>(zero, fast::negative(bits), vdupq_n_u32(0u)), conditions);
+                fmacFlags<Hint>(fast::layout<dest>(zero, fast::negative(bits), vdupq_n_u32(0u)), conditions);
             }
             return true;
         }
@@ -1289,7 +1306,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                 return false;
             _mm_storeu_ps(value, result);
             if constexpr (dest != 0u)
-                pushFlags(3u, fast::layout<dest>(fast::mask(zero), _mm_movemask_ps(result), 0), 0u);
+                fmacFlags<Hint>(fast::layout<dest>(fast::mask(zero), _mm_movemask_ps(result), 0), 0u);
             return true;
         }
         else
@@ -1320,7 +1337,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                 const __m128i tiny = _mm_cmplt_epi32(product, _mm_set1_epi32(0x00800000));
                 const uint32_t conditions = fast::layout<dest>(fast::mask(tiny), _mm_movemask_ps(_mm_xor_ps(left, right)),
                                                                fast::mask(_mm_andnot_si128(zeroProduct, tiny)));
-                pushFlags(3u, fast::layout<dest>(fast::mask(zero), _mm_movemask_ps(result), 0), conditions);
+                fmacFlags<Hint>(fast::layout<dest>(fast::mask(zero), _mm_movemask_ps(result), 0), conditions);
             }
             return true;
         }

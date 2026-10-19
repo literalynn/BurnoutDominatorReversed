@@ -38,6 +38,13 @@ FDIV_SPECIAL = {0x38, 0x39, 0x3A, 0x3B}
 # VU1 only: MFP, XTOP, XGKICK and the EFU. The runtime decodes VU0 routines as
 # VU1 code, which is only right without these.
 VU1_ONLY_SPECIAL = {0x64, 0x68, 0x6C} | EFU_SPECIAL
+# Lower instructions that read the status flags (FSEQ, FSAND, FSOR), and those
+# plus the MAC readers (FMEQ, FMAND, FMOR).
+STATUS_READERS = {0x14, 0x16, 0x17}
+FLAG_READERS = STATUS_READERS | {0x18, 0x1A, 0x1B}
+# Frame::pair hints, as ps2_vu1_program.h names them.
+FLAGS_UNSEEN = 1
+STATUS_UNSEEN = 2
 
 
 def upper_supported(upper):
@@ -105,6 +112,20 @@ class Pair:
     @property
     def word(self):
         return self.lower | (self.upper << 32)
+
+    def publishes_flags(self):
+        """An FMAC result the fast path queues: upperPublishesFlags with lanes to write."""
+        upper = self.upper
+        op = upper & 0x3F
+        code = op if op < 0x3C else (upper & 3) | ((upper >> 4) & 0x7C)
+        if 0x10 <= code <= 0x17 or code in (0x1D, 0x1F):
+            return False
+        if code in ((0x2B, 0x2F) if op < 0x3C else (0x2F, 0x30)):
+            return False
+        return (upper >> 21) & 15 != 0
+
+    def reads_flags(self, readers=FLAG_READERS):
+        return not self.immediate and self.lower >> 25 in readers
 
     def branch_offset(self):
         offset = self.lower & 0x7FF
@@ -413,7 +434,26 @@ def partition(routine, max_pairs):
     return chunks
 
 
-def emit_routine(routine, name, max_pairs):
+def flag_hints(pairs, body, status_unseen):
+    """Frame::pair hints of a block's FMAC pairs, by position in the block.
+
+    A flag reader, or whatever follows the block, sees the last FMAC result
+    issued at least 4 cycles before it. Pairs take a cycle or more, so a later
+    result 4 or more pairs before every such point hides this one.
+    """
+    fmacs = [k for k, index in enumerate(body) if pairs[index].publishes_flags()]
+    points = [k for k, index in enumerate(body) if pairs[index].reads_flags()] + [len(body)]
+    hints = {}
+    for k in fmacs:
+        hint = STATUS_UNSEEN if status_unseen else 0
+        if all(any(k < m <= point - 4 for m in fmacs) for point in points if point > k):
+            hint |= FLAGS_UNSEEN
+        if hint:
+            hints[k] = hint
+    return hints
+
+
+def emit_routine(routine, name, max_pairs, status_unseen=False):
     pairs = routine.pairs
     # The entry block comes first; every other block is reached by goto.
     blocks = sorted(routine.blocks, key=lambda start: start != routine.entry)
@@ -448,12 +488,14 @@ def emit_routine(routine, name, max_pairs):
     def emit_block(start):
         body, terminator = routine.blocks[start]
         table = f"{name}_{start:04x}"
+        hints = flag_hints(pairs, body, status_unseen)
         if body:
             words = ", ".join(f"0x{pairs[i].word:016x}ull" for i in body)
             tables.append(f"constexpr Block<{len(body)}> {table}{{{pc(start)}, {{{words}}}}};")
 
         def emit_pair(index, next_pc, checked=True):
-            call = f"p.pair<{table}, {index - start}>({next_pc})"
+            hint = hints.get(index - start)
+            call = f"p.pair<{table}, {index - start}{f', {hint}u' if hint else ''}>({next_pc})"
             # A GIF callback that rewrote microcode sends the rest to the interpreter.
             return f"    if (!{call}) return p.leaveStale();" if checked else f"    {call};"
 
@@ -560,6 +602,13 @@ def main():
             routines.setdefault(routine.key(), routine)
             work.extend(routine.calls)
 
+    # The status register is only seen through FSEQ, FSAND and FSOR (the runtime
+    # does not map VU1's registers into VU0 memory). Without them in any VU1
+    # routine, VU1 FMAC results do not build their sticky conditions.
+    status_unseen = not any(routine.pairs[index].reads_flags(STATUS_READERS)
+                            for routine in routines.values() if not routine.pairs[0].vu0
+                            for index in routine.footprint())
+
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
     header = "// Generated from local VU microcode; do not distribute game data.\n"
@@ -591,7 +640,8 @@ def main():
                      + ", ".join(str(i) for i in footprint) + "};\n")
         shard.append(f"extern const uint64_t {name}_words[] = {{"
                      + ", ".join(f"0x{routine.pairs[i].word:016x}ull" for i in footprint) + "};\n")
-        shard.append("\n".join(emit_routine(routine, name, args.max_routine_pairs)) + "\n\n")
+        shard.append("\n".join(emit_routine(routine, name, args.max_routine_pairs,
+                                             status_unseen and not routine.pairs[0].vu0)) + "\n\n")
     externs.append("}\n")
     for shard in shards:
         shard.append("}\n")
@@ -606,7 +656,8 @@ def main():
         output.with_name(f"{output.stem}_{index}.cpp").write_text("".join(shard))
     pair_total = sum(len(r.footprint()) for r in routines.values())
     print(f"compile_vu_programs: {len(routines)} routines, {pair_total} pairs from "
-          f"{len(entries)} entries in {len(images)} images")
+          f"{len(entries)} entries in {len(images)} images"
+          f"{'; VU1 status unread' if status_unseen else ''}")
 
 
 if __name__ == "__main__":

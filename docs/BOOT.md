@@ -180,6 +180,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_PROFILE_SECONDS=N` | with `BDR_PROFILE=1`: after N seconds of sampling, prints the report and the sampled thread's call stack, even if that thread never returns (hangs) |
 | `BDR_GS_STATS=1` | once a second: primitives queued to the GS raster workers, barriers inserted because a texture reads pending writes, serial operations, worker launches, drains and the time the game thread waited for them |
 | `BDR_PROFILE_THREAD=name` | with `BDR_PROFILE=1`: samples that thread instead of `GameThread`, e.g. `GSRaster0` for a GS raster worker |
+| `BDR_STOP_AT_VSYNC=from,to` | stops the run at VSync `to` and prints the wall time and the CPU time of `GameThread`, `GsWorker` and `GsSubmit` since VSync `from`, with the VU1 pairs run compiled and interpreted. With `BDR_DETERMINISTIC=1` a replay does the same work every time, so the CPU times compare builds (Windows only for the CPU times) |
 | `BDR_PROFILE=1` | sampler of the guest thread (EE and IOP run on it; GS rasterization too with `BDR_GS_THREADS=1`); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
 
 With these tools, the profile showed the game ran at 7% of real time because the IOP and the timers were advanced every 8 EE cycles; they now are in batches of 2048 cycles (CHANGES.md).

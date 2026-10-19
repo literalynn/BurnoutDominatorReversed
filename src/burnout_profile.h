@@ -7,6 +7,10 @@
 
 namespace bdr_profile {
 
+// CPU seconds (user and kernel) the thread with that name has used so far, or -1
+// if there is none. Windows only.
+double threadCpuSeconds(const char* name);
+
 class Sampler {
 public:
     Sampler();
