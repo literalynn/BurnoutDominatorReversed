@@ -1567,7 +1567,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
             }
             const __m128i zero = _mm_cmpeq_epi32(magnitude, none);
             const __m128i safe = _mm_or_si128(normal, _mm_and_si128(zero, exactZero));
-            if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>)
+            if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>) [[unlikely]]
             {
                 // Without status readers no product condition is needed (VU1).
                 if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
@@ -1604,7 +1604,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                                                      _mm_cmplt_epi32(resultExponent, _mm_set1_epi32(254)));
             const __m128i zero = _mm_cmpeq_epi32(_mm_and_si128(bits, magnitudeMask), none);
             const __m128i safe = _mm_or_si128(_mm_andnot_si128(risky, resultSafe), _mm_and_si128(zero, zeroProduct));
-            if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>)
+            if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>) [[unlikely]]
             {
                 if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
                 {

@@ -532,7 +532,7 @@ def emit_routine(routine, name, max_pairs, status_unseen=False):
             hint = hints.get(index - start)
             call = f"p.pair<{table}, {index - start}{f', {hint}u' if hint else ''}>({next_pc})"
             # A GIF callback that rewrote microcode sends the rest to the interpreter.
-            return f"    if (!{call}) return p.leaveStale();" if checked else f"    {call};"
+            return f"    if (!{call}) [[unlikely]] return p.leaveStale();" if checked else f"    {call};"
 
         margin = sum(pairs[i].stall_bound() for i in body) + 1
         if start in targets:
