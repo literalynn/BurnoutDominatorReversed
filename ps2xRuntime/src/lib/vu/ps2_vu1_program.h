@@ -651,6 +651,9 @@ public:
           m_workingClip(run.m_workingClip), m_cum(run.m_cum), m_backupValue(run.m_backupValue),
           m_backupReg(run.m_backupReg), m_kickActive(run.m_kickActive)
     {
+#if PS2_VU_PROGRAM_SSE
+        m_acc = _mm_loadu_ps(m_state.acc);
+#endif
     }
 
     // A block runs without cycle checks only while it cannot reach the budget.
@@ -726,6 +729,9 @@ private:
         m_run.m_backupValue = m_backupValue;
         m_run.m_backupReg = m_backupReg;
         m_run.m_kickActive = m_kickActive;
+#if PS2_VU_PROGRAM_SSE
+        _mm_storeu_ps(m_state.acc, m_acc);
+#endif
     }
 
     // Lane helpers take the mask as a template argument and unfold without
@@ -950,6 +956,12 @@ private:
     uint32_t m_backupReg;
     bool m_taken = false;
     bool m_kickActive;
+#if PS2_VU_PROGRAM_SSE
+    // ACC for the routine's duration: a matrix product's MULA, MADDA... chain goes
+    // through it at every step, and a store and reload cost more than the step. It
+    // goes back to the state in save() and before the interpreter's arithmetic.
+    __m128 m_acc;
+#endif
 };
 
 template <uint32_t Lower, uint32_t Upper, uint32_t Settled>
@@ -1058,7 +1070,16 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
         setReady<upperLanes>(m_run.m_vfReady[upperReg].data(), m_cycle + latency);
     }
     if constexpr (accLanes != 0u)
+    {
+#if PS2_VU_PROGRAM_SSE
+        if constexpr (accLanes == 0xFu)
+            m_acc = _mm_loadu_ps(upperValue);
+        else
+            m_acc = _mm_blend_ps(m_acc, _mm_loadu_ps(upperValue), fast::kLanes<accLanes>);
+#else
         writeLanes<accLanes>(m_state.acc, upperValue);
+#endif
+    }
     if constexpr (viReg != 0u)
     {
         constexpr uint32_t latency = decoded.lowerUsage.viLatency != 0u ? decoded.lowerUsage.viLatency
@@ -1123,6 +1144,9 @@ PS2_VU_FORCE_INLINE void Frame::upper(float *value)
 #if PS2_VU_PROGRAM_NEON || PS2_VU_PROGRAM_SSE
         if (fastUpper<Upper, Hint>(value))
             return;
+#endif
+#if PS2_VU_PROGRAM_SSE
+        _mm_storeu_ps(m_state.acc, m_acc);
 #endif
         m_run.exactUpper(Upper);
         const UpperSink &exact = m_run.m_upper;
@@ -1538,7 +1562,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
         }
         else
         {
-            const __m128 result = fast::productSum<subtract>(_mm_loadu_ps(m_state.acc), left, right);
+            const __m128 result = fast::productSum<subtract>(m_acc, left, right);
             const __m128i bits = _mm_castps_si128(result);
             const __m128i exponentMask = _mm_set1_epi32(0xFF);
             const __m128i resultExponent = _mm_and_si128(_mm_srli_epi32(bits, 23), exponentMask);
@@ -1560,7 +1584,7 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
                 if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
                 {
                     constexpr auto kind = subtract ? fast::Exact::ProductSubtract : fast::Exact::ProductAdd;
-                    const uint32_t conditions = fast::exactLanes<kind>(left, right, _mm_loadu_ps(m_state.acc), value);
+                    const uint32_t conditions = fast::exactLanes<kind>(left, right, m_acc, value);
                     fmacFlags<Hint>(conditions & (static_cast<uint32_t>(fast::kLanes<dest>) * 0x1111u), 0u);
                     return true;
                 }
