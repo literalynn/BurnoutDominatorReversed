@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Default keys for driving, F9 save states (October 19, 2026)
+
+- `host_settings.cpp`: the default keyboard layout is a driving one: W accelerates (cross), Space brakes (square), A and D steer, Left Ctrl boosts (R1); C and keypad 1 are circle, V and Escape triangle (back), Left Shift L1, E L2, Q R2. The arrows, Enter, Tab and the mouse stay where they were. A `key_<button>` line in settings.ini still replaces its button's default.
+- `ps2_runtime.cpp`: F9 also asks for a save state, `marks/mark_<vsync>.bdrstate`, taken at the next safe point a few frames later, so that a glitch seen while playing can be replayed with `--load-state`.
+
 ## The CI builds again (October 19, 2026)
 
 The three CI builds had failed since the save states (October 15):

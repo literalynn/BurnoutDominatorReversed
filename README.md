@@ -10,7 +10,7 @@
 ![license](https://img.shields.io/badge/license-GPLv3-green)
 ![status](https://img.shields.io/badge/status-playable-brightgreen)
 
-<img src="docs/screenshots/race-city-boost.jpg" width="100%" alt="Boosting through the city at 147 mph">
+<img src="docs/screenshots/banner.jpg" width="100%" alt="Boosting down a mountain road at 148 mph">
 
 </div>
 
@@ -26,16 +26,20 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 <td width="50%"><img src="docs/screenshots/race-factory-sun.jpg" alt="Industrial track in the sun"></td>
 </tr>
 <tr>
+<td><img src="docs/screenshots/race-city-boost.jpg" alt="Boosting through the city"></td>
 <td><img src="docs/screenshots/crash.jpg" alt="Crash with Impact Time"></td>
-<td><img src="docs/screenshots/race-city-signs.jpg" alt="City race"></td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/car-select.jpg" alt="Car select"></td>
 <td><img src="docs/screenshots/medal-table.jpg" alt="Burnout Challenge medal table"></td>
 </tr>
+<tr>
+<td><img src="docs/screenshots/settings-menu.jpg" alt="The F1 settings menu"></td>
+<td><img src="docs/screenshots/settings-controls.jpg" alt="The F1 keyboard and mouse controls"></td>
+</tr>
 </table>
 
-<sub>Captured in the game at 4x resolution (2560 pixels wide) with 16 samples per pixel: <b>F1</b> → resolution 4x.</sub>
+<sub>Captured in the game at 4x resolution (2560 pixels wide) with 16 samples per pixel: <b>F1</b> → resolution 4x. Last row: the F1 menu over a paused race.</sub>
 
 ## Status
 
@@ -83,13 +87,18 @@ macOS is not verified yet.
 
 ## Controls
 
-| PS2 | Keyboard | Gamepad |
+| PS2 | Keyboard and mouse | Gamepad |
 |---|---|---|
-| D-pad | arrows / WASD | D-pad |
-| ✕ ○ □ △ | X · C · Z · V (△ also Escape: back) | A B X Y / ✕ ○ □ △ |
-| L1 · R1 | Q · E | LB · RB |
-| L2 · R2 | Left Shift · Right Shift | LT · RT |
+| ✕ accelerate, select | W · left click | A / ✕ |
+| □ brake | Space | X / □ |
+| R1 boost, Impact Time | Left Ctrl | RB / R1 |
+| D-pad: steer, menus | A · D · S, arrows, mouse wheel | D-pad, left stick |
+| △ back | V · Escape · right click | Y / △ |
+| ○ | C · keypad 1 | B / ○ |
+| L1 · L2 · R2 | Left Shift · E · Q | LB · LT · RT |
 | Start · Select | Enter · Tab | Start · Back |
+
+Every key can be changed in **F1** → *Keyboard and mouse controls*: up to three keys, mouse buttons or wheel directions per PS2 button.
 
 | Key | |
 |---|---|
@@ -97,9 +106,7 @@ macOS is not verified yet.
 | **F11** · **Alt+Enter** | full screen |
 | **F5** · **F7** | save · load state |
 | **Escape** | back; in a race, asks whether to quit |
-| **F9** | mark a glitch: notes the moment in the log and saves a screenshot |
-
-The mouse works in the menus (wheel, left click, right click to go back). Every PS2 button takes up to three keys or mouse buttons, set in F1.
+| **F9** | mark a glitch: notes the moment in the log, saves a screenshot and a save state in `marks/` |
 
 <details>
 <summary><b>Settings</b> (<code>settings.ini</code> next to <code>Play.bat</code>, also changed by F1)</summary>

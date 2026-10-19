@@ -162,11 +162,12 @@ namespace ps2x
 
     std::array<std::array<int, 3>, 16> HostSettings::defaultKeys()
     {
-        // The mouse moves through the menus: wheel up and down, left click selects (cross), right
-        // click goes back (triangle).
-        return {{{265, 'W', kMouseWheelUp}, {264, 'S', kMouseWheelDown}, {263, 'A'}, {262, 'D'},
-                 {'X', 32, kMouseInput + 0}, {'C', 321}, {'Z', 320}, {'V', 256, kMouseInput + 1},
-                 {'Q'}, {'E'}, {340}, {344}, {257}, {258}, {}, {}}};
+        // A driving layout: W accelerates (cross), Space brakes (square), A and D steer, Left Ctrl
+        // boosts (R1). Escape goes back (triangle). The arrows also move through the menus, and so
+        // does the mouse: wheel up and down, left click selects (cross), right click goes back.
+        return {{{265, kMouseWheelUp}, {264, 'S', kMouseWheelDown}, {263, 'A'}, {262, 'D'},
+                 {'W', kMouseInput + 0}, {'C', 321}, {32}, {'V', 256, kMouseInput + 1},
+                 {340}, {341}, {'E'}, {'Q'}, {257}, {258}, {}, {}}};
     }
 
     const std::array<const char *, 16> &padButtonNames()

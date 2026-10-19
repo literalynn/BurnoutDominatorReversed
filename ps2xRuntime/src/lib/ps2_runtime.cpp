@@ -3026,17 +3026,20 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
                 requestLoadState(options.stateFile);
             }
         }
-        // F9 marks the moment in the log, with a screenshot in marks/, so that a glitch seen
-        // while playing can be found again afterwards.
+        // F9 marks the moment in the log, with a screenshot and a save state in marks/, so that
+        // a glitch seen while playing can be found again, and replayed, afterwards.
         if (IsKeyPressed(KEY_F9))
         {
             const uint64_t vsync = m_eeScheduler->currentVSyncTick();
             std::error_code ignored;
             std::filesystem::create_directories("marks", ignored);
-            const std::filesystem::path shot = std::filesystem::path("marks") / ("mark_" + std::to_string(vsync) + ".png");
-            std::cout << "[mark] vsync " << vsync << ", screenshot " << shot.string() << std::endl;
+            const std::filesystem::path mark = std::filesystem::path("marks") / ("mark_" + std::to_string(vsync));
+            const std::filesystem::path shot = mark.string() + ".png";
+            const std::filesystem::path state = mark.string() + ".bdrstate";
+            std::cout << "[mark] vsync " << vsync << ", screenshot " << shot.string() << ", state " << state.string() << std::endl;
             printRunStatus(std::cout);
             dumpPresentationFrame(shot);
+            requestSaveState(state); // at the next safe point, a few frames later
             std::ostringstream gaps;
             gaps << "[mark] gaps between the last " << std::min<uint64_t>(framesShown, frameGaps.size()) << " frames shown (ms, oldest first):";
             for (size_t i = 1; i <= frameGaps.size(); ++i)
