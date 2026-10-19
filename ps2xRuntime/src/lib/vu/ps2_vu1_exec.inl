@@ -639,7 +639,7 @@ inline void VU1Interpreter::queueFcset(uint32_t clip)
     reportReservedInstruction(false, 0xFFFFFFFAu);
 }
 
-inline void VU1Interpreter::queueQ(float value, uint32_t latency, uint32_t statusDi)
+PS2_VU_FORCE_INLINE void VU1Interpreter::queueQ(float value, uint32_t latency, uint32_t statusDi)
 {
     uint32_t ignoredFlags = 0u;
     value = normalizeResult(value, ignoredFlags);

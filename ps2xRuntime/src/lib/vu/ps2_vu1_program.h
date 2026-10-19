@@ -113,7 +113,7 @@ struct Access
     static ScalarEntry &fdiv(VU1Interpreter &vu) { return vu.m_fdiv; }
     static std::array<ScalarEntry, 2> &efu(VU1Interpreter &vu) { return vu.m_efu; }
     static uint64_t efuResourceReady(const VU1Interpreter &vu) { return vu.m_efuResourceReady; }
-    static void queueQ(VU1Interpreter &vu, float value, uint32_t latency, uint32_t statusDi)
+    static PS2_VU_FORCE_INLINE void queueQ(VU1Interpreter &vu, float value, uint32_t latency, uint32_t statusDi)
     {
         vu.queueQ(value, latency, statusDi);
     }
@@ -490,7 +490,23 @@ private:
     PendingFlags *commitFlags(PendingFlags *head, PendingFlags *tail, uint32_t upTo);
     FlagRange makeRoom(PendingFlags *head, PendingFlags *tail, uint32_t cycle);
     void cancelSameCycle(PendingFlags *head, PendingFlags *tail, uint32_t cycle, uint32_t writes);
-    PendingFlags *commitQ(PendingFlags *head, PendingFlags *tail, uint32_t cycle);
+    // Inline: compiled code calls it at every read of a new Q.
+    PS2_VU_FORCE_INLINE PendingFlags *commitQ(PendingFlags *head, PendingFlags *tail, uint32_t cycle)
+    {
+        // Q and its D/I bits land after any flag result due in the same cycle.
+        // FMAC results touch other status bits, so only an FSSET, which rewrites
+        // the sticky D and I bits, has to be committed first.
+        auto &fdiv = Access::fdiv(m_vu);
+        if (!fdiv.valid || relative(fdiv.readyCycle) > cycle)
+            return head;
+        if (m_fssetQueued != 0u)
+            head = commitFlags(head, tail, relative(fdiv.readyCycle));
+        m_state.q = fdiv.value;
+        const uint32_t currentDi = fdiv.statusDi & 0x30u;
+        m_state.status = (m_state.status & 0xFCFu) | currentDi | (currentDi << 6u);
+        fdiv = {};
+        return head;
+    }
     void commitP(uint32_t cycle);
     void handBack();
     uint32_t leaveStale();
