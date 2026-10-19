@@ -126,13 +126,26 @@ void VU1Interpreter::progressXgkick()
         }
 
         const uint32_t qwordOffset = m_xgkick.copiedBytes;
+        // Within a tag's data, every qword the credit allows goes in one copy;
+        // the state ends as one qword per pass would leave it.
+        uint32_t qwords = 1u;
+        if (m_xgkick.currentTagEnd != 0u)
+            qwords = std::min({1u + m_xgkick.cycleCredit / 2u, (m_xgkick.currentTagEnd - qwordOffset) / 16u,
+                               m_activeVuDataSize / 16u});
+        m_xgkick.cycleCredit -= 2u * (qwords - 1u);
+        const uint32_t bytes = qwords * 16u;
         const uint32_t source = (m_xgkick.sourceAddress + qwordOffset) % m_activeVuDataSize;
-        const uint32_t firstBytes = std::min(16u, m_activeVuDataSize - source);
-        std::memcpy(m_xgkick.packet.data() + qwordOffset, m_activeVuData + source, firstBytes);
-        if (firstBytes < 16u)
-            std::memcpy(m_xgkick.packet.data() + qwordOffset + firstBytes,
-                        m_activeVuData, 16u - firstBytes);
-        m_xgkick.copiedBytes += 16u;
+        if (source + bytes <= m_activeVuDataSize && qwords == 1u)
+            std::memcpy(m_xgkick.packet.data() + qwordOffset, m_activeVuData + source, 16u);
+        else
+        {
+            const uint32_t firstBytes = std::min(bytes, m_activeVuDataSize - source);
+            std::memcpy(m_xgkick.packet.data() + qwordOffset, m_activeVuData + source, firstBytes);
+            if (firstBytes < bytes)
+                std::memcpy(m_xgkick.packet.data() + qwordOffset + firstBytes,
+                            m_activeVuData, bytes - firstBytes);
+        }
+        m_xgkick.copiedBytes += bytes;
 
         if (m_xgkick.currentTagEnd == 0u)
         {
