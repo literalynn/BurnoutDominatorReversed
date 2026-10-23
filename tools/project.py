@@ -40,6 +40,8 @@ WORK = work_root()
 LOCAL = WORK / "local"
 GENERATED = WORK / "generated"
 VU_PROGRAMS = LOCAL / "vu-programs"  # VU1 programs recorded by `run --vu-capture`
+VU_MANIFEST = ROOT / "data" / "vu_programs.manifest"
+VU_SHIPPED = LOCAL / "vu-programs-shipped"  # the manifest's programs, taken from the extracted ELF
 
 
 def sha256(path: Path) -> str:
@@ -243,6 +245,19 @@ def default_cmake() -> str:
     return "cmake"
 
 
+def shipped_vu_programs() -> Path | None:
+    """The programs of data/vu_programs.manifest, read from the extracted ELF."""
+    listing = VU_SHIPPED / "entries.txt"
+    if not (LOCAL / "disc" / LOCK["boot_path"]).is_file():
+        return None
+    # Expanded again only when the manifest changes: a new entries.txt recompiles them.
+    if not listing.is_file() or listing.stat().st_mtime < VU_MANIFEST.stat().st_mtime:
+        subprocess.run([sys.executable, str(ROOT / "tools" / "vu_program_manifest.py"), "expand",
+                        "--manifest", str(VU_MANIFEST), "--game-root", str(LOCAL / "disc"),
+                        "--output", str(VU_SHIPPED)], check=True)
+    return VU_SHIPPED if listing.read_text().strip() else None
+
+
 def configure(args) -> None:
     foreign = foreign_build_tree(args.build_dir)
     if foreign:
@@ -265,10 +280,12 @@ def configure(args) -> None:
     gs_backend = "PARALLEL_GS" if args.game and args.gs == "parallel" else "CPU"
     command.append("-DPS2X_GS_BACKEND=" + gs_backend)
     command.append("-DBDR_GENERATED_DIR=" + GENERATED.as_posix())
-    # VU1 microprograms recorded by `run --vu-capture` are compiled to C++ with
-    # the runtime (tools/compile_vu_programs.py); without them the VU1
-    # interpreter runs everything. They come from the game and stay local.
-    vu_programs = VU_PROGRAMS if (VU_PROGRAMS / "entries.txt").is_file() else None
+    # VU microprograms recorded by `run --vu-capture` are compiled to C++ with
+    # the runtime (tools/compile_vu_programs.py); without them the VU
+    # interpreter runs everything, about 20 times slower in a race. They come
+    # from the game and stay local; without recordings, the shipped manifest
+    # rebuilds the same programs from the user's own ELF.
+    vu_programs = VU_PROGRAMS if (VU_PROGRAMS / "entries.txt").is_file() else shipped_vu_programs()
     command.append("-DPS2X_VU_PROGRAM_PROFILES=" + (vu_programs.as_posix() if vu_programs else ""))
     if os.name != "nt" and platform.machine().lower() in ("x86_64", "amd64"):
         # The runtime uses SSE4.1 intrinsics (_mm_extract_epi64...). MSVC accepts

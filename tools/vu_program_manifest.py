@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Describe recorded VU1 microcode by where it sits in the game's own files.
+"""Describe recorded VU0 and VU1 microcode by where it sits in the game's own files.
 
 A PS2_VU_PROGRAM_PROFILE recording holds 16 KiB code images, which are game
 data and cannot be distributed. The routines compile_vu_programs.py builds
@@ -207,8 +207,8 @@ def make(args, parser):
     files = [(game_file_name(path, args.game_root, parser), path.read_bytes()) for path in args.game]
     work = [(images[name], by_image[name]) for name in sorted(by_image)]
     extra = list(unrecorded_uploads(images, by_image, files)) if args.uploads else []
-    lines = ["# VU1 microcode compiled into the runtime, located in the game's files.",
-             "# image <entries> <fnv64 of its runs>; run <first pair> <pairs> <file> <offset>"]
+    lines = ["# VU microcode compiled into the runtime, located in the game's files.",
+             "# image <entries> <fnv64 of its runs> <vu0|vu1>; run <first pair> <pairs> <file> <offset>"]
     written, unplaced, seen = 0, 0, set()
     for image, image_entries in work + extra:
         placed = place(image, image_entries, files)
@@ -222,10 +222,10 @@ def make(args, parser):
         seen.add(key)
         checksum = fnv(b"".join(run[4] for run in placed))
         lines.append("image " + ",".join(f"{entry * 8:x}" for entry in sorted(image_entries))
-                     + f" {checksum:016x}")
+                     + f" {checksum:016x} " + ("vu0" if image[0].vu0 else "vu1"))
         lines += [f"run {start} {length} {file} {offset}" for start, length, file, offset, _ in placed]
         written += 1
-    args.output.write_text("\n".join(lines) + "\n")
+    args.output.write_bytes(("\n".join(lines) + "\n").encode())  # LF on every system
     print(f"vu_program_manifest: {written} images from {len(by_image)} recorded"
           + (f" and {len(extra)} unrecorded uploads" if args.uploads else "")
           + f", {unplaced} with code the game files do not hold")
@@ -238,8 +238,8 @@ def expand(args, parser):
         fields = line.split()
         if not fields or fields[0].startswith("#"):
             continue
-        if fields[0] == "image" and len(fields) == 3:
-            current = ([int(entry, 16) for entry in fields[1].split(",")], int(fields[2], 16), [])
+        if fields[0] == "image" and len(fields) == 4 and fields[3] in compiler.CODE_SIZES:
+            current = ([int(entry, 16) for entry in fields[1].split(",")], int(fields[2], 16), [], fields[3])
             images.append(current)
         elif fields[0] == "run" and len(fields) == 5 and current is not None:
             problem = bad_file_name(fields[3])
@@ -250,7 +250,7 @@ def expand(args, parser):
             parser.error(f"{args.manifest}:{number}: unexpected line")
     args.output.mkdir(parents=True, exist_ok=True)
     listing, kept, stale = [], 0, 0
-    for entries, checksum, runs in images:
+    for entries, checksum, runs, unit in images:
         chunks = []
         for start, length, file, offset in runs:
             if file not in files:
@@ -261,11 +261,11 @@ def expand(args, parser):
                 or fnv(b"".join(chunks)) != checksum:
             stale += 1
             continue
-        image = bytearray(CODE_SIZE)
+        image = bytearray(compiler.CODE_SIZES[unit])
         for (start, length, _, _), chunk in zip(runs, chunks):
             image[start * 8:(start + length) * 8] = chunk
         name = f"{fnv(image):016x}"
-        (args.output / f"vu1-{name}.code").write_bytes(image)
+        (args.output / f"{unit}-{name}.code").write_bytes(image)
         listing += [f"{name} {entry:x}" for entry in entries]
         kept += 1
     (args.output / "entries.txt").write_text("\n".join(listing) + "\n")

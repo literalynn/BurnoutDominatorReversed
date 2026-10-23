@@ -7,7 +7,7 @@ Static recompilation of Burnout Dominator PS2 (PAL, SLES_546.27, SHA256 locked i
 - Upstream PS2Recomp snapshot at the root (`ps2xRecomp`, `ps2xRuntime`, `ps2xIOP`, `ps2xTest`, ...), commit in `UPSTREAM.json`. Change it minimally and list every change in `docs/CHANGES.md`.
 - Project code: `src/burnout_main.cpp` (runner), `src/burnout_overrides.cpp` (SDK bindings by address + ROM0 profile), `cmake/Burnout.cmake`, `tools/` (Python driver and analysis), `tests/python`, `tests/native`.
 - State and evidence: `docs/STATUS.md`, `docs/BOOT.md` (boot sequence, IOP modules, run history), `docs/SDK_FUNCTIONS.md` (identified SDK functions), `docs/FINDINGS.md`.
-- Game files, Ghidra output, generated C++ (~51k files) and builds are never committed. One exception: `data/functions.ee.csv`, the Ghidra function map (generated names, addresses and sizes, no game bytes; provenance and SHA256 in `data/README.md`), shipped so that `tools/install.py` works without Ghidra. They live in a work directory chosen by `BDR_WORK_DIR` or the ignored `work.json`, outside the checkout. Cloud sessions have no game files.
+- Game files, Ghidra output, generated C++ (~51k files) and builds are never committed. Two exceptions, without game bytes (provenance and SHA256 in `data/README.md`): `data/functions.ee.csv`, the Ghidra function map (generated names, addresses and sizes), shipped so that `tools/install.py` works without Ghidra; and `data/vu_programs.manifest` (offsets in the ELF and checksums), from which `project.py configure` rebuilds the VU programs to compile when the work directory has no recordings. They live in a work directory chosen by `BDR_WORK_DIR` or the ignored `work.json`, outside the checkout. Cloud sessions have no game files.
 
 ## Commands
 

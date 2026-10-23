@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Compiled VU programs on every install (October 23, 2026)
+
+- `tools/vu_program_manifest.py`, `data/vu_programs.manifest` (new), `tools/project.py`: the VU0 and VU1 programs were compiled only from recordings in the work directory (`run --vu-capture`), so a new install ran every VU program in the interpreter: a race at a few frames per second ([issue #1](https://github.com/literalynn/BurnoutDominatorReversed/issues/1); on the same 300 race VSyncs, 2.6 s compiled, 51 s interpreted). The manifest says where the recorded programs sit in the ELF, without their bytes, and `configure` rebuilds them from the user's ELF when there are no recordings; the C++ compiled from them is the same, byte for byte. The manifest tool also keeps VU0 images (4 KiB, written `vu0-`), which it wrote as 16 KiB VU1 images, and writes LF on every system. Test: `tests/python/test_vu_program_manifest.py`.
+
 ## Default keys for driving, F9 save states (October 19, 2026)
 
 - `host_settings.cpp`: the default keyboard layout is a driving one: W accelerates (cross), Space brakes (square), A and D steer, Left Ctrl boosts (R1); C and keypad 1 are circle, V and Escape triangle (back), Left Shift L1, E L2, Q R2. The arrows, Enter, Tab and the mouse stay where they were. A `key_<button>` line in settings.ini still replaces its button's default.
