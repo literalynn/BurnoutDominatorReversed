@@ -7,6 +7,7 @@
 #include "ps2_runtime_macros.h"
 
 #include "runtime/ee_idle_loops.h"
+#include "runtime/ee_count.h"
 
 #include <algorithm>
 #include <array>
@@ -187,21 +188,24 @@ namespace
 
     constexpr uint64_t kVBlankPeriodCycles = microsecondsToEeCycles(16667u);
 
-    // With keep_speed, COP0 Count runs at the EE clock, plus the host time the
-    // game thread spent waiting for the GS worker: emulated time stands still
-    // then, and on a console that time would have passed while the frame was
-    // drawn. A game that times its frames with Count (Burnout's governor at
+    // With keep_speed, COP0 Count runs at the EE clock, plus the host time by which
+    // emulated time fell behind real time: a console would have spent that time
+    // drawing. A game that times its frames with Count (Burnout's governor at
     // 0x1E6728) then runs more simulation steps per drawn frame and keeps its
-    // speed when drawing is the bottleneck. Once the extra steps make the EE the
-    // bottleneck, the waits stop and so does the correction. Replays
-    // (BDR_DETERMINISTIC) count EE cycles only. Without keep_speed Count is left
-    // alone, as before (FINDINGS.md E019).
-    uint64_t g_countWaitBaseNs = 0u;
+    // speed when the host cannot keep up. Only the lag the VBlank schedule drops
+    // counts (it may trail real time by one period), at most two periods per
+    // VBlank and none after a pause or a long stall, where the game waits instead
+    // of jumping ahead. (Adding the game thread's waits for the GS worker counted
+    // time twice when the wait ended before the VBlank: the race ran up to 60%
+    // fast.) Replays (BDR_DETERMINISTIC) count EE cycles only. Without keep_speed
+    // Count is left alone (FINDINGS.md E019).
+    uint64_t g_countLagCycles = 0u;
     bool g_countRuns = false;
+    constexpr auto kCountStallLimit = std::chrono::milliseconds(250);
 
-    uint64_t countWaitNs()
+    uint64_t hostDurationToEeCycles(std::chrono::nanoseconds duration)
     {
-        return ps2_wait_stats::g_waitNs[static_cast<size_t>(ps2_wait_stats::Wait::GsWorker)].load(std::memory_order_relaxed);
+        return static_cast<uint64_t>(duration.count()) * EeScheduler::kEeClockHz / 1000000000ull;
     }
     constexpr uint64_t kPalVBlankPeriodCycles = microsecondsToEeCycles(20000u);
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
@@ -267,7 +271,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_insideInterrupt = false;
     m_pendingEeTimerInterrupts = 0u;
     m_eeCycle = 0u;
-    g_countWaitBaseNs = countWaitNs();
+    g_countLagCycles = 0u;
     m_deviceCycleDebt = 0u;
     m_sliceEndCycle = kDefaultTimeSliceCycles;
     m_stopRequested.store(false, std::memory_order_release);
@@ -629,16 +633,21 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     return false;
 }
 
+namespace ps2x
+{
+    void continueGuestCount(const GuestThread *running, uint64_t eeCycle)
+    {
+        if (running && !deterministicTiming())
+            g_countLagCycles = static_cast<uint32_t>(running->activeContext().cop0_count - static_cast<uint32_t>(eeCycle));
+    }
+}
+
 void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
     if (GuestThread *running = g_countRuns ? currentThread() : nullptr)
-    {
-        static const bool replay = deterministicTiming();
-        const uint64_t waitedCycles = replay ? 0u : (countWaitNs() - g_countWaitBaseNs) / 1000u * (kEeClockHz / 1000u) / 1000u;
-        running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle + waitedCycles);
-    }
+        running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle + g_countLagCycles);
     m_deviceCycleDebt += elapsed;
     if (m_deviceCycleDebt >= kDeviceBatchCycles)
     {
@@ -2196,6 +2205,10 @@ void EeScheduler::processDueDeadlines()
                 // would fire in a burst until it caught up, so the game stepped several
                 // frames at once (the car and camera jumped). Let it lag one period at most.
                 const auto base = std::clamp(scheduled.hostDeadline, hostNow - period, hostNow);
+                const auto dropped = std::chrono::duration_cast<std::chrono::nanoseconds>((hostNow - period) - scheduled.hostDeadline);
+                if (g_countRuns && !deterministicTiming() && !m_fastForward &&
+                    dropped > std::chrono::nanoseconds::zero() && dropped < kCountStallLimit)
+                    g_countLagCycles += hostDurationToEeCycles(std::min<std::chrono::nanoseconds>(dropped, 2 * period));
                 scheduleEvent(scheduled.deadlineCycle + (pal ? kPalVBlankPeriodCycles : kVBlankPeriodCycles),
                               base + period,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
@@ -2214,7 +2227,12 @@ void EeScheduler::processEvent(const EeEvent &event)
         break;
     case EeEventType::VBlankStart:
         ++m_vsyncTick;
-        g_countRuns = ps2x::hostSettings().keepSpeed;
+        if (ps2x::hostSettings().keepSpeed != g_countRuns)
+        {
+            g_countRuns = !g_countRuns;
+            if (g_countRuns)
+                ps2x::continueGuestCount(currentThread(), m_eeCycle);
+        }
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         // BDR_RDRAM_DUMP=vsync,file: EE RAM at that VSync tick, for offline inspection.
         if (static const char *dump = std::getenv("BDR_RDRAM_DUMP"); dump && std::strtoull(dump, nullptr, 10) == m_vsyncTick)

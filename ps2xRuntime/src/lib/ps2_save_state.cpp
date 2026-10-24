@@ -2,6 +2,7 @@
 // HLE kernel) written to one file and restored at a scheduler quiet point.
 #include "ps2_runtime.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/ee_count.h"
 #include "runtime/gs_worker.h"
 #include "runtime/ps2_ipu.h"
 #include "ps2x/iop/iop_subsystem.h"
@@ -369,6 +370,7 @@ void EeScheduler::serialize(ps2x::StateArchive &archive)
         m_cachedThreadId = 0;
         m_cachedThread = nullptr;
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+        ps2x::continueGuestCount(currentThread(), m_eeCycle);
         updateNextDeadline();
         publishSnapshot();
     }
