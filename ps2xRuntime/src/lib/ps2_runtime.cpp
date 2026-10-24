@@ -24,6 +24,7 @@
 #include "runtime/host_audio.h"
 #include "runtime/settings_menu.h"
 #include "runtime/post_filter.h"
+#include "runtime/shared_frames.h"
 #include "runtime/run_marks.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/host_settings.h"
@@ -408,7 +409,9 @@ static void EnsureFrameTexture(Texture2D &tex, uint32_t width, uint32_t height)
     SetTextureFilter(tex, ps2x::hostSettings().smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
 }
 
-static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+// Returns the texture to draw: tex, which frames read back to host memory go to, or a frame the
+// GS backend shares with the window (runtime/shared_frames.h).
+static Texture2D UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
 {
     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
     static bool s_hasLatchedInitialFrame = false;
@@ -419,6 +422,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
     static uint32_t s_lastHeight = 0u;
     static bool s_hasUploadedFrame = false;
     static std::vector<uint8_t> s_scratch;
+    static Texture2D s_shared{}; // while a shared frame is the one shown
 
     const bool worker = rt->gsWorkerActive();
     const uint64_t currentTick = worker ? rt->gs().presentationSerial() : rt->eeScheduler().currentVSyncTick();
@@ -434,7 +438,17 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
     {
         outWidth = (s_lastWidth != 0u) ? s_lastWidth : FB_WIDTH;
         outHeight = (s_lastHeight != 0u) ? s_lastHeight : DEFAULT_DISPLAY_HEIGHT;
-        return;
+        return s_shared.id != 0 ? s_shared : tex;
+    }
+
+    if (ps2x::shared_frames::ShownFrame shared{}; ps2x::shared_frames::showNewFrame(shared))
+    {
+        s_shared = Texture2D{shared.texture, int(shared.width), int(shared.height), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        SetTextureFilter(s_shared, ps2x::hostSettings().smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
+        outWidth = s_lastWidth = shared.width;
+        outHeight = s_lastHeight = shared.height;
+        s_hasUploadedFrame = true;
+        return s_shared;
     }
 
     s_scratch.clear();
@@ -450,6 +464,12 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                    &sourceFbp,
                                                    &usedPreferredDisplaySource))
     {
+        if (s_shared.id != 0) // no new frame: the shared one stays
+        {
+            outWidth = s_lastWidth;
+            outHeight = s_lastHeight;
+            return s_shared;
+        }
         Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, MAGENTA);
         EnsureFrameTexture(tex, FB_WIDTH, FB_HEIGHT);
         UpdateTexture(tex, blank.data);
@@ -459,7 +479,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
         s_lastWidth = outWidth;
         s_lastHeight = outHeight;
         s_hasUploadedFrame = true;
-        return;
+        return tex;
     }
 
     PS2_IF_AGRESSIVE_LOGS({
@@ -495,6 +515,8 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
     outWidth = width;
     outHeight = height;
     s_hasUploadedFrame = true;
+    s_shared = {};
+    return tex;
 }
 
 PS2Runtime::PS2Runtime()
@@ -2653,7 +2675,17 @@ bool PS2Runtime::dumpPresentationFrame(const std::filesystem::path &file)
         width == 0u || height == 0u ||
         pixels.size() < static_cast<size_t>(width) * height * 4u)
     {
-        return false;
+        // A frame shared with the window stays on the GPU: the one the window shows.
+        ps2x::shared_frames::ShownFrame shown{};
+        if (!ps2x::shared_frames::shownFrame(shown))
+            return false;
+        width = shown.width;
+        height = shown.height;
+        auto *data = static_cast<uint8_t *>(rlReadTexturePixels(shown.texture, int(width), int(height), PIXELFORMAT_UNCOMPRESSED_R8G8B8A8));
+        if (!data)
+            return false;
+        pixels.assign(data, data + static_cast<size_t>(width) * height * 4u);
+        MemFree(data);
     }
     // PS2 framebuffer alpha is not display opacity.
     for (size_t i = 3; i < pixels.size(); i += 4)
@@ -2875,6 +2907,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
     Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
     Texture2D frameTex = LoadTextureFromImage(blank);
     UnloadImage(blank);
+    ps2x::shared_frames::startWindow();
 
     std::atomic<bool> gameThreadFinished{false};
     std::atomic<bool> gameThreadFailed{false};
@@ -2946,6 +2979,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         if (serial == drawnSerial && !resized && now - lastDraw < std::chrono::milliseconds(menu ? 16 : 100))
         {
             PollInputEvents();
+            ps2x::shared_frames::releaseDrawn(); // the backend may need a slot before the next frame
             ps2x::sleepPrecisely(std::chrono::microseconds(500));
         }
         else
@@ -2975,16 +3009,18 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         drawnSerial = serial;
         lastDraw = now;
         resized = false;
-        UploadFrame(frameTex, this, shownWidth, shownHeight);
+        const Texture2D shown = UploadFrame(frameTex, this, shownWidth, shownHeight);
         const uint32_t presentWidth = shownWidth;
         const uint32_t presentHeight = shownHeight;
         ps2x::setPictureSize(presentWidth, presentHeight);
         if (smoothScaling != ps2x::hostSettings().smoothScaling)
         {
             smoothScaling = ps2x::hostSettings().smoothScaling;
-            SetTextureFilter(frameTex, smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
+            const int filter = smoothScaling ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT;
+            SetTextureFilter(frameTex, filter);
+            SetTextureFilter(shown, filter); // a shared frame's, when it is one
         }
-        const ps2x::PostFrame picture = ps2x::applyPostFilter(frameTex, ps2x::hostSettings().fxaa, smoothScaling);
+        const ps2x::PostFrame picture = ps2x::applyPostFilter(shown, ps2x::hostSettings().fxaa, smoothScaling);
 
         BeginDrawing();
         ClearBackground(BLACK);
@@ -3080,6 +3116,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         m_debugUiShutdownCallback(*this, m_debugUiUserData);
         m_debugUiInitialized = false;
     }
+    ps2x::shared_frames::stopWindow();
     UnloadTexture(frameTex);
     CloseWindow();
 

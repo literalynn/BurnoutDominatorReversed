@@ -54,7 +54,7 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 | ✅ Graphics | up to 4x resolution, supersampling, FXAA, 16:9 |
 | ✅ Sound | music, engines, crashes, menus |
 | ✅ Speed | 60 frames per second in six-car races; the race keeps its speed when frames come late |
-| ✅ High frame rate | 120, 144, 240... frames per second (`refresh_rate`): the simulation runs that fast, not interpolated (on a Ryzen + RTX 5090, 144 draws every frame in a race and 165 nearly every one; from 240 the frames come unevenly, and above 300 the race slows down) |
+| ✅ High frame rate | 120, 144, 240... frames per second (`refresh_rate`): the simulation runs that fast, not interpolated (on a Ryzen + RTX 5090, 144 draws every frame in a race and 165 nearly every one, 144 also at 4x resolution with 16 samples a pixel; from 240 the frames come unevenly, and above 300 the race slows down) |
 | 🟡 Missing | SPU2 reverb |
 
 ## Install (Windows)

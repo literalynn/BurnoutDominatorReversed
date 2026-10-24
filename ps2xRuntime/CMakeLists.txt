@@ -423,6 +423,7 @@ add_library(ps2_runtime STATIC
     src/lib/disc_patches.cpp
     src/lib/settings_menu.cpp
     src/lib/post_filter.cpp
+    src/lib/shared_frames.cpp
     src/lib/gs_worker.cpp
     src/lib/host_sleep.cpp
     src/lib/ps2_vif1_interpreter.cpp

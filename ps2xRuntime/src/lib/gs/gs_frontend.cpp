@@ -608,7 +608,8 @@ void GS::latchHostPresentationFrame(const GSPresentationRequest &request)
         }
     }
 
-    const bool hasFrame = static_cast<bool>(frame);
+    // A frame shared with the window has a size and no pixels (runtime/shared_frames.h).
+    const bool hasFrame = frame.width != 0u && frame.height != 0u;
     if (!hasFrame)
     {
         // An asynchronous backend has not finished a frame since the last call: keep this one.

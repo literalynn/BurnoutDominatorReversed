@@ -8,6 +8,7 @@
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/ps2_gs_memory.h"
 #include "runtime/host_settings.h"
+#include "runtime/shared_frames.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/transfer_buffers.h"
 #include "runtime/vblank_rate.h"
@@ -149,6 +150,11 @@ namespace
         };
         Readback readbacks[2];
         unsigned readbackIndex = 0;
+        // Frames shared with the window instead (runtime/shared_frames.h): an image a slot, and
+        // the last frame's copy, which the next Present waits for as it would for a readback.
+        bool shareFrames = false;
+        Vulkan::ImageHandle sharedImages[ps2x::shared_frames::kSlots];
+        Vulkan::Fence sharedCopy;
         int superSampling = 1; // the rate paraLLEl-GS renders at
 
         struct Lock
@@ -329,6 +335,10 @@ namespace
             if (!gs.init(&vulkan.device, options))
                 throw std::runtime_error("paraLLEl-GS initialization failed");
             gs.set_signal_interface(this);
+            const auto &features = vulkan.device.get_device_features();
+            shareFrames = features.supports_external && features.vk11_props.deviceLUIDValid;
+            if (shareFrames)
+                ps2x::shared_frames::setDeviceLuid(features.vk11_props.deviceLUID);
         }
 
         ~ParallelBackend() override
@@ -530,6 +540,8 @@ namespace
             const ParallelGS::ScanoutResult scanout = gs.vsync(info);
             if (!scanout.image || scanout.image->get_format() != VK_FORMAT_R8G8B8A8_UNORM)
                 return {};
+            if (const int slot = shareFrames ? ps2x::shared_frames::beginFrame() : -1; slot >= 0)
+                return presentShared(slot, *scanout.image);
 
             const uint32_t width = scanout.image->get_width();
             const uint32_t height = scanout.image->get_height();
@@ -578,6 +590,79 @@ namespace
             else if (previous.pending)
                 copyOut(previous);
             // else no frame (the first one at this rate): the frontend keeps the one it shows.
+            return frame;
+        }
+
+        // The frame stays on the GPU: copied into the slot's image, which the window draws once
+        // the copy's semaphore is signalled. The frame returned has a size and no pixels.
+        PresentationFrame presentShared(int slot, const Vulkan::Image &scanout)
+        {
+            auto &device = vulkan.device;
+            const uint32_t width = scanout.get_width();
+            const uint32_t height = scanout.get_height();
+            // Readbacks older than this frame, which a frame read back later must not return.
+            readbacks[0].pending = readbacks[1].pending = false;
+            const auto giveUp = [&] {
+                ps2x::shared_frames::release(slot);
+                shareFrames = false; // readbacks from the next frame on
+                std::printf("[gs] frames go through host memory from now on: Vulkan cannot share them\n");
+                return PresentationFrame{};
+            };
+            Vulkan::ImageHandle &image = sharedImages[slot];
+            if (!image || image->get_width() != width || image->get_height() != height)
+            {
+                auto info = Vulkan::ImageCreateInfo::immutable_2d_image(width, height, VK_FORMAT_R8G8B8A8_UNORM);
+                info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+                info.misc = Vulkan::IMAGE_MISC_EXTERNAL_MEMORY_BIT;
+                image = device.create_image(info);
+                const Vulkan::ExternalHandle memory = image ? image->export_handle() : Vulkan::ExternalHandle{};
+                if (memory.handle == Vulkan::ExternalHandle{}.handle)
+                {
+                    image.reset();
+                    return giveUp();
+                }
+                ps2x::shared_frames::setImage(slot, intptr_t(memory.handle), image->get_allocation().get_size(), width, height);
+            }
+            Vulkan::Semaphore ready = device.request_semaphore_external(
+                VK_SEMAPHORE_TYPE_BINARY, Vulkan::ExternalHandle::get_opaque_semaphore_handle_type());
+            if (!ready)
+                return giveUp();
+
+            auto cmd = device.request_command_buffer();
+            // The window is done with the slot's last frame (it frees a slot once its GPU fence
+            // has passed): the contents go, and OpenGL need not hand the image back. The copy of a
+            // frame the window never took may still run: this one comes after it.
+            cmd->image_barrier(*image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                               VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            cmd->copy_image(*image, scanout);
+            // Released to OpenGL, which acquires it in this layout (glWaitSemaphoreEXT).
+            VkImageMemoryBarrier2 release = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            release.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            release.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            release.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            release.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            release.srcQueueFamilyIndex =
+                device.get_queue_info().family_indices[device.get_physical_queue_type(Vulkan::CommandBuffer::Type::Generic)];
+            release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+            release.image = image->get_image();
+            release.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            cmd->image_barriers(1, &release);
+            Vulkan::Fence copied;
+            device.submit(cmd, &copied);
+            device.submit_empty(Vulkan::CommandBuffer::Type::Generic, nullptr, ready.get());
+            const Vulkan::ExternalHandle readyHandle = ready->export_to_handle();
+            if (readyHandle.handle == Vulkan::ExternalHandle{}.handle)
+                return giveUp();
+            ps2x::shared_frames::publish(slot, intptr_t(readyHandle.handle));
+
+            if (sharedCopy)
+                sharedCopy->wait();
+            sharedCopy = copied;
+            PresentationFrame frame;
+            frame.width = width;
+            frame.height = height;
             return frame;
         }
 
