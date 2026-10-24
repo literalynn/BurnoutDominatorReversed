@@ -412,6 +412,9 @@ private:
     void updateNextDeadline();
     [[nodiscard]] bool hasReadyAtOrAbovePriority(int priority) const;
     void renewTimeSlice();
+    // accountCycles' work, inlined into checkpointDue (reached about 80,000 times a VBlank).
+    void chargeCycles(uint32_t cycles) noexcept;
+    void flushDeviceCycles() noexcept;
     [[nodiscard]] static bool hasGeneratedFunction(uint32_t address) noexcept;
     void copyMainContextToRuntime();
     void publishDebugContext(const R5900Context &context);

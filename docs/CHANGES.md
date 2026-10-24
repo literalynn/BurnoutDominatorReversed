@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The EE checkpoint charges its cycles without nested calls (October 25, 2026)
+
+- `Kernel/EeScheduler.cpp`, `runtime/ee_scheduler.h`: generated code reaches `EeScheduler::checkpointDue` at every backward branch and every guest dispatch, about 80,000 times a VBlank in a race. Each call went through a thread-safe static (the `BDR_EE_CYCLE_SCALE` percentage, a TLS check every time), then `accountCycles`, then `currentThread`, three frames for a few additions and compares. The percentage is now read once at start-up; `accountCycles`' work is a force-inlined private member (`chargeCycles`, which `accountCycles` also calls) whose batch flush to the EE timers and the IOP is out of line (`flushDeviceCycles`), and it tests the running thread's cache in place. Same operations in the same order. Game-thread profile over the six-car race: the checkpoint path took 6.3% of the busy samples, now 3.3%. The GIF stream is identical over the 12.3 million packets of the shorter run, and the RDRAM at VSync 18,000 differs only in words that also vary between runs of one executable.
+
 ## GsSubmit's queue keeps its jobs' data in one buffer (October 24, 2026)
 
 - `gs/gs_async_backend.cpp`: every queued job carried a byte vector of its own and a copy of the presentation request, 160 bytes a job and a heap block whenever no recycled buffer had the room. The data of the queued jobs now lies back to back in one byte vector and the presentation requests in another; the `GsSubmit` thread swaps both with the queue, as it does the jobs, and a job keeps its data's offset and size (24 bytes). Steady state allocates nothing. Over 1,500 VBlanks of the six-car race, alternating runs of the same executables: wall 7.61, 7.55, 7.64, 7.68 s before, 7.46, 7.44, 7.44, 7.46 s after; GS worker CPU medians 5.75 and 5.58 s, `GsSubmit` 5.26 and 5.08 s. The paraLLEl-GS VRAM saved at VSync 61,000 is identical byte for byte, as between two runs of one executable.

@@ -643,22 +643,55 @@ namespace
     // at its checkpoints (default 100). The recompiler charges a fixed 32
     // cycles per backward branch whatever the loop length, so this is an
     // experiment knob for EE timing, like an emulator's EE cycle rate.
-    uint32_t eeCycleScalePercent()
+    // Read at start-up: a function-local static cost a thread-safe
+    // initialization check at every checkpoint.
+    const uint32_t g_eeCycleScalePercent = []
     {
-        static const uint32_t percent = []
-        {
-            const char *value = std::getenv("BDR_EE_CYCLE_SCALE");
-            const long parsed = value ? std::strtol(value, nullptr, 10) : 100;
-            return static_cast<uint32_t>(std::clamp<long>(parsed, 1, 1000));
-        }();
-        return percent;
+        const char *value = std::getenv("BDR_EE_CYCLE_SCALE");
+        const long parsed = value ? std::strtol(value, nullptr, 10) : 100;
+        return static_cast<uint32_t>(std::clamp<long>(parsed, 1, 1000));
+    }();
+}
+
+#if defined(_MSC_VER)
+__forceinline
+#else
+inline __attribute__((always_inline))
+#endif
+void EeScheduler::chargeCycles(uint32_t cycles) noexcept
+{
+    const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
+    m_eeCycle += elapsed;
+    if (g_countRuns)
+    {
+        // currentThread()'s cache test in place: MSVC keeps that call out of line.
+        GuestThread *running = m_currentThreadId != 0 && m_currentThreadId == m_cachedThreadId ? m_cachedThread : currentThread();
+        if (running)
+            running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle + g_countLagCycles);
     }
+    m_deviceCycleDebt += elapsed;
+    if (m_deviceCycleDebt >= kDeviceBatchCycles) [[unlikely]]
+    {
+        flushDeviceCycles();
+    }
+    if (m_pendingEeTimerInterrupts != 0u)
+    {
+        m_checkpointPending.store(true, std::memory_order_release);
+    }
+}
+
+void EeScheduler::flushDeviceCycles() noexcept
+{
+    const uint64_t debt = m_deviceCycleDebt;
+    m_deviceCycleDebt = 0u;
+    m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(debt);
+    m_runtime.advanceIopEeCycles(debt);
 }
 
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 {
-    const uint32_t percent = eeCycleScalePercent();
-    accountCycles(percent == 100u ? cycles : std::max<uint32_t>(1u, static_cast<uint32_t>((static_cast<uint64_t>(cycles) * percent) / 100u)));
+    const uint32_t percent = g_eeCycleScalePercent;
+    chargeCycles(percent == 100u ? cycles : std::max<uint32_t>(1u, static_cast<uint32_t>((static_cast<uint64_t>(cycles) * percent) / 100u)));
 
     if (m_checkpointPending.load(std::memory_order_acquire) ||
         m_stopRequested.load(std::memory_order_acquire))
@@ -714,22 +747,7 @@ namespace ps2x
 
 void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
-    const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
-    m_eeCycle += elapsed;
-    if (GuestThread *running = g_countRuns ? currentThread() : nullptr)
-        running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle + g_countLagCycles);
-    m_deviceCycleDebt += elapsed;
-    if (m_deviceCycleDebt >= kDeviceBatchCycles)
-    {
-        const uint64_t debt = m_deviceCycleDebt;
-        m_deviceCycleDebt = 0u;
-        m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(debt);
-        m_runtime.advanceIopEeCycles(debt);
-    }
-    if (m_pendingEeTimerInterrupts != 0u)
-    {
-        m_checkpointPending.store(true, std::memory_order_release);
-    }
+    chargeCycles(cycles);
 }
 
 bool EeScheduler::isExecutingGuest() const noexcept
