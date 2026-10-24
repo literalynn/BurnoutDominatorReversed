@@ -8,6 +8,7 @@
 
 #include "runtime/ee_idle_loops.h"
 #include "runtime/ee_count.h"
+#include "runtime/vblank_rate.h"
 
 #include <algorithm>
 #include <array>
@@ -208,6 +209,25 @@ namespace
         return static_cast<uint64_t>(duration.count()) * EeScheduler::kEeClockHz / 1000000000ull;
     }
     constexpr uint64_t kPalVBlankPeriodCycles = microsecondsToEeCycles(20000u);
+
+    // VBlanks a second of a game run faster than the console (vblank_rate.h), 0 for the console's.
+    std::atomic<uint32_t> g_vblankRate{0u};
+
+    std::chrono::nanoseconds vblankPeriod(bool pal)
+    {
+        const uint32_t rate = g_vblankRate.load(std::memory_order_relaxed);
+        if (rate != 0u)
+            return std::chrono::nanoseconds(1000000000ull / rate);
+        return pal ? kPalVBlankPeriod : kVBlankPeriod;
+    }
+
+    uint64_t vblankPeriodCycles(bool pal)
+    {
+        const uint32_t rate = g_vblankRate.load(std::memory_order_relaxed);
+        if (rate != 0u)
+            return EeScheduler::kEeClockHz / rate;
+        return pal ? kPalVBlankPeriodCycles : kVBlankPeriodCycles;
+    }
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
 
@@ -307,8 +327,8 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     main.status = EeThreadStatus::Ready;
     m_threads.emplace(main.id, std::move(main));
     m_readyQueues[0].push_back(kMainThreadId);
-    scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
-                  std::chrono::steady_clock::now() + kVBlankPeriod,
+    scheduleEvent(m_eeCycle + vblankPeriodCycles(false),
+                  std::chrono::steady_clock::now() + vblankPeriod(false),
                   EeEvent{EeEventType::VBlankStart, 0, 0});
     publishSnapshot();
 }
@@ -639,6 +659,16 @@ namespace ps2x
     {
         if (running && !deterministicTiming())
             g_countLagCycles = static_cast<uint32_t>(running->activeContext().cop0_count - static_cast<uint32_t>(eeCycle));
+    }
+
+    void setVBlankRate(uint32_t perSecond)
+    {
+        g_vblankRate.store(perSecond, std::memory_order_relaxed);
+    }
+
+    uint32_t vblankRate()
+    {
+        return g_vblankRate.load(std::memory_order_relaxed);
     }
 }
 
@@ -2200,7 +2230,7 @@ void EeScheduler::processDueDeadlines()
                               std::min(scheduled.hostDeadline, hostNow) + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
                 const bool pal = m_palVideoTiming.load(std::memory_order_relaxed);
-                const auto period = pal ? kPalVBlankPeriod : kVBlankPeriod;
+                const auto period = vblankPeriod(pal);
                 // After a host stall the schedule would sit far behind the clock and VBlanks
                 // would fire in a burst until it caught up, so the game stepped several
                 // frames at once (the car and camera jumped). Let it lag one period at most.
@@ -2209,7 +2239,7 @@ void EeScheduler::processDueDeadlines()
                 if (g_countRuns && !deterministicTiming() && !m_fastForward &&
                     dropped > std::chrono::nanoseconds::zero() && dropped < kCountStallLimit)
                     g_countLagCycles += hostDurationToEeCycles(std::min<std::chrono::nanoseconds>(dropped, 2 * period));
-                scheduleEvent(scheduled.deadlineCycle + (pal ? kPalVBlankPeriodCycles : kVBlankPeriodCycles),
+                scheduleEvent(scheduled.deadlineCycle + vblankPeriodCycles(pal),
                               base + period,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
             }
@@ -2592,7 +2622,7 @@ void EeScheduler::updateFastForward()
     // Work per frame: the host time between two VBlanks less what was spent waiting for the
     // host clock (pacing) or for an event while every thread slept.
     const auto now = std::chrono::steady_clock::now();
-    const auto period = m_palVideoTiming.load(std::memory_order_relaxed) ? kPalVBlankPeriod : kVBlankPeriod;
+    const auto period = vblankPeriod(m_palVideoTiming.load(std::memory_order_relaxed));
     if (m_lastVBlankHost != std::chrono::steady_clock::time_point{})
     {
         const auto worked = (now - m_lastVBlankHost) - m_waitedSinceVBlank;

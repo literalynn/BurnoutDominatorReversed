@@ -125,7 +125,7 @@ namespace
         case RowVibration: return "Gamepad vibration";
         case RowFastLoading: return "Fast loading";
         case RowKeepSpeed: return "Keep speed when slow (next race)";
-        case RowRefresh: return "Frame rate (next start)";
+        case RowRefresh: return "Frame rate (next menu page)";
         case RowDeadzone: return "Stick dead zone";
         case RowControls: return "Keyboard and mouse controls";
         default: return "Close (F1)";
@@ -237,11 +237,12 @@ namespace
             break;
         case RowRefresh:
         {
-            static const char *kRates[] = {"60", "50", "ask"};
+            static const char *kRates[] = {"60", "120", "144", "165", "240", "50", "ask"};
+            constexpr int kCount = static_cast<int>(std::size(kRates));
             int index = 0;
-            while (index < 3 && s.refreshRate != kRates[index])
+            while (index < kCount && s.refreshRate != kRates[index])
                 ++index;
-            s.refreshRate = kRates[(index % 3 + (step < 0 ? 2 : 1)) % 3];
+            s.refreshRate = kRates[(index % kCount + (step < 0 ? kCount - 1 : 1)) % kCount];
             break;
         }
         case RowDeadzone:

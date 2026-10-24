@@ -150,7 +150,11 @@ namespace ps2x
             if (key == "volume")
                 return parseInt(value, 0, 100, s.volume);
             if (key == "refresh_rate")
-                return (value == "60" || value == "50" || value == "ask") && (s.refreshRate = value, true);
+            {
+                int rate = 0;
+                return (value == "50" || value == "ask" || parseInt(value, 60, 500, rate)) &&
+                       (s.refreshRate = rate ? std::to_string(rate) : value, true);
+            }
             if (key == "show_fps")
                 return parseBool(value, s.showFps);
             for (size_t i = 0; i < s.keys.size(); ++i)
@@ -254,7 +258,7 @@ namespace ps2x
                 "fullscreen = " << (s.fullscreen ? "true" : "false") << "\n"
                 "\n"
                 "# vsync = true waits for the monitor refresh. fps_limit caps the display loop (0 = no cap).\n"
-                "# The game itself runs at 50 frames per second (PAL) or 60 (choose 60 Hz at start-up).\n"
+                "# The game itself runs at 50 frames per second (PAL), 60 or more: see refresh_rate.\n"
                 "vsync = " << (s.vsync ? "true" : "false") << "\n"
                 "fps_limit = " << s.fpsLimit << "\n"
                 "\n"
@@ -295,6 +299,8 @@ namespace ps2x
                 "volume = " << s.volume << "\n"
                 "show_fps = " << (s.showFps ? "true" : "false") << "\n"
                 "# The game asks 50 or 60 Hz at start-up: refresh_rate 60 or 50 answers for you, ask shows it.\n"
+                "# 120, 144, 240... (up to 500) answers 60 and runs the whole game that many frames a second:\n"
+                "# smoother, at the same speed, with more CPU work. A change applies at the next menu page.\n"
                 "refresh_rate = " << s.refreshRate << "\n"
                 "\n"
                 "# Keyboard and mouse controls, three inputs at most per button: letters, digits, F1-F12,\n"

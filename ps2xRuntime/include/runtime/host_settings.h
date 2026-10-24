@@ -29,7 +29,9 @@ namespace ps2x
         bool vibration = true;       // the game's pad vibration on the host gamepad
         std::string gamepadMappings; // extra SDL_GameControllerDB mappings file
         int volume = 100;            // sound volume in percent
-        std::string refreshRate = "60"; // "60" or "50": the answer to the game's boot question; "ask" shows it
+        // "60" or "50": the answer to the game's boot question; "ask" shows it. 61 to 500 answers 60
+        // and runs the game that many frames a second (Burnout: src/burnout_frame_rate.cpp).
+        std::string refreshRate = "60";
         bool showFps = false;        // frames per second in a corner of the window
         // Keyboard and mouse controls: up to three inputs for each DualShock 2 button, in the
         // order of padButtonNames(). An input is a raylib key code, kMouseInput + a raylib

@@ -18,6 +18,7 @@ if(BDR_BUILD_GAME)
     list(FILTER BDR_RUNNER_SOURCES EXCLUDE REGEX "(^|/)src/runner/register_functions\\.cpp$")
     set_property(TARGET ps2EntryRunner PROPERTY SOURCES "${BDR_RUNNER_SOURCES}")
     set(BDR_PROJECT_SOURCES
+        "${PROJECT_SOURCE_DIR}/src/burnout_frame_rate.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_main.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_profile.cpp"
@@ -47,10 +48,11 @@ if(BDR_BUILD_GAME)
     endif()
 endif()
 
-# Checks the Burnout bindings and ROM0 profile without generated guest code.
+# Checks the Burnout bindings, ROM0 profile and frame rate wrappers without generated guest code.
 if(TARGET ps2_runtime AND TARGET ps2_test_function_table)
     add_executable(burnout_overrides_tests
         "${PROJECT_SOURCE_DIR}/tests/native/burnout_overrides_tests.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_frame_rate.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_texts.cpp"
         $<TARGET_OBJECTS:ps2_test_function_table>)

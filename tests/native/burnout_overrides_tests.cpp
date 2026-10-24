@@ -1,13 +1,17 @@
 // Checks src/burnout_overrides.cpp without the generated guest code: every
 // SDK binding resolves to the intended runtime handler, and rom0:ROMVER has the
-// layout the game's parser expects. Also the text replacement of src/burnout_texts.cpp.
+// layout the game's parser expects. Also the text replacement of src/burnout_texts.cpp and the
+// frame rate wrappers of src/burnout_frame_rate.cpp.
+#include "../../src/burnout_frame_rate.h"
 #include "../../src/burnout_texts.h"
 #include "game_overrides.h"
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/vblank_rate.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -180,16 +184,110 @@ void testPcTexts() {
     check(text.find(u"Short.") != std::u16string::npos, "a replacement that does not fit is not made");
     check(text[28] == 0 && text[29] == 0x1234, "the shortened text is padded with NULs up to the next record");
 }
+// Stand-in for the game functions wrapped by src/burnout_frame_rate.cpp: records what the
+// wrapper hands on, and returns 1200 as the VBlank counter read by 0x1B9F80.
+struct Seen {
+    int32_t a0 = 0;
+    float f12 = 0.0f, f13 = 0.0f, duration = 0.0f;
+    uint8_t palFlag = 0;
+};
+Seen g_seen;
+
+void recordCall(uint8_t* rdram, R5900Context* ctx, PS2Runtime*) {
+    g_seen.a0 = static_cast<int32_t>(getRegU32(ctx, 4));
+    g_seen.f12 = ctx->f[12];
+    g_seen.f13 = ctx->f[13];
+    g_seen.palFlag = rdram[0x432E98];
+    std::memcpy(&g_seen.duration, rdram + (getRegU32(ctx, 7) & ~3u), sizeof(float));
+    setReg(*ctx, 2, 1200u);
+}
+
+bool closeTo(float value, float expected) {
+    return std::fabs(value - expected) < 1e-5f;
+}
+
+void testFrameRate() {
+    constexpr uint32_t kSetRate = 0x1E68A0, kSetStep = 0x1E6668, kCamera = 0x169998, kPowf = 0x37C5A8,
+                       kMenuBox = 0x24A260, kVBlankCount = 0x1B9F80;
+    const auto runtime = std::make_unique<PS2Runtime>();
+    for (const uint32_t address : {kSetRate, kSetStep, kCamera, kPowf, kMenuBox, kVBlankCount})
+        runtime->registerFunction(address, &recordCall);
+    burnout::installFrameRate(*runtime);
+    std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0);
+    R5900Context ctx{};
+    const auto call = [&](uint32_t address) {
+        g_ps2RecompiledFunctionTable[address >> 2](rdram.data(), &ctx, runtime.get());
+    };
+    const auto floatAt = [&](uint32_t address) {
+        float value = 0.0f;
+        std::memcpy(&value, rdram.data() + address, sizeof(value));
+        return value;
+    };
+    const auto setFloat = [&](uint32_t address, float value) {
+        std::memcpy(rdram.data() + address, &value, sizeof(value));
+    };
+
+    // At the console's rate the wrappers hand everything on unchanged.
+    ps2x::setVBlankRate(0);
+    setReg(ctx, 4, 60);
+    call(kSetRate);
+    check(g_seen.a0 == 60 && floatAt(0x3C18C0) == 0.0f, "without a VBlank rate the step rate is the game's");
+    call(kCamera);
+    check(g_seen.palFlag == 0, "without a VBlank rate the camera keeps the 60 Hz branch");
+    call(kVBlankCount);
+    check(getRegU32(&ctx, 2) == 1200u, "without a VBlank rate the VBlank count is the game's");
+
+    ps2x::setVBlankRate(120);
+    for (const int pal : {0, 1}) {
+        rdram[0x432E98] = static_cast<uint8_t>(pal);
+        const std::string mode = pal ? " at 50 Hz" : " at 60 Hz";
+        setReg(ctx, 4, pal ? 50 : 60);
+        call(kSetRate);
+        check(g_seen.a0 == 120 && floatAt(0x3C18C0) == 120.0f, "a race steps 120 times a second" + mode);
+        setReg(ctx, 4, pal ? 25 : 30);
+        call(kSetRate);
+        check(g_seen.a0 == 60, "the front end steps 60 times a second" + mode);
+        ctx.f[12] = pal ? 20.0f : 100.0f / 6.0f;
+        ctx.f[13] = 0.0f;
+        call(kSetStep);
+        check(closeTo(g_seen.f12, 1000.0f / 120.0f) && g_seen.f13 == 0.0f, "the governor's step is 8.33 ms" + mode);
+        call(kCamera);
+        check(g_seen.palFlag == 1 && rdram[0x432E98] == pal, "the camera runs its 50 Hz branch" + mode);
+        setReg(ctx, 2, 0);
+        call(kVBlankCount);
+        check(getRegU32(&ctx, 2) == (pal ? 500u : 600u), "1200 VBlanks count as console VBlanks" + mode);
+        setFloat(0x1000, 0.5f);
+        setReg(ctx, 7, 0x1000);
+        call(kMenuBox);
+        check(closeTo(g_seen.duration, pal ? 1.2f : 1.0f) && floatAt(0x1000) == 0.5f,
+              "menu boxes slide for as many frames as the front end draws in their duration" + mode);
+    }
+    rdram[0x432E98] = 0;
+    setFloat(0x4915BC, 1.0f / 120.0f);
+    ctx.f[13] = 1.2f;
+    setReg(ctx, 31, 0x169B6C);
+    call(kPowf);
+    check(closeTo(g_seen.f13, 0.5f), "the camera's damping power is 60 * dt");
+    ctx.f[13] = 1.2f;
+    setReg(ctx, 31, 0x100000);
+    call(kPowf);
+    check(g_seen.f13 == 1.2f, "other powf calls are unchanged");
+
+    ps2x::setVBlankRate(0);
+    for (const uint32_t address : {kSetRate, kSetStep, kCamera, kPowf, kMenuBox, kVBlankCount})
+        g_ps2RecompiledFunctionTable[address >> 2] = nullptr;
+}
 } // namespace
 
 int main() {
     testBindings();
     testRomVersion();
     testPcTexts();
+    testFrameRate();
     if (g_failures) {
         std::cerr << g_failures << " Burnout override check(s) failed\n";
         return 1;
     }
-    std::cout << "Burnout override tests passed (" << std::size(kExpected) << " bindings, ROM0 profile)\n";
+    std::cout << "Burnout override tests passed (" << std::size(kExpected) << " bindings, ROM0 profile, frame rate)\n";
     return 0;
 }

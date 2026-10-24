@@ -54,6 +54,7 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 | ✅ Graphics | up to 4x resolution, supersampling, FXAA, 16:9 |
 | ✅ Sound | music, engines, crashes, menus |
 | ✅ Speed | 60 frames per second in six-car races; the race keeps its speed when frames come late |
+| ✅ High frame rate | 120, 144, 240... frames per second (`refresh_rate`): the simulation runs that fast, not interpolated |
 | 🟡 Missing | SPU2 reverb |
 
 ## Install (Windows)
@@ -131,7 +132,7 @@ Every key can be changed in **F1** → *Keyboard and mouse controls*: up to thre
 | `volume` | 100 | percent |
 | `show_fps` | false | frames per second in the corner |
 | `key_cross`, `key_l1`... | see Controls | up to three keys, mouse buttons or wheel directions (`MOUSE_LEFT`, `MOUSE_WHEEL_UP`...) per button, or `NONE` |
-| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `ask` shows its 50/60 Hz question |
+| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `ask` shows its 50/60 Hz question; `120`, `144`, `240`... up to `500` runs the whole game that many frames a second at the same speed (more CPU work), from the next menu page |
 
 </details>
 

@@ -751,6 +751,7 @@ void register_ps2_runtime_io_tests()
             settings.keepSpeed = false;
             settings.aspect = "16:9";
             settings.volume = 40;
+            settings.refreshRate = "144";
             settings.keys[4] = {ps2x::kMouseInput, 'J', ps2x::kMouseWheelDown};
             settings.keys[12] = {0, 0, 0};
             t.IsTrue(ps2x::writeHostSettings(path), "defaults are written");
@@ -765,6 +766,7 @@ void register_ps2_runtime_io_tests()
             t.IsTrue(!settings.keepSpeed, "keep_speed round-trips");
             t.Equals(settings.aspect, std::string("16:9"), "aspect round-trips");
             t.Equals(settings.volume, 40, "volume round-trips");
+            t.Equals(settings.refreshRate, std::string("144"), "a frame rate above 60 round-trips");
             t.Equals(settings.keys[4][0], ps2x::kMouseInput, "a mouse button binding round-trips");
             t.Equals(settings.keys[4][1], int('J'), "a key binding round-trips");
             t.Equals(settings.keys[4][2], ps2x::kMouseWheelDown, "a wheel binding round-trips");
@@ -773,7 +775,7 @@ void register_ps2_runtime_io_tests()
             {
                 std::ofstream file(path);
                 file << "window_width = 2560  # QHD\nsuper_sampling = 3\nunknown = 1\nfullscreen = yes\n"
-                        "key_l1 = F2 mouse_right\nkey_r1 = NOPE\n";
+                        "key_l1 = F2 mouse_right\nkey_r1 = NOPE\nrefresh_rate = 501\n";
             }
             errors.clear();
             t.IsTrue(ps2x::loadHostSettings(path, errors), "the edited file loads");
@@ -783,6 +785,8 @@ void register_ps2_runtime_io_tests()
             t.Equals(settings.keys[8][1], ps2x::kMouseInput + 1, "input names ignore case");
             t.IsTrue(errors.find(":6:") != std::string::npos, "an unknown input name is reported");
             t.Equals(settings.superSampling, 8, "an invalid sample count is ignored");
+            t.IsTrue(errors.find(":7:") != std::string::npos && settings.refreshRate == "144",
+                     "a frame rate above 500 is reported and ignored");
             t.IsTrue(errors.find(":2:") != std::string::npos && errors.find(":3:") != std::string::npos,
                      "bad and unknown lines are reported");
             std::filesystem::remove(path);

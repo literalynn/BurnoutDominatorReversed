@@ -3,6 +3,7 @@
 #include "ps2_runtime.h"
 #include "runtime/ee_scheduler.h"
 #include "runtime/ee_count.h"
+#include "runtime/vblank_rate.h"
 #include "runtime/gs_worker.h"
 #include "runtime/ps2_ipu.h"
 #include "ps2x/iop/iop_subsystem.h"
@@ -24,7 +25,7 @@ namespace ps2_stubs
 namespace
 {
     constexpr char kStateMagic[8] = {'B', 'D', 'R', 'S', 'T', 'A', 'T', 'E'};
-    constexpr uint32_t kStateVersion = 3u; // 3: SPU2 voices with volume sweeps and interpolation history
+    constexpr uint32_t kStateVersion = 4u; // 4: the VBlank rate of a game run faster than the console
 
     void serializePendingTransfers(ps2x::StateArchive &archive, std::vector<PS2Memory::PendingTransfer> &transfers)
     {
@@ -358,6 +359,14 @@ void EeScheduler::serialize(ps2x::StateArchive &archive)
     else
         pal = true; // version 1 lacked this flag; only Burnout Dominator PAL wrote it
     m_palVideoTiming.store(pal, std::memory_order_relaxed);
+    // VBlanks a second of a game run faster than the console (vblank_rate.h): the game's own
+    // step length is in the saved memory, so a state goes on at the rate it was saved at.
+    uint32_t vblankRate = ps2x::vblankRate();
+    if (!archive.loading() || archive.version() >= 4u)
+        archive.value(vblankRate);
+    else
+        vblankRate = 0u;
+    ps2x::setVBlankRate(vblankRate);
     archive.value(m_vsyncFlagAddress);
     archive.value(m_vsyncTickAddress);
     archive.value(m_gsVSyncCallback);

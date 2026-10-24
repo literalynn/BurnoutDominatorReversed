@@ -1,4 +1,5 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
+#include "burnout_frame_rate.h"
 #include "burnout_profile.h"
 #include "burnout_texts.h"
 #include "ps2_runtime.h"
@@ -8,6 +9,7 @@
 #include "runtime/settings_menu.h"
 #include "runtime/ee_unwind.h"
 #include "runtime/host_settings.h"
+#include "runtime/vblank_rate.h"
 
 #include <algorithm>
 #include <atomic>
@@ -16,6 +18,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -232,6 +235,12 @@ int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
 // sets on entering the front end (0x208E50: 0x1E6668(2 frames, 0, 0x51B7D0)); the race step
 // follows the mode when the next race starts.
 //
+// refresh_rate above 60 answers 60 Hz, and the runtime's VBlank rate is set to it just before the
+// game sets its rate (src/burnout_frame_rate.cpp scales the rest). The boot keeps the console's
+// VBlanks: with VBlanks at 61 a second from the start, the EE waited forever for the reply to its
+// first RWA command (0x3729C8). A state taken at another frame rate keeps it until the next page
+// change in the front end.
+//
 // The steps are guest calls made from native code. The EE scheduler may stop one of them
 // midway and later resume the guest code alone, without this native frame; so each step returns
 // to a continuation registered in a free function-table slot, and whichever way a step ends,
@@ -244,6 +253,7 @@ struct FrequencySkip {
     uint32_t mode = 0;      // 0 = 60 Hz, 2 = 50 Hz (PAL)
     __m128i a0, a1, ra;     // the go-to-page call being completed
     bool frontEndStep = false;
+    uint32_t frameRate = 0; // refresh_rate above 60, else 0 (the console's VBlanks)
 } g_skip;
 
 void setArg(R5900Context* ctx, int reg, uint32_t value) {
@@ -270,8 +280,10 @@ void continueFrequencySkip(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtim
             const uint32_t fifty = g_skip.mode == 2 ? 1u : 0u;
             std::memcpy(rdram + 0x1CA61C4u, &fifty, sizeof(fifty));
             finished = callGuest(rdram, ctx, runtime, 0x245CE8u, 0x1CA5370u, 0u);
-        } else if (step == 2) // the frame rate
+        } else if (step == 2) { // the frame rate
+            ps2x::setVBlankRate(g_skip.frameRate);
             finished = callGuest(rdram, ctx, runtime, 0x215978u, 0x491540u, 1u);
+        }
         else if (step == 3 && g_skip.frontEndStep) {
             const float frames2 = g_skip.mode == 2 ? 40.0f : 100.0f / 3.0f; // ms, as 0x208E50
             const float zero = 0.0f;
@@ -307,11 +319,16 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
                 return true;
         }
     };
-    const uint32_t wanted = rate == "60" ? 0u : 2u;
+    const uint32_t wanted = rate == "50" ? 2u : 0u; // 60 Hz for higher frame rates too
+    const int asked = std::atoi(rate.c_str());
+    const uint32_t frameRate = asked > 60 ? static_cast<uint32_t>(asked) : 0u;
+    const auto hz = [](uint32_t mode, uint32_t perSecond) {
+        return perSecond ? std::to_string(perSecond) : std::string(mode == 2 ? "50" : "60");
+    };
     if (rate != "ask" && g_continuation != 0 && isPage("su_frequency")) {
         std::memcpy(rdram + name, "SU_Movie", 9); // the name buffer held "SU_Frequency"
-        g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], false};
-        std::printf("[game] skipped the 50/60 Hz question: %s Hz\n", rate.c_str());
+        g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], false, frameRate};
+        std::printf("[game] skipped the 50/60 Hz question: %s Hz\n", hz(wanted, frameRate).c_str());
         continueFrequencySkip(rdram, ctx, runtime);
         return;
     }
@@ -320,9 +337,10 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     std::memcpy(&gameState, rdram + 0x51B908u, sizeof(gameState));
     const bool startUp = std::tolower(rdram[name]) == 's' && std::tolower(rdram[name + 1]) == 'u' && rdram[name + 2] == '_';
     if (rate != "ask" && g_continuation != 0 && !startUp && gameState == 0x4C1B38u && (mode == 0 || mode == 2) &&
-        mode != wanted) {
-        g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], true};
-        std::printf("[game] switched from %s to %s Hz\n", mode == 2 ? "50" : "60", rate.c_str());
+        (mode != wanted || ps2x::vblankRate() != frameRate)) {
+        g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], true, frameRate};
+        std::printf("[game] switched from %s to %s Hz\n", hz(mode, ps2x::vblankRate()).c_str(),
+                    hz(wanted, frameRate).c_str());
         continueFrequencySkip(rdram, ctx, runtime);
         return;
     }
@@ -459,6 +477,7 @@ int main(int argc, char** argv) {
         for (uint32_t address = 0x1838ACu; address < 0x1838C8u && !g_continuation; address += 4)
             if (!runtime.hasFunction(address) && runtime.registerFunction(address, &continueFrequencySkip))
                 g_continuation = address;
+        burnout::installFrameRate(runtime);
         traceCalls(runtime, options.traceCalls);
         // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
         // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores
