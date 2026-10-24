@@ -301,6 +301,7 @@ namespace ps2x
                 "# The game asks 50 or 60 Hz at start-up: refresh_rate 60 or 50 answers for you, ask shows it.\n"
                 "# 120, 144, 240... (up to 500) answers 60 and runs the whole game that many frames a second:\n"
                 "# smoother, at the same speed, with more CPU work. A change applies at the next menu page.\n"
+                "# A PC that cannot keep up slows the race down: a Ryzen + RTX 5090 keeps up to about 300.\n"
                 "refresh_rate = " << s.refreshRate << "\n"
                 "\n"
                 "# Keyboard and mouse controls, three inputs at most per button: letters, digits, F1-F12,\n"

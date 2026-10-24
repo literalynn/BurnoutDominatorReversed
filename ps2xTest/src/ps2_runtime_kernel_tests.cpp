@@ -1,4 +1,5 @@
 #include "MiniTest.h"
+#include "game_overrides.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "ps2_syscalls.h"
@@ -190,6 +191,35 @@ namespace
     uint32_t gOverrideSyscall = 0u;
     R5900Context gOverrideResult{};
     std::vector<int> gInvocationTrace;
+    constexpr uint32_t K_BOUND_CALLER = 0x300700u;
+    constexpr uint32_t K_BOUND_RESUME = 0x300708u;
+    constexpr uint32_t K_BOUND_HANDLER = 0x300710u;
+    uint32_t gBoundHandlerCalls = 0u;
+
+    // A jal to a bound library function that met a checkpoint: pc is left on the function.
+    void schedulerBoundCaller(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        SET_GPR_U32(ctx, 31, K_BOUND_RESUME);
+        ctx->pc = K_BOUND_HANDLER;
+    }
+
+    // Does the call and leaves pc alone, like the runtime's handlers; stops a second run.
+    void schedulerBoundHandler(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        setReturnU32(ctx, 42u);
+        if (++gBoundHandlerCalls > 1u)
+        {
+            ctx->pc = 0u;
+            runtime->requestStop();
+        }
+    }
+
+    void schedulerBoundResume(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        gOverrideResult = *ctx;
+        ctx->pc = 0u;
+        runtime->requestStop();
+    }
 
     void schedulerOverrideEntry(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -1465,6 +1495,28 @@ void register_ps2_runtime_kernel_tests()
             t.Equals(static_cast<uint32_t>(getRegS32(gOverrideResult, 2)),
                      12u,
                      "the completed invocation should propagate the guest handler return value");
+        });
+
+        tc.Run("a bound handler run by the scheduler returns to its caller", [](TestCase &t)
+        {
+            TestEnv env;
+            t.IsTrue(ps2_game_overrides::bindAddressHandler(env.runtime, K_BOUND_HANDLER, "sceSifSetIopAddr"),
+                     "the address should bind to a runtime handler");
+            env.runtime.replaceFunction(K_BOUND_HANDLER, schedulerBoundHandler);
+            env.runtime.registerFunction(K_BOUND_CALLER, schedulerBoundCaller);
+            env.runtime.registerFunction(K_BOUND_RESUME, schedulerBoundResume);
+            gBoundHandlerCalls = 0u;
+            gOverrideResult = R5900Context{};
+
+            R5900Context mainContext{};
+            mainContext.pc = K_BOUND_CALLER;
+            env.runtime.eeScheduler().reset(env.rdram.data(), mainContext);
+            env.runtime.eeScheduler().run();
+
+            t.Equals(gBoundHandlerCalls, 1u, "the handler should run once");
+            t.Equals(static_cast<uint32_t>(getRegS32(gOverrideResult, 2)), 42u,
+                     "the caller should resume after the call with its result");
+            t.IsFalse(ps2_game_overrides::isBoundHandler(K_BOUND_CALLER), "generated code is not a bound handler");
         });
 
         tc.Run("SetSyscall override preserves KSEG argument sign extension", [](TestCase &t)

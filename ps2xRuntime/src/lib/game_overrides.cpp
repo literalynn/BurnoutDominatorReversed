@@ -10,6 +10,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -24,6 +25,13 @@ namespace
     {
         static std::vector<ps2_game_overrides::Descriptor> registry;
         return registry;
+    }
+
+    // Written before the EE runs, like the function table it mirrors (one for every runtime).
+    std::unordered_set<uint32_t> &boundHandlers()
+    {
+        static std::unordered_set<uint32_t> addresses;
+        return addresses;
     }
 
     bool equalsIgnoreCaseAscii(std::string_view lhs, std::string_view rhs)
@@ -116,7 +124,17 @@ namespace ps2_game_overrides
             return false;
         }
 
-        return runtime.replaceFunction(address, resolved.value());
+        if (!runtime.replaceFunction(address, resolved.value()))
+        {
+            return false;
+        }
+        boundHandlers().insert(address);
+        return true;
+    }
+
+    bool isBoundHandler(uint32_t address)
+    {
+        return boundHandlers().contains(address);
     }
 
     void applyMatching(PS2Runtime &runtime,

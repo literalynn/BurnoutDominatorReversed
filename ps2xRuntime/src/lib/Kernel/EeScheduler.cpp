@@ -1,4 +1,5 @@
 #include "runtime/ee_scheduler.h"
+#include "game_overrides.h"
 
 #include "ps2_log.h"
 #include "runtime/ps2_wait_stats.h"
@@ -527,6 +528,15 @@ void EeScheduler::run()
             function(m_rdram, &context, &m_runtime);
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
+            // A runtime handler bound over a library function does the whole call and leaves pc
+            // on it: from generated code, dispatchGuestBranch returns to the caller. Run from here
+            // (a checkpoint fell on the call, or a jump went to it), it returns to ra, or it would
+            // run again forever: Burnout's pad RPC 0x80001302, 550,000 times a second.
+            if (context.pc == dispatchedPc && !ps2_ee_unwind::g_returningToScheduler &&
+                ps2_game_overrides::isBoundHandler(dispatchedPc))
+            {
+                context.pc = getRegU32(&context, 31);
+            }
             if (wordWatch().enabled)
             {
                 checkWordWatch(m_rdram, dispatchedPc, context);
@@ -1408,9 +1418,25 @@ int EeScheduler::setAlarm(uint16_t ticks,
     }
     m_alarms.emplace(id, EeAlarm{id, ticks, handler, argument, gp, sp});
     const uint64_t tickCount = ticks == 0u ? 1u : static_cast<uint64_t>(ticks);
-    scheduleEvent(m_eeCycle + tickCount * kAlarmTickCycles,
-                  std::chrono::steady_clock::now() + std::chrono::microseconds(tickCount * kAlarmTickMicroseconds),
-                  EeEvent{EeEventType::Alarm, static_cast<uint32_t>(id), 0});
+    const uint64_t deadlineCycle = m_eeCycle + tickCount * kAlarmTickCycles;
+    // Due on the host when the VBlank schedule says its cycle is, and no later than its length
+    // from now. From now only, a game behind the schedule slept every alarm out on the host, and
+    // a short wait lasts a host timer tick (about 1 ms): Burnout's 3-HSync sleep after each race
+    // step (0x1E7328) took 40% of a race at 360 Hz.
+    auto hostDeadline = std::chrono::steady_clock::now() + std::chrono::microseconds(tickCount * kAlarmTickMicroseconds);
+    {
+        std::lock_guard lock(m_eventMutex);
+        for (const ScheduledEvent &item : m_deadlines)
+        {
+            if (item.event.type != EeEventType::VBlankStart)
+                continue;
+            const auto scheduled = deadlineCycle <= item.deadlineCycle
+                                       ? item.hostDeadline - eeCyclesToHostDuration(item.deadlineCycle - deadlineCycle)
+                                       : item.hostDeadline + eeCyclesToHostDuration(deadlineCycle - item.deadlineCycle);
+            hostDeadline = std::min(hostDeadline, scheduled);
+        }
+    }
+    scheduleEvent(deadlineCycle, hostDeadline, EeEvent{EeEventType::Alarm, static_cast<uint32_t>(id), 0});
     return id;
 }
 
