@@ -149,13 +149,16 @@ namespace
             Present,
         };
 
+        // A job's data lies in the queue's bytes at offset, a presentation's request in its
+        // requests, in order: a Job with a vector and a request of its own was 160 bytes
+        // and often a heap block per GIF packet.
         struct Job
         {
             Kind kind;
             uint32_t argument;
             uint64_t value;
-            std::vector<uint8_t> data;
-            GSPresentationRequest request;
+            uint32_t offset;
+            uint32_t size;
         };
 
         // More queued data than this makes the producer wait: a frame's GIF data is a few MiB.
@@ -174,21 +177,19 @@ namespace
                 }
                 m_drained.wait(lock, [this] { return m_queuedBytes <= kMaxQueuedBytes / 2u; });
             }
-            std::vector<uint8_t> buffer;
+            // The vectors come back from the thread with their room, so steady state allocates nothing.
+            const uint32_t offset = static_cast<uint32_t>(m_bytes.size());
             if (size != 0u)
             {
-                // Buffers come back from finished jobs, so steady state allocates nothing.
-                if (!m_spare.empty())
-                {
-                    buffer = std::move(m_spare.back());
-                    m_spare.pop_back();
-                }
-                buffer.assign(data, data + size);
+                m_bytes.insert(m_bytes.end(), data, data + size);
                 m_queuedBytes += size;
             }
-            m_queue.push_back(Job{kind, argument, value, std::move(buffer), request ? *request : GSPresentationRequest{}});
+            m_queue.push_back(Job{kind, argument, value, offset, size});
             if (kind == Kind::Present)
+            {
+                m_requests.push_back(*request);
                 ++m_queuedPresents;
+            }
             // Waking the thread costs a system call, and it empties the queue faster than it
             // fills: wake it for a batch of packets, at a flush or a presentation, or when
             // someone waits (sync).
@@ -218,6 +219,8 @@ namespace
             // Vectors, swapped with the queue, keep their room: MSVC's deque holds a Job a block
             // and allocated one at every packet.
             std::vector<Job> batch;
+            std::vector<uint8_t> bytes;
+            std::vector<GSPresentationRequest> requests;
             std::unique_lock<std::mutex> lock(m_mutex);
             for (;;)
             {
@@ -230,21 +233,24 @@ namespace
                     return;
                 // Everything queued so far in one go, so that the lock is taken once per batch.
                 batch.swap(m_queue);
+                bytes.swap(m_bytes);
+                requests.swap(m_requests);
                 m_busy = true;
                 lock.unlock();
-                size_t bytes = 0u;
-                for (Job &job : batch)
+                size_t nextRequest = 0u;
+                for (const Job &job : batch)
                 {
+                    const uint8_t *data = bytes.data() + job.offset;
                     switch (job.kind)
                     {
                     case Kind::Gif:
-                        m_inner->ProcessGIF(job.argument, job.data.data(), static_cast<uint32_t>(job.data.size()));
+                        m_inner->ProcessGIF(job.argument, data, job.size);
                         break;
                     case Kind::Register:
                         m_inner->WriteRegisterRaw(static_cast<uint8_t>(job.argument), job.value);
                         break;
                     case Kind::Image:
-                        m_inner->UploadImage(job.data.data(), static_cast<uint32_t>(job.data.size()));
+                        m_inner->UploadImage(data, job.size);
                         break;
                     case Kind::Flush:
                         m_inner->Flush();
@@ -257,7 +263,7 @@ namespace
                         break;
                     case Kind::Present:
                     {
-                        PresentationFrame frame = m_inner->Present(job.request);
+                        PresentationFrame frame = m_inner->Present(requests[nextRequest++]);
                         {
                             std::lock_guard<std::mutex> presented(m_mutex);
                             m_presented = std::move(frame);
@@ -267,15 +273,13 @@ namespace
                         break;
                     }
                     }
-                    bytes += job.data.size();
                 }
                 lock.lock();
                 m_busy = false;
-                m_queuedBytes -= bytes;
-                for (Job &job : batch)
-                    if (!job.data.empty() && m_spare.size() < 256u)
-                        m_spare.push_back(std::move(job.data));
+                m_queuedBytes -= bytes.size();
                 batch.clear();
+                bytes.clear();
+                requests.clear();
                 m_drained.notify_all();
             }
         }
@@ -285,8 +289,9 @@ namespace
         mutable std::condition_variable m_pushed;
         mutable std::condition_variable m_drained;
         std::vector<Job> m_queue;
+        std::vector<uint8_t> m_bytes;                  // the queued jobs' data, back to back
+        std::vector<GSPresentationRequest> m_requests; // the queued presentations'
         PresentationFrame m_presented; // the last frame presented, until Present takes it
-        std::vector<std::vector<uint8_t>> m_spare;
         size_t m_queuedBytes = 0u;
         uint32_t m_queuedPresents = 0u; // queued or running
         bool m_busy = false;

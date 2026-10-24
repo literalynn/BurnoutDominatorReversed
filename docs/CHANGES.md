@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## GsSubmit's queue keeps its jobs' data in one buffer (October 24, 2026)
+
+- `gs/gs_async_backend.cpp`: every queued job carried a byte vector of its own and a copy of the presentation request, 160 bytes a job and a heap block whenever no recycled buffer had the room. The data of the queued jobs now lies back to back in one byte vector and the presentation requests in another; the `GsSubmit` thread swaps both with the queue, as it does the jobs, and a job keeps its data's offset and size (24 bytes). Steady state allocates nothing. Over 1,500 VBlanks of the six-car race, alternating runs of the same executables: wall 7.61, 7.55, 7.64, 7.68 s before, 7.46, 7.44, 7.44, 7.46 s after; GS worker CPU medians 5.75 and 5.58 s, `GsSubmit` 5.26 and 5.08 s. The paraLLEl-GS VRAM saved at VSync 61,000 is identical byte for byte, as between two runs of one executable.
+
 ## VU runs leave denormal operands to the host's DAZ (October 24, 2026)
 
 - `vu/ps2_vu1_core.cpp`: on x86 `VU1Interpreter::run` sets MXCSR's DAZ bit (denormals are zero) along with the VU's rounding toward zero, and puts both back on return. SSE arithmetic then reads a denormal operand as a zero of its sign, which is what the VU does and what every FMAC path already did by hand. A denormal that one host operation produces and the next one reads inside a run, such as a square in an EFU sum or a product rounded before its addition, now also reads as zero, in the interpreter and in compiled programs alike. The game thread, which already rounds toward zero, now sets MXCSR at each VU0 call as well.
