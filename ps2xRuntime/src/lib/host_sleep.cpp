@@ -43,4 +43,18 @@ namespace ps2x
 #endif
         std::this_thread::sleep_for(duration);
     }
+
+    bool waitForComposition()
+    {
+#ifdef _WIN32
+        using DwmFlushFn = HRESULT(WINAPI *)();
+        static const auto flush = [] {
+            const HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+            return dwm ? reinterpret_cast<DwmFlushFn>(GetProcAddress(dwm, "DwmFlush")) : nullptr;
+        }();
+        return flush && SUCCEEDED(flush());
+#else
+        return false;
+#endif
+    }
 }

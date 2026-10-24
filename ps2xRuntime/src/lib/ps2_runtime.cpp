@@ -3052,6 +3052,11 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
             m_debugUiDrawCallback(*this, m_debugUiUserData);
         }
         EndDrawing();
+        // With vsync, a swap made while the monitor has a frame still to show waits for it inside
+        // NVIDIA's driver, holding a lock the GS backend's Vulkan calls also take: the game fell to
+        // the monitor's rate (or lost frames at 60). Drawing after the compositor's frame avoids it.
+        if (ps2x::hostSettings().vsync)
+            ps2x::waitForComposition();
         }
 
         if (IsKeyPressed(KEY_F11) || (IsKeyPressed(KEY_ENTER) && (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT))))
