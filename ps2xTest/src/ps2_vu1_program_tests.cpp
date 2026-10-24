@@ -130,6 +130,28 @@ namespace
         return data;
     }
 
+    // Pairs that read registers and keep nothing: ADD into vf0 reads two VF
+    // registers and IADD into vi0 two VI registers, the next ones at each pair,
+    // with an E bit every eight. Code that turns into them waits for the results
+    // still in flight, which shows in the cycle count; over six shifts, the three
+    // pairs from any start read every register. ADD's own flags are the last: an
+    // FMAC result a compiled routine does not queue (kFlagsUnseen) is replaced by
+    // a later one of the routine, which new code does not have.
+    constexpr uint32_t kProbeShifts = 6u;
+
+    void writeProbe(uint8_t *code, uint32_t size, uint32_t shift)
+    {
+        for (uint32_t pair = 0u; pair < size / 8u; ++pair)
+        {
+            const uint32_t fs = 1u + (2u * pair + 6u * shift) % 31u, ft = 1u + (2u * pair + 1u + 6u * shift) % 31u;
+            const uint32_t is = 1u + (2u * pair + 6u * shift) % 15u, it = 1u + (2u * pair + 1u + 6u * shift) % 15u;
+            const uint32_t lower = (0x40u << 25) | (it << 16) | (is << 11) | 0x30u;
+            const uint32_t upper = (pair % 8u == 7u ? 0x40000000u : 0u) | (0xFu << 21) | (ft << 16) | (fs << 11) | 0x28u;
+            std::memcpy(code + pair * 8u, &lower, sizeof(lower));
+            std::memcpy(code + pair * 8u + 4u, &upper, sizeof(upper));
+        }
+    }
+
     struct Side
     {
         explicit Side(bool vu0 = false)
@@ -141,6 +163,7 @@ namespace
         GS gs;
         VU1Interpreter vu;
         bool vu0;
+        int32_t probeShift = -1; // the next GIF packet rewrites the code as writeProbe(shift)
         std::vector<std::vector<uint8_t>> packets;
 
         uint8_t *code() { return vu0 ? mem.getVU0Code() : mem.getVU1Code(); }
@@ -161,7 +184,15 @@ namespace
             else
                 mem.markVU1CodeModified();
             mem.setGifPacketCallback([this](const uint8_t *data, uint32_t size)
-                                     { packets.emplace_back(data, data + size); });
+                                     {
+                                         packets.emplace_back(data, data + size);
+                                         if (probeShift >= 0)
+                                         {
+                                             writeProbe(code(), codeSize(), static_cast<uint32_t>(probeShift));
+                                             mem.markVU1CodeModified();
+                                             probeShift = -1;
+                                         }
+                                     });
             vu.setCompiledExecutionEnabled(compiled);
             return true;
         }
@@ -300,6 +331,27 @@ namespace
         const VU1State finalState = oracle.vu.state();
         const std::vector<uint8_t> finalData(oracle.data(), oracle.data() + oracle.dataSize());
         const auto finalPackets = oracle.packets;
+
+        // A GIF packet that rewrites microcode stops a compiled run where its kick
+        // ends, part-way through a block, and the interpreter goes on with the new
+        // code and the results still in flight.
+        for (uint32_t shift = 0u; !entry.vu0 && shift < kProbeShifts; ++shift)
+        {
+            oracle.reset(initial, data);
+            native.reset(initial, data);
+            oracle.probeShift = native.probeShift = static_cast<int32_t>(shift);
+            oracle.start(entry.pc, kWideBudget);
+            native.start(entry.pc, kWideBudget);
+            oracle.probeShift = native.probeShift = -1;
+            const bool same = matches(t, native, oracle, describe(entry, kWideBudget, oracle) + ": microcode rewritten by a kick");
+            for (Side *side : {&native, &oracle})
+            {
+                std::memcpy(side->code(), entry.code.data(), side->codeSize());
+                side->mem.markVU1CodeModified();
+            }
+            if (!same)
+                return;
+        }
 
         // A budget the program outlasts stops it at a block boundary and the
         // interpreter takes over; then the rest in uneven slices.

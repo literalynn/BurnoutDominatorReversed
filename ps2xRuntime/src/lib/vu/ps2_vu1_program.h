@@ -277,6 +277,107 @@ constexpr uint32_t settledReads()
     return settled;
 }
 
+template <const auto &Code, uint32_t Index>
+inline constexpr uint32_t kSettled = settledReads<Code, Index>();
+
+// Whether the clock can move on before pair Index issues: pairReady checks an
+// operand, Q, P or the EFU, or the pair is an XGKICK, which waits for PATH1.
+template <const auto &Code, uint32_t Index>
+constexpr bool mayStall()
+{
+    constexpr uint64_t word = Code.words[Index];
+    constexpr Access::Decoded d = Access::decode(static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32u));
+    constexpr uint32_t settled = kSettled<Code, Index>;
+    for (uint32_t read = 0u; read < 2u; ++read)
+        if ((read < d.upperUsage.vfReadCount && d.upperUsage.vfRead[read].reg != 0u && (settled & (1u << read)) == 0u) ||
+            (read < d.lowerUsage.vfReadCount && d.lowerUsage.vfRead[read].reg != 0u && (settled & (4u << read)) == 0u))
+            return true;
+    if (((d.upperUsage.viRead | d.lowerUsage.viRead) & 0xFFFEu & ~(settled >> 4u)) != 0u)
+        return true;
+    const auto &lower = d.lowerUsage;
+    if (lower.pipeline == Access::kFdiv || lower.waitQ || lower.waitP || lower.pipeline == Access::kEfu)
+        return true;
+    return (word >> 63u) == 0u && lower.pipeline == Access::kXgkick;
+}
+
+// The ready cycles a pair need not store (kHiddenReadies): its lower VF, upper VF
+// and VI results'. Only pairReady's checks and handBack read Run::m_vfReady and
+// m_viReady, and a cycle there matters only while it is ahead of the clock. Three
+// more pairs in the block take the clock kMaxWriteLatency past the pair's issue,
+// so past its results' cycles and past those the lanes held before, which earlier
+// pairs stored. The next two pairs must not stall, which leaves the third as the
+// only one to check the lanes until then, and it must not. A stale exit after the
+// pair or the next two stores the cycles first (Frame::staleReadies): with no
+// stall in between, each pair's issue cycle follows from the clock.
+inline constexpr uint32_t kLowerReadyHidden = 1u;
+inline constexpr uint32_t kUpperReadyHidden = 2u;
+inline constexpr uint32_t kViReadyHidden = 4u;
+
+template <const auto &Code, uint32_t Index>
+constexpr uint32_t hiddenReadiesOf()
+{
+    if constexpr (Index + 3u >= std::size(Code.words))
+        return 0u;
+    else if constexpr (mayStall<Code, Index + 1u>() || mayStall<Code, Index + 2u>())
+        return 0u;
+    else
+    {
+        const auto decode = [](uint64_t word) {
+            return Access::decode(static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32u));
+        };
+        const auto current = decode(Code.words[Index]);
+        const auto third = decode(Code.words[Index + 3u]);
+        constexpr uint32_t settled = kSettled<Code, Index + 3u>;
+        const auto checked = [&](uint8_t reg, uint8_t lanes) {
+            for (uint32_t read = 0u; read < 2u; ++read)
+                if ((read < third.upperUsage.vfReadCount && third.upperUsage.vfRead[read].reg == reg &&
+                     (third.upperUsage.vfRead[read].lanes & lanes) != 0u && (settled & (1u << read)) == 0u) ||
+                    (read < third.lowerUsage.vfReadCount && third.lowerUsage.vfRead[read].reg == reg &&
+                     (third.lowerUsage.vfRead[read].lanes & lanes) != 0u && (settled & (4u << read)) == 0u))
+                    return true;
+            return false;
+        };
+        const auto &lowerWrite = current.lowerUsage.vfWrite, &upperWrite = current.upperUsage.vfWrite;
+        uint32_t hidden = 0u;
+        if (lowerWrite.reg != 0u && lowerWrite.reg != upperWrite.reg && !checked(lowerWrite.reg, lowerWrite.lanes))
+            hidden |= kLowerReadyHidden;
+        if (upperWrite.reg != 0u && !checked(upperWrite.reg, upperWrite.lanes))
+            hidden |= kUpperReadyHidden;
+        const uint8_t vi = viWritten(current.lowerUsage);
+        if (vi != 0u && ((third.upperUsage.viRead | third.lowerUsage.viRead) & ~(settled >> 4u) & (1u << vi)) == 0u)
+            hidden |= kViReadyHidden;
+        return hidden;
+    }
+}
+
+template <const auto &Code, uint32_t Index>
+inline constexpr uint32_t kHiddenReadies = hiddenReadiesOf<Code, Index>();
+
+// The lanes of VF register reg that pairs After + 1 to Last of a block write.
+template <const auto &Code, uint32_t After, uint32_t Last>
+constexpr uint8_t vfRewritten(uint8_t reg)
+{
+    uint8_t lanes = 0u;
+    for (uint32_t index = After + 1u; index <= Last; ++index)
+    {
+        const auto d = Access::decode(static_cast<uint32_t>(Code.words[index]), static_cast<uint32_t>(Code.words[index] >> 32u));
+        if (d.upperUsage.vfWrite.reg == reg)
+            lanes |= d.upperUsage.vfWrite.lanes;
+        if (d.lowerUsage.vfWrite.reg == reg && d.lowerUsage.vfWrite.reg != d.upperUsage.vfWrite.reg)
+            lanes |= d.lowerUsage.vfWrite.lanes;
+    }
+    return lanes;
+}
+
+template <const auto &Code, uint32_t After, uint32_t Last>
+constexpr bool viRewritten(uint8_t reg)
+{
+    for (uint32_t index = After + 1u; index <= Last; ++index)
+        if (viWritten(Access::decode(static_cast<uint32_t>(Code.words[index]), static_cast<uint32_t>(Code.words[index] >> 32u)).lowerUsage) == reg)
+            return true;
+    return false;
+}
+
 struct UpperInputs
 {
     const float *left, *right, *accumulator;
@@ -775,8 +876,12 @@ public:
     PS2_VU_FORCE_INLINE bool pair(uint32_t nextPc)
     {
         constexpr uint64_t word = Code.words[Index];
-        return issue<(Code.pc + Index * 8u) & 0x3FFFu, static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32u),
-                     settledReads<Code, Index>(), Hint | kNormalOperands<Code>[Index]>(nextPc);
+        constexpr uint32_t pc = (Code.pc + Index * 8u) & 0x3FFFu;
+        if (issue<pc, static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32u), kSettled<Code, Index>,
+                  Hint | kNormalOperands<Code>[Index], kHiddenReadies<Code, Index>>(nextPc)) [[likely]]
+            return true;
+        staleReadies<Code, Index, (Index >= 2u ? Index - 2u : 0u)>();
+        return false;
     }
 
     // Return to the driver, which continues with the routine at pc.
@@ -897,6 +1002,41 @@ private:
         return absolute > m_base ? static_cast<uint32_t>(absolute - m_base) : 0u;
     }
 
+    // Before a stale exit after pair Index: the ready cycles pairs J to Index did not
+    // store, but for lanes a later one of them rewrote. No pair in between stalled,
+    // so pair J issued Index - J cycles before the last one.
+    template <const auto &Code, uint32_t Index, uint32_t J>
+    PS2_VU_FORCE_INLINE void staleReadies()
+    {
+        constexpr uint32_t hidden = kHiddenReadies<Code, J>;
+        if constexpr (hidden != 0u)
+        {
+            constexpr Access::Decoded d =
+                Access::decode(static_cast<uint32_t>(Code.words[J]), static_cast<uint32_t>(Code.words[J] >> 32u));
+            const uint32_t issued = m_cycle - 1u - (Index - J);
+            if constexpr ((hidden & kLowerReadyHidden) != 0u)
+            {
+                constexpr uint8_t reg = d.lowerUsage.vfWrite.reg;
+                constexpr uint8_t lanes = d.lowerUsage.vfWrite.lanes & ~vfRewritten<Code, J, Index>(reg);
+                setReady<lanes>(m_run.m_vfReady[reg].data(), issued + vfWriteLatency(d.lowerUsage));
+            }
+            if constexpr ((hidden & kUpperReadyHidden) != 0u)
+            {
+                constexpr uint8_t reg = d.upperUsage.vfWrite.reg;
+                constexpr uint8_t lanes = d.upperUsage.vfWrite.lanes & ~vfRewritten<Code, J, Index>(reg);
+                setReady<lanes>(m_run.m_vfReady[reg].data(), issued + vfWriteLatency(d.upperUsage));
+            }
+            if constexpr ((hidden & kViReadyHidden) != 0u)
+            {
+                constexpr uint8_t reg = viWritten(d.lowerUsage);
+                if constexpr (!viRewritten<Code, J, Index>(reg))
+                    m_run.m_viReady[reg] = issued + viWriteLatency(d.lowerUsage);
+            }
+        }
+        if constexpr (J < Index)
+            staleReadies<Code, Index, J + 1u>();
+    }
+
     // VU memory helpers. Plain members, as a lambda MSVC leaves out of line
     // takes the Frame's address and then every member lives in memory.
     PS2_VU_FORCE_INLINE uint32_t address(int32_t qword) const
@@ -936,7 +1076,7 @@ private:
         return ready;
     }
 
-    template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled, uint32_t Hint>
+    template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled, uint32_t Hint, uint32_t Hidden>
     PS2_VU_FORCE_INLINE bool issue(uint32_t nextPc);
 
     // The latest cycle an operand of the pair becomes ready, ignoring the
@@ -1108,7 +1248,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::pairReady() const
     return ready;
 }
 
-template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled, uint32_t Hint>
+template <uint32_t Pc, uint32_t Lower, uint32_t Upper, uint32_t Settled, uint32_t Hint, uint32_t Hidden>
 PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
 {
     static constexpr Access::Decoded decoded = Access::decode(Lower, Upper);
@@ -1168,14 +1308,16 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
         constexpr uint32_t latency = decoded.lowerUsage.vfLatency != 0u ? decoded.lowerUsage.vfLatency
                                                                         : decoded.lowerUsage.latency;
         writeLanes<lowerLanes>(m_state.vf[lowerReg], lowerValue);
-        setReady<lowerLanes>(m_run.m_vfReady[lowerReg].data(), m_cycle + latency);
+        if constexpr ((Hidden & kLowerReadyHidden) == 0u)
+            setReady<lowerLanes>(m_run.m_vfReady[lowerReg].data(), m_cycle + latency);
     }
     if constexpr (upperReg != 0u)
     {
         constexpr uint32_t latency = decoded.upperUsage.vfLatency != 0u ? decoded.upperUsage.vfLatency
                                                                         : decoded.upperUsage.latency;
         writeLanes<upperLanes>(m_state.vf[upperReg], upperValue);
-        setReady<upperLanes>(m_run.m_vfReady[upperReg].data(), m_cycle + latency);
+        if constexpr ((Hidden & kUpperReadyHidden) == 0u)
+            setReady<upperLanes>(m_run.m_vfReady[upperReg].data(), m_cycle + latency);
     }
     if constexpr (accLanes != 0u)
     {
@@ -1194,7 +1336,8 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
                                                                         : decoded.lowerUsage.latency;
         const int32_t old = m_state.vi[viReg];
         m_state.vi[viReg] = static_cast<int16_t>(viValue);
-        m_run.m_viReady[viReg] = m_cycle + latency;
+        if constexpr ((Hidden & kViReadyHidden) == 0u)
+            m_run.m_viReady[viReg] = m_cycle + latency;
         // A conditional branch right after reads the value from before this write.
         if constexpr (decoded.lowerUsage.delaysNextBranchRead)
         {
