@@ -152,7 +152,7 @@ namespace ps2x
             if (key == "refresh_rate")
             {
                 int rate = 0;
-                return (value == "50" || value == "ask" || parseInt(value, 60, 500, rate)) &&
+                return (value == "50" || parseInt(value, 60, 500, rate)) &&
                        (s.refreshRate = rate ? std::to_string(rate) : value, true);
             }
             if (key == "show_fps")
@@ -298,7 +298,7 @@ namespace ps2x
                 "# Sound volume in percent, and a frames-per-second counter in the window corner.\n"
                 "volume = " << s.volume << "\n"
                 "show_fps = " << (s.showFps ? "true" : "false") << "\n"
-                "# The game asks 50 or 60 Hz at start-up: refresh_rate 60 or 50 answers for you, ask shows it.\n"
+                "# refresh_rate 60 or 50 answers the game's 50/60 Hz question at start-up.\n"
                 "# 120, 144, 240... (up to 500) answers 60 and runs the whole game that many frames a second:\n"
                 "# smoother, at the same speed, with more CPU work. A change applies at the next menu page.\n"
                 "# A Ryzen + RTX 5090 draws every frame at 144 and nearly every one at 165; from 240 frames\n"

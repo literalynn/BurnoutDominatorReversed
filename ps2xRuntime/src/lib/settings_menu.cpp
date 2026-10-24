@@ -169,7 +169,7 @@ namespace
         case RowVibration: return onOff(s.vibration);
         case RowFastLoading: return onOff(s.fastLoading);
         case RowKeepSpeed: return onOff(s.keepSpeed);
-        case RowRefresh: return s.refreshRate == "ask" ? "Ask" : s.refreshRate + " Hz";
+        case RowRefresh: return s.refreshRate + " Hz";
         case RowDeadzone: return std::to_string(int(s.stickDeadzone * 100.0f + 0.5f)) + "%";
         case RowControls: return ">";
         default: return "";
@@ -237,7 +237,7 @@ namespace
             break;
         case RowRefresh:
         {
-            static const char *kRates[] = {"60", "120", "144", "165", "240", "50", "ask"};
+            static const char *kRates[] = {"60", "120", "144", "165", "240", "50"};
             constexpr int kCount = static_cast<int>(std::size(kRates));
             int index = 0;
             while (index < kCount && s.refreshRate != kRates[index])

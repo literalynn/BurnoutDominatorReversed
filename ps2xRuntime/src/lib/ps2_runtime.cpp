@@ -709,7 +709,7 @@ bool PS2Runtime::syncCoreSubsystems()
             // thread (BDR_GS_ASYNC=0 keeps it on the worker).
             const char *asyncSetting = std::getenv("BDR_GS_ASYNC");
             const bool async = m_gsThreadEnabled && !(asyncSetting && *asyncSetting == '0');
-            std::unique_ptr<GSRasterBackend> backend = CreateParallelGSBackend(m_memory.gs(), async);
+            std::unique_ptr<GSRasterBackend> backend = CreateParallelGSBackend(m_memory.gs());
             if (async)
                 backend = CreateAsyncGSBackend(std::move(backend));
             m_gs.setRasterBackend(std::move(backend));

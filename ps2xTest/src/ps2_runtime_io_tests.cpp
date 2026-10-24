@@ -775,7 +775,7 @@ void register_ps2_runtime_io_tests()
             {
                 std::ofstream file(path);
                 file << "window_width = 2560  # QHD\nsuper_sampling = 3\nunknown = 1\nfullscreen = yes\n"
-                        "key_l1 = F2 mouse_right\nkey_r1 = NOPE\nrefresh_rate = 501\n";
+                        "key_l1 = F2 mouse_right\nkey_r1 = NOPE\nrefresh_rate = 501\nrefresh_rate = ask\n";
             }
             errors.clear();
             t.IsTrue(ps2x::loadHostSettings(path, errors), "the edited file loads");
@@ -787,6 +787,8 @@ void register_ps2_runtime_io_tests()
             t.Equals(settings.superSampling, 8, "an invalid sample count is ignored");
             t.IsTrue(errors.find(":7:") != std::string::npos && settings.refreshRate == "144",
                      "a frame rate above 500 is reported and ignored");
+            t.IsTrue(errors.find(":8:") != std::string::npos && settings.refreshRate == "144",
+                     "ask, no longer offered, is reported and ignored");
             t.IsTrue(errors.find(":2:") != std::string::npos && errors.find(":3:") != std::string::npos,
                      "bad and unknown lines are reported");
             std::filesystem::remove(path);

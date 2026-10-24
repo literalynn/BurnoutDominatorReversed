@@ -10,6 +10,7 @@
 #include "runtime/host_settings.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/transfer_buffers.h"
+#include "runtime/vblank_rate.h"
 #include "ps2_log.h"
 #include "gs_interface.hpp"
 #include "context.hpp"
@@ -125,11 +126,15 @@ namespace
         VulkanDevice vulkan;
         mutable ParallelGS::GSInterface gs;
         GSRegisters &priv;
-        // Scan-out readbacks alternate between two buffers: Present queues this frame's copy and
-        // returns the previous frame's, which has had a whole frame to land, so the GS worker
-        // rarely waits for the GPU and every frame is shown once, one presentation late.
-        // Showing this frame when it landed within a bound (2 or 8 ms) and the previous one
-        // otherwise repeated a frame and then skipped one: up to 3 judders a second in a race.
+        // Scan-out readbacks alternate between two buffers. Present queues this frame's copy and
+        // waits for it. At a VBlank rate above the console's it returns the previous frame's
+        // instead, which has had a frame to land: the caller records the next frame while the
+        // GPU draws this one, and every frame is shown once, one presentation later. (Before,
+        // that mode never ran: showing the current frame marked both buffers read. At 144 Hz with
+        // 16 samples a pixel GsSubmit waited 31% of its time for the GPU, which then waited for
+        // the next frame's commands.) Showing this frame when it landed within a bound (2 or
+        // 8 ms) and the previous one otherwise repeated a frame and then skipped one: up to 3
+        // judders a second in a race.
         struct Readback
         {
             Vulkan::BufferHandle buffer;
@@ -140,7 +145,6 @@ namespace
         Readback readbacks[2];
         unsigned readbackIndex = 0;
         int superSampling = 1; // the rate paraLLEl-GS renders at
-        bool presentCurrent = false; // Present waits for this frame's readback
 
         struct Lock
         {
@@ -306,7 +310,7 @@ namespace
         }
 
     public:
-        ParallelBackend(GSRegisters &registers, bool presentCurrentFrame) : priv(registers), presentCurrent(presentCurrentFrame)
+        explicit ParallelBackend(GSRegisters &registers) : priv(registers)
         {
             Lock lock(mutex);
             ParallelGS::GSOptions options{};
@@ -569,10 +573,13 @@ namespace
             current.height = height;
             current.pending = true;
 
-            // The previous frame; the very first one shows itself.
             Readback &previous = readbacks[readbackIndex ^ 1u];
             readbackIndex ^= 1u;
-            copyOut(previous.pending && !presentCurrent ? previous : current);
+            if (ps2x::vblankRate() == 0u)
+                copyOut(current);
+            else if (previous.pending)
+                copyOut(previous);
+            // else no frame (the first one at this rate): the frontend keeps the one it shows.
             return frame;
         }
 
@@ -666,8 +673,8 @@ namespace
     };
 }
 
-std::unique_ptr<GSRasterBackend> CreateParallelGSBackend(GSRegisters &registers, bool presentCurrentFrame)
+std::unique_ptr<GSRasterBackend> CreateParallelGSBackend(GSRegisters &registers)
 {
-    return std::make_unique<ParallelBackend>(registers, presentCurrentFrame);
+    return std::make_unique<ParallelBackend>(registers);
 }
 

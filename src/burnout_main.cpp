@@ -223,9 +223,9 @@ int exitCode(const PS2Runtime& runtime, const PS2Runtime::RunResult& result) {
 // and 0x43ED30 the player car's (followed over consecutive race frames). Sampled every 2 ms
 // from the host; a camera that moves much further than the car between two samples is
 // reported, and so is a car that jumps (a reset after a crash).
-// The game asks 50 or 60 Hz at boot (front-end page SU_Frequency). With settings.ini
-// refresh_rate 60 or 50 the page is skipped: the runner does what the page's SetFrequency native
-// (0x18B700) does for the chosen rate, then goes to the page that follows it, SU_Movie.
+// The game asks 50 or 60 Hz at boot (front-end page SU_Frequency). The page is skipped: the runner
+// does what the page's SetFrequency native (0x18B700) does for settings.ini refresh_rate, then
+// goes to the page that follows it, SU_Movie.
 // 0x1838A8 is the page manager's go-to-page (a0 = manager 0x43A6D0, a1 = page name), called by
 // the GoToPage native 0x1893C0.
 //
@@ -325,7 +325,7 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     const auto hz = [](uint32_t mode, uint32_t perSecond) {
         return perSecond ? std::to_string(perSecond) : std::string(mode == 2 ? "50" : "60");
     };
-    if (rate != "ask" && g_continuation != 0 && isPage("su_frequency")) {
+    if (g_continuation != 0 && isPage("su_frequency")) {
         std::memcpy(rdram + name, "SU_Movie", 9); // the name buffer held "SU_Frequency"
         g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], false, frameRate};
         std::printf("[game] skipped the 50/60 Hz question: %s Hz\n", hz(wanted, frameRate).c_str());
@@ -336,7 +336,7 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     std::memcpy(&mode, rdram + 0x43EC68u, sizeof(mode));
     std::memcpy(&gameState, rdram + 0x51B908u, sizeof(gameState));
     const bool startUp = std::tolower(rdram[name]) == 's' && std::tolower(rdram[name + 1]) == 'u' && rdram[name + 2] == '_';
-    if (rate != "ask" && g_continuation != 0 && !startUp && gameState == 0x4C1B38u && (mode == 0 || mode == 2) &&
+    if (g_continuation != 0 && !startUp && gameState == 0x4C1B38u && (mode == 0 || mode == 2) &&
         (mode != wanted || ps2x::vblankRate() != frameRate)) {
         g_skip = FrequencySkip{0, wanted, ctx->r[4], ctx->r[5], ctx->r[31], true, frameRate};
         std::printf("[game] switched from %s to %s Hz\n", hz(mode, ps2x::vblankRate()).c_str(),

@@ -132,7 +132,7 @@ Every key can be changed in **F1** → *Keyboard and mouse controls*: up to thre
 | `volume` | 100 | percent |
 | `show_fps` | false | frames per second in the corner |
 | `key_cross`, `key_l1`... | see Controls | up to three keys, mouse buttons or wheel directions (`MOUSE_LEFT`, `MOUSE_WHEEL_UP`...) per button, or `NONE` |
-| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `ask` shows its 50/60 Hz question; `120`, `144`, `240`... up to `500` runs the whole game that many frames a second at the same speed (more CPU work: a PC that cannot keep up slows the race down), from the next menu page |
+| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `120`, `144`, `240`... up to `500` runs the whole game that many frames a second at the same speed (more CPU work: a PC that cannot keep up slows the race down), from the next menu page |
 
 </details>
 

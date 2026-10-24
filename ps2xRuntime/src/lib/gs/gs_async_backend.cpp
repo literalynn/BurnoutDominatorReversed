@@ -89,7 +89,13 @@ namespace
         PresentationFrame Present(const GSPresentationRequest &request) override
         {
             push(Kind::Present, 0u, 0u, nullptr, 0u, &request);
-            std::lock_guard<std::mutex> lock(m_mutex);
+            // One earlier frame at most still to present. When the thread is the bottleneck
+            // (16 samples a pixel at 144 frames a second), the queue grew to its byte limit,
+            // about 15 frames, 100 ms behind the game, and then the GS worker waited in
+            // ProcessGIF holding the GS state lock that the game thread takes at every VBlank:
+            // 4 or 5 stalls of 100 ms a second. The worker now waits here, without that lock.
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_drained.wait(lock, [this] { return m_queuedPresents <= 1u; });
             PresentationFrame frame = std::move(m_presented);
             m_presented = {};
             return frame;
@@ -181,6 +187,8 @@ namespace
                 m_queuedBytes += size;
             }
             m_queue.push_back(Job{kind, argument, value, std::move(buffer), request ? *request : GSPresentationRequest{}});
+            if (kind == Kind::Present)
+                ++m_queuedPresents;
             // Waking the thread costs a system call, and it empties the queue faster than it
             // fills: wake it for a batch of packets, at a flush or a presentation, or when
             // someone waits (sync).
@@ -250,8 +258,12 @@ namespace
                     case Kind::Present:
                     {
                         PresentationFrame frame = m_inner->Present(job.request);
-                        std::lock_guard<std::mutex> presented(m_mutex);
-                        m_presented = std::move(frame);
+                        {
+                            std::lock_guard<std::mutex> presented(m_mutex);
+                            m_presented = std::move(frame);
+                            --m_queuedPresents;
+                        }
+                        m_drained.notify_all();
                         break;
                     }
                     }
@@ -276,6 +288,7 @@ namespace
         PresentationFrame m_presented; // the last frame presented, until Present takes it
         std::vector<std::vector<uint8_t>> m_spare;
         size_t m_queuedBytes = 0u;
+        uint32_t m_queuedPresents = 0u; // queued or running
         bool m_busy = false;
         mutable bool m_sleeping = false;
         bool m_stop = false;

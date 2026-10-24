@@ -29,7 +29,7 @@ namespace ps2x
         bool vibration = true;       // the game's pad vibration on the host gamepad
         std::string gamepadMappings; // extra SDL_GameControllerDB mappings file
         int volume = 100;            // sound volume in percent
-        // "60" or "50": the answer to the game's boot question; "ask" shows it. 61 to 500 answers 60
+        // "60" or "50": the answer to the game's boot question. 61 to 500 answers 60
         // and runs the game that many frames a second (Burnout: src/burnout_frame_rate.cpp).
         std::string refreshRate = "60";
         bool showFps = false;        // frames per second in a corner of the window

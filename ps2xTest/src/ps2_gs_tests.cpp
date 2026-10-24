@@ -1267,6 +1267,45 @@ void register_ps2_gs_tests()
         });
 
 #ifdef PS2X_GS_PARALLEL
+        // The async wrapper keeps one earlier frame queued at most: when its thread falls behind,
+        // Present waits instead of queueing frames (and latency) without bound.
+        tc.Run("async GS backend: Present waits while an earlier frame is queued", [](TestCase &t)
+        {
+            struct SlowPresents final : GSRasterBackend
+            {
+                std::atomic<int> presented{0};
+                void Initialize(uint8_t *, uint32_t) override {}
+                void Reset() override {}
+                void Submit(const GSPrimitiveBatch &) override {}
+                void LoadClut(const GSTex0Reg &, const GSTexClutReg &) override {}
+                void BeginTransfer(const GSTransferCommand &) override {}
+                void UploadImage(const uint8_t *, uint32_t) override {}
+                void Flush() override {}
+                void TextureFlush() override {}
+                void Sync(GSSyncReason) override {}
+                PresentationFrame Present(const GSPresentationRequest &) override
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    ++presented;
+                    return {};
+                }
+                bool ClearFramebuffer(const GSContext &, uint32_t) override { return false; }
+                uint32_t ConsumeLocalToHostBytes(uint8_t *, uint32_t) override { return 0u; }
+                uint32_t ReadVram(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) const override { return 0u; }
+                void WriteVram(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) override {}
+                void SnapshotVram(std::vector<uint8_t> &) const override {}
+                GSTransferSnapshot GetTransferSnapshot() const override { return {}; }
+            };
+            auto inner = std::make_unique<SlowPresents>();
+            SlowPresents &slow = *inner;
+            std::unique_ptr<GSRasterBackend> async = CreateAsyncGSBackend(std::move(inner));
+            for (int call = 1; call <= 3; ++call)
+            {
+                async->Present(GSPresentationRequest{});
+                t.IsTrue(slow.presented.load() >= call - 1, "every earlier frame is presented when Present returns");
+            }
+        });
+
         // BDR_PGS_REPLAY=file (recorded with BDR_PGS_RECORD): feeds the same GS
         // input to the CPU rasterizer and to paraLLEl-GS and reports, at each
         // presentation, the 8 KiB pages whose contents differ. A debugging aid;
