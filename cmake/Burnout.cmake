@@ -25,7 +25,8 @@ if(BDR_BUILD_GAME)
         "${PROJECT_SOURCE_DIR}/src/burnout_texts.cpp")
     # Keep hand-written sources out of the generated unity batches so editing
     # them recompiles one file instead of a batch of guest functions.
-    set_source_files_properties(${BDR_PROJECT_SOURCES} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    set_source_files_properties(${BDR_PROJECT_SOURCES} TARGET_DIRECTORY ps2EntryRunner
+        PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
     target_sources(ps2EntryRunner PRIVATE ${BDR_GENERATED_CPP} ${BDR_PROJECT_SOURCES})
     target_include_directories(ps2EntryRunner PRIVATE "${BDR_GENERATED_DIR}")
     if(PS2X_ENABLE_RUNNER_PCH)
@@ -38,6 +39,16 @@ if(BDR_BUILD_GAME)
     set_target_properties(ps2EntryRunner PROPERTIES UNITY_BUILD_BATCH_SIZE "${BDR_UNITY_BATCH_SIZE}")
     if(MSVC)
         target_compile_options(ps2EntryRunner PRIVATE /bigobj /utf-8 "/MP${BDR_COMPILER_WORKERS}")
+        # MSVC otherwise compiles the largest generated functions without optimizations (warning
+        # C4883, off by default): no inlining, every temporary in its own stack slot, frames of
+        # hundreds of KB on a 1 MB thread stack.
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+            target_compile_options(ps2EntryRunner PRIVATE /d2OptimizeHugeFunctions)
+            # Except the function table's initializer, one statement per guest function, run
+            # once at start-up: optimizing it takes longer than the rest of the build.
+            set_source_files_properties("${BDR_GENERATED_DIR}/register_functions.cpp" TARGET_DIRECTORY ps2EntryRunner
+                PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS /Od)
+        endif()
         # A PDB lets BDR_PROFILE name the guest functions and runtime code it samples.
         target_link_options(ps2EntryRunner PRIVATE $<$<CONFIG:Release>:/DEBUG>)
         # Full debug info for the runtime only, so samples in static and inlined
