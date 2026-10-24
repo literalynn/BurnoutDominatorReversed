@@ -538,18 +538,11 @@ namespace
                 ready.pending = false;
                 frame.width = ready.width;
                 frame.height = ready.height;
-                const size_t count = size_t(ready.width) * ready.height;
-                frame.pixels = ps2x::takeTransferBuffer(count * 4);
-                frame.pixels.resize(count * 4);
+                const size_t readyBytes = size_t(ready.width) * ready.height * 4;
+                frame.pixels = ps2x::takeTransferBuffer(readyBytes);
                 const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
-                // One pass: scan-out alpha is not a display value.
-                for (size_t i = 0; i < count; ++i)
-                {
-                    uint32_t pixel;
-                    std::memcpy(&pixel, mapped + i * 4, 4);
-                    pixel |= 0xFF000000u;
-                    std::memcpy(frame.pixels.data() + i * 4, &pixel, 4);
-                }
+                // A plain copy, alpha included: the window draws frames opaque and frame dumps set it.
+                frame.pixels.assign(mapped, mapped + readyBytes);
                 device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
             };
             Readback &current = readbacks[readbackIndex];

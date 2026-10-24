@@ -18,6 +18,7 @@
 #include "Kernel/Stubs/MPEG.h"
 #include "Kernel/Syscalls/Helpers/State.h"
 #include "ps2_host_backend.h"
+#include "rlgl.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "runtime/host_audio.h"
@@ -2863,6 +2864,7 @@ PS2Runtime::RunResult PS2Runtime::run()
 PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
 {
     RunResult result;
+    ThreadNaming::SetCurrentThreadName("Frontend"); // for BDR_PROFILE_THREAD
     prepareGuestExecution();
     if (!options.loadStateFile.empty())
     {
@@ -3003,7 +3005,11 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
             (screenHeight - dstHeight) * 0.5f,
             dstWidth,
             dstHeight};
+        // Opaque: a frame keeps the scan-out's alpha, which is not a display value.
+        rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM);
         DrawTexturePro(picture.texture, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        EndBlendMode();
         ps2x::drawSettingsOverlay(framesShown);
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {

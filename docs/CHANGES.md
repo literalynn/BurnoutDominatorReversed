@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Scan-out frames copied as they are (October 24, 2026)
+
+- `gs/gs_parallel_backend.cpp`: `Present` copies the read-back frame in one copy instead of zero-filling the buffer and then setting the alpha of every pixel (18 MiB a frame at 16 samples a pixel with the high-resolution scan-out). `ps2_runtime.cpp`: the window draws the frame opaque (`rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD)`), so the scan-out's alpha, which is not a display value, needs no setting: FXAA already wrote an opaque picture and frame dumps set alpha themselves. Same window race at 144 frames a second with 16 samples a pixel: 122.0 VBlanks a second against 120.4, within the spread between runs (the GPU sets the limit there); window captures at the same moments of the race have the same brightness as before, with FXAA on and off.
+- `ps2_runtime.cpp`: the thread that runs the window is named `Frontend`, for `BDR_PROFILE_THREAD`.
+
 ## No more 100 ms stalls when the GPU side falls behind (October 24, 2026)
 
 In the window at 144 frames a second with 16 samples a pixel and the high-resolution scan-out (the owner's settings), a race ran 103 VBlanks a second and 114 race steps a second (79% of its speed), and 4 or 5 frames a second came 80 to 115 ms after the previous one. The game thread spent 41% of its time blocked on a lock no wait counter covered: at every VBlank `PS2Runtime::queuePresentation` calls `GS::buildPresentationRequest`, which takes the GS state lock, and the GS worker held that lock while it waited, in `GS::processGIFPacket`, for the paraLLEl-GS submission thread (`GsSubmit`) to drain its queue below the 64 MiB limit, about 15 frames behind the game.
