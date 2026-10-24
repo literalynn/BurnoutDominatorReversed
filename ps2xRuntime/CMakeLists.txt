@@ -539,7 +539,46 @@ if(PS2X_VU_PROGRAM_PROFILES)
     add_custom_target(ps2_vu_programs DEPENDS "${PS2X_VU_PROGRAM_INCLUDE}"
                       "${PS2X_VU_PROGRAM_EXTERN_INCLUDE}" ${PS2X_VU_PROGRAM_SOURCES})
     add_dependencies(ps2_runtime ps2_vu_programs)
-    target_sources(ps2_runtime PRIVATE ${PS2X_VU_PROGRAM_SOURCES})
+    # Visual Studio's clang-cl (component "C++ Clang Compiler for Windows") makes code of the
+    # routines that runs about 5% faster than MSVC's: GS worker time in a race, same GIF output.
+    # Single precision without contraction to FMA, as MSVC compiles them. OFF: MSVC compiles them;
+    # another clang-cl must be recent enough for this STL.
+    if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+        get_filename_component(PS2X_MSVC_TOOLS_DIR "${CMAKE_CXX_COMPILER}/../../../../../.." ABSOLUTE)
+        find_program(PS2X_VU_PROGRAM_CLANG_CL clang-cl PATHS "${PS2X_MSVC_TOOLS_DIR}/Llvm/x64/bin" NO_DEFAULT_PATH
+            DOC "clang-cl for the compiled VU1 routines; OFF: MSVC compiles them")
+    endif()
+    if(MSVC AND PS2X_VU_PROGRAM_CLANG_CL)
+        message(STATUS "Compiled VU1 routines: ${PS2X_VU_PROGRAM_CLANG_CL}")
+        cmake_policy(PUSH)
+        if(POLICY CMP0147)
+            cmake_policy(SET CMP0147 NEW) # MSBuild compiles them in parallel
+        endif()
+        set(PS2X_VU_DEFINITIONS "$<REMOVE_DUPLICATES:$<TARGET_PROPERTY:ps2_runtime,COMPILE_DEFINITIONS>>")
+        set(PS2X_VU_INCLUDES "$<REMOVE_DUPLICATES:$<TARGET_PROPERTY:ps2_runtime,INCLUDE_DIRECTORIES>>")
+        foreach(SOURCE ${PS2X_VU_PROGRAM_SOURCES})
+            get_filename_component(NAME "${SOURCE}" NAME_WE)
+            set(OBJECT "${CMAKE_CURRENT_BINARY_DIR}/generated/clang-cl/$<CONFIG>/${NAME}.obj")
+            add_custom_command(
+                OUTPUT "${OBJECT}"
+                COMMAND ${PS2X_VU_PROGRAM_CLANG_CL} /nologo /c /TP /std:c++20 /EHsc /W0 /Z7 /arch:AVX2
+                        /fp:precise /clang:-ffp-contract=off /GS- /Gy /Gw /DWIN32 /D_WINDOWS
+                        "$<IF:$<CONFIG:Debug>,/Od;/MDd;/D_DEBUG,/O2;/MD;/DNDEBUG>"
+                        "$<$<BOOL:${PS2X_VU_DEFINITIONS}>:/D$<JOIN:${PS2X_VU_DEFINITIONS},;/D>>"
+                        "/I${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu"
+                        "$<$<BOOL:${PS2X_VU_INCLUDES}>:/I$<JOIN:${PS2X_VU_INCLUDES},;/I>>"
+                        "/clang:-MD" "/clang:-MF${OBJECT}.d" "/clang:-MT${OBJECT}" "/Fo${OBJECT}" "${SOURCE}"
+                DEPENDS "${SOURCE}"
+                DEPFILE "${OBJECT}.d"
+                COMMENT "Compiling ${NAME}.cpp with clang-cl"
+                COMMAND_EXPAND_LISTS VERBATIM)
+            # An .obj source goes into the library as it is.
+            target_sources(ps2_runtime PRIVATE "${OBJECT}")
+        endforeach()
+        cmake_policy(POP)
+    else()
+        target_sources(ps2_runtime PRIVATE ${PS2X_VU_PROGRAM_SOURCES})
+    endif()
     set_source_files_properties(src/lib/vu/ps2_vu1_program.cpp PROPERTIES COMPILE_DEFINITIONS
         "PS2X_VU_PROGRAM_INCLUDE=\"${PS2X_VU_PROGRAM_INCLUDE}\";PS2X_VU_PROGRAM_EXTERN_INCLUDE=\"${PS2X_VU_PROGRAM_EXTERN_INCLUDE}\"")
     set_source_files_properties(${PS2X_VU_PROGRAM_SOURCES} PROPERTIES

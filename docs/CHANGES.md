@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The compiled VU1 routines can be built by clang-cl (October 24, 2026)
+
+- `CMakeLists.txt`: with MSVC, when Visual Studio's clang-cl (component *C++ Clang Compiler for Windows*, in `VC/Tools/Llvm/x64/bin`) is installed, it compiles the generated VU1 routines (`vu_programs_N.cpp`), the eight shards in parallel (policy CMP0147 for those commands only), and their objects go into `ps2_runtime` instead of MSVC's. Release options as for the rest (`/O2 /arch:AVX2 /GS- /Gw`), except `/fp:precise` and `-ffp-contract=off`: no FMA where MSVC has none. `PS2X_VU_PROGRAM_CLANG_CL` names another clang-cl (recent enough for the STL: clang 20 for Visual Studio 2026's), `OFF` keeps MSVC. Six-car race replayed from one state, 1,500 VBlanks, built with clang 19: GS worker 6.23 s median against 6.56 s with MSVC (alternating runs, the same executables warm); the GIF stream is identical over the 7.9 million packets of the MSVC run, and the RDRAM at VBlank 18,000 differs only in words that also vary between runs of one executable (kernel stacks, SPU2 timing).
+
 ## The paraLLEl-GS backend follows GIF data without reading every quadword (October 24, 2026)
 
 - `gs/gs_parallel_backend.cpp`: `observeGIF`, which follows the GIF stream for the transfer registers (`BITBLTBUF`, `TRXREG`, `TRXDIR`) that `GetTransferSnapshot` reports, stepped through the data one quadword at a time. Only PACKED A+D can write those registers, so PACKED data without A+D and REGLIST data (two registers a quadword, the last half unused after an odd count) are now passed in one step, to the end of the tag or of the packet: 1.1% of the GPU submission thread in a race at 240 frames a second instead of 4.3%. `ps2xTest/src/ps2_gs_tests.cpp`: a transfer set up behind both kinds of data is still followed.

@@ -59,7 +59,7 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 
 ## Install (Windows)
 
-You need your European Burnout Dominator ISO (keep it where it is: the game reads it at every launch), a Vulkan graphics card, 20 GB free, and **Visual Studio 2026 or 2022 Community** with *Desktop development with C++*.
+You need your European Burnout Dominator ISO (keep it where it is: the game reads it at every launch), a Vulkan graphics card, 20 GB free, and **Visual Studio 2026 or 2022 Community** with *Desktop development with C++*. Its optional component *C++ Clang Compiler for Windows* makes the PS2's graphics programs run about 5% faster: the build uses it when it is installed.
 
 ```powershell
 winget install Python.Python.3.12 Git.Git Microsoft.PowerShell
