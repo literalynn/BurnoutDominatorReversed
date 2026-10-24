@@ -434,19 +434,58 @@ def partition(routine, max_pairs):
     return chunks
 
 
-def flag_hints(pairs, body, status_unseen):
+def hidden_ahead(routine, start, k):
+    """Whether every way on from pair k of block start meets a later FMAC
+    result 4 or more pairs before any flag reader or routine exit."""
+    work, visited = [(start, k + 1, None)], set()
+    while work:
+        state = work.pop()
+        if state in visited:
+            continue
+        visited.add(state)
+        block, i, since = state  # since: pairs from the first later FMAC result, if any
+        body, terminator = routine.blocks[block]
+        while since is None or since < 4:
+            if i == len(body):
+                targets = successors(terminator)
+                if not targets:
+                    return False
+                work.extend((target, 0, since) for target in targets)
+                break
+            pair = routine.pairs[body[i]]
+            if pair.reads_flags():
+                return False
+            if since is None and pair.publishes_flags():
+                since = 0
+            i += 1
+            if since is not None:
+                since += 1
+    return True
+
+
+def flag_hints(routine, start, status_unseen):
     """Frame::pair hints of a block's FMAC pairs, by position in the block.
 
-    A flag reader, or whatever follows the block, sees the last FMAC result
-    issued at least 4 cycles before it. Pairs take a cycle or more, so a later
-    result 4 or more pairs before every such point hides this one.
+    A flag reader sees the last FMAC result issued at least 4 cycles before it.
+    Pairs take a cycle or more, so a later result 4 or more pairs before every
+    reader hides this one. What follows the block counts as a reader: a run the
+    budget stops there hands back what is queued, and a hidden result's sticky
+    conditions travel with the next queued one. With the status unseen (VU1,
+    whose flags only VU1 code reads) a hidden result leaves nothing behind and
+    a stopped run goes on with the same pairs, so only the routine's exits do.
     """
+    pairs = routine.pairs
+    body = routine.blocks[start][0]
     fmacs = [k for k, index in enumerate(body) if pairs[index].publishes_flags()]
     points = [k for k, index in enumerate(body) if pairs[index].reads_flags()] + [len(body)]
     hints = {}
     for k in fmacs:
         hint = STATUS_UNSEEN if status_unseen else 0
-        if all(any(k < m <= point - 4 for m in fmacs) for point in points if point > k):
+        if status_unseen:
+            hidden = hidden_ahead(routine, start, k)
+        else:
+            hidden = all(any(k < m <= point - 4 for m in fmacs) for point in points if point > k)
+        if hidden:
             hint |= FLAGS_UNSEEN
         if hint:
             hints[k] = hint
@@ -518,7 +557,7 @@ def emit_routine(routine, name, max_pairs, status_unseen=False):
     def emit_block(start):
         body, terminator = routine.blocks[start]
         table = f"{name}_{start:04x}"
-        hints = flag_hints(pairs, body, status_unseen)
+        hints = flag_hints(routine, start, status_unseen)
         if body:
             words = ", ".join(f"0x{pairs[i].word:016x}ull" for i in body)
             tails = entry_tails(start)

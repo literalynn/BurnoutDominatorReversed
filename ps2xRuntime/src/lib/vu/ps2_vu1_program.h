@@ -174,8 +174,9 @@ struct Block
 };
 
 // Per-pair hints from compile_vu_programs.py. kFlagsUnseen: no flag reader
-// and no block exit can see this pair's FMAC result before a later one
-// replaces it, so it does not queue; its sticky conditions still count.
+// and no block exit (with kStatusUnseen, no routine exit) can see this pair's
+// FMAC result before a later one replaces it, so it does not queue; its sticky
+// conditions still count.
 // kStatusUnseen: no VU1 program reads the status register (FSEQ, FSAND,
 // FSOR), so the sticky conditions are not built either.
 inline constexpr uint32_t kFlagsUnseen = 1u;
