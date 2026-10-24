@@ -77,5 +77,9 @@ parallel_gs_replace("\t\t\t\tvp.x *= 2.0f;\n\t\t\t\tvp.y *= 2.0f;\n\t\t\t\tvp.wi
 # eighth of the GPU submission thread. Granite now places them in its heaps, which it keeps.
 parallel_gs_replace("\timage_info.misc |= Vulkan::IMAGE_MISC_MUTABLE_SRGB_BIT;"
     "\timage_info.misc |= Vulkan::IMAGE_MISC_MUTABLE_SRGB_BIT | Vulkan::IMAGE_MISC_FORCE_NO_DEDICATED_BIT;")
+# Likewise the texture cache's images, which it keeps for reuse only at power-of-two sizes up to
+# 1024: the others came and went with allocations of their own, another 5% of that thread.
+parallel_gs_replace("\t\tinfo.misc |= Vulkan::IMAGE_MISC_CREATE_PER_MIP_LEVEL_VIEWS_BIT;"
+    "\t\tinfo.misc |= Vulkan::IMAGE_MISC_CREATE_PER_MIP_LEVEL_VIEWS_BIT | Vulkan::IMAGE_MISC_FORCE_NO_DEDICATED_BIT;")
 parallel_gs_use_patched(${patch_file} gs_renderer_patched.cpp)
 target_include_directories(parallel-gs PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/shaders")
