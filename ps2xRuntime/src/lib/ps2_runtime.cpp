@@ -26,6 +26,7 @@
 #include "runtime/run_marks.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/host_settings.h"
+#include "runtime/host_sleep.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -2943,7 +2944,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         if (serial == drawnSerial && !resized && now - lastDraw < std::chrono::milliseconds(menu ? 16 : 100))
         {
             PollInputEvents();
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            ps2x::sleepPrecisely(std::chrono::microseconds(500));
         }
         else
         {

@@ -304,7 +304,7 @@ void Sampler::report() {
     // offset means the address has no symbol of its own (inlined or folded code).
     std::vector<std::pair<uint64_t, uint32_t>> hot(perAddress.begin(), perAddress.end());
     std::sort(hot.begin(), hot.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-    for (size_t i = 0; symbols && i < std::min<size_t>(hot.size(), 20); ++i) {
+    for (size_t i = 0; symbols && i < std::min<size_t>(hot.size(), 30); ++i) {
         auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
         symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
         symbol->MaxNameLen = 511;
@@ -314,9 +314,16 @@ void Sampler::report() {
         line.SizeOfStruct = sizeof(line);
         DWORD lineDisplacement = 0;
         const bool lined = SymGetLineFromAddr64(process, hot[i].first, &lineDisplacement, &line) != FALSE;
-        std::printf("[profile] %7u  %s+0x%llx  %s:%lu\n", hot[i].second,named ? symbol->Name : "?",
-                    static_cast<unsigned long long>(displacement), lined ? line.FileName : "?",
-                    lined ? static_cast<unsigned long>(line.LineNumber) : 0ul);
+        // The module and offset in it: a system DLL without its PDB names its code after the
+        // nearest export, so this is what to look up with dumpbin /disasm.
+        IMAGEHLP_MODULE64 module{};
+        module.SizeOfStruct = sizeof(module);
+        const bool moduled = SymGetModuleInfo64(process, hot[i].first, &module) != FALSE;
+        std::printf("[profile] %7u  %s!%s+0x%llx (rva 0x%llx)  %s:%lu\n", hot[i].second,
+                    moduled ? module.ModuleName : "?", named ? symbol->Name : "?",
+                    static_cast<unsigned long long>(displacement),
+                    static_cast<unsigned long long>(moduled ? hot[i].first - module.BaseOfImage : 0u),
+                    lined ? line.FileName : "?", lined ? static_cast<unsigned long>(line.LineNumber) : 0ul);
     }
     // The hottest source lines, summed over every address that maps to them: this is
     // where inlined code (the compiled VU programs) shows up.

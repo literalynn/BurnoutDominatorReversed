@@ -424,6 +424,7 @@ add_library(ps2_runtime STATIC
     src/lib/settings_menu.cpp
     src/lib/post_filter.cpp
     src/lib/gs_worker.cpp
+    src/lib/host_sleep.cpp
     src/lib/ps2_vif1_interpreter.cpp
     src/lib/vu/ps2_vu1_core.cpp
     src/lib/vu/ps2_vu1_upper.cpp

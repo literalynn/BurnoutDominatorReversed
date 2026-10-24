@@ -10,6 +10,7 @@
 #include "runtime/ee_idle_loops.h"
 #include "runtime/ee_count.h"
 #include "runtime/vblank_rate.h"
+#include "runtime/host_sleep.h"
 
 #include <algorithm>
 #include <array>
@@ -24,6 +25,35 @@
 
 namespace
 {
+    // cv.wait_until that ends on time. On Windows a timed wait on a condition variable ends on a
+    // timer tick after a whole number of milliseconds, up to 2 ms past its deadline: a 3-HSync
+    // alarm (0.19 ms) lasted 1 to 2 ms, and at 165 VBlanks a second the VBlank waits ran a third
+    // of a frame late. Only a stop request wakes the scheduler before its deadline (every event
+    // is scheduled by the game thread itself), so the last 2 ms are slept without the condition
+    // variable.
+    template <class Predicate>
+    bool waitUntil(std::condition_variable &cv, std::unique_lock<std::mutex> &lock,
+                   std::chrono::steady_clock::time_point deadline, Predicate predicate)
+    {
+        constexpr auto kLastStretch = std::chrono::milliseconds(2);
+        for (;;)
+        {
+            if (predicate())
+                return true;
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline)
+                return false;
+            if (deadline - now > kLastStretch)
+            {
+                cv.wait_until(lock, deadline - kLastStretch, predicate);
+                continue;
+            }
+            lock.unlock();
+            ps2x::sleepPrecisely(deadline - now);
+            lock.lock();
+        }
+    }
+
     // BDR_WATCH_WORD=0xADDR[:0xVALUE]: after every dispatched guest function,
     // compare the guest word at ADDR (with VALUE: report when it becomes
     // VALUE; without: report every change) and print the functions that ran.
@@ -2200,9 +2230,9 @@ void EeScheduler::processDueDeadlines()
             if (!deterministicTiming() && !m_fastForward && now < pacingDeadline)
             {
                 ps2_wait_stats::Scope waitScope(ps2_wait_stats::Wait::EePacing);
-                m_eventCv.wait_until(lock, pacingDeadline, [this]()
-                                     { return !m_events.empty() ||
-                                              m_stopRequested.load(std::memory_order_acquire); });
+                waitUntil(m_eventCv, lock, pacingDeadline, [this]()
+                          { return !m_events.empty() ||
+                                   m_stopRequested.load(std::memory_order_acquire); });
                 m_waitedSinceVBlank += std::chrono::steady_clock::now() - now;
                 if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
                 {
@@ -2476,9 +2506,9 @@ void EeScheduler::waitForEvent()
     const auto waitStart = std::chrono::steady_clock::now();
     const bool signaled = skipHostWait
                               ? (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
-                              : m_eventCv.wait_until(lock, hostDeadline, [this]()
-                                                     { return !m_events.empty() ||
-                                                              m_stopRequested.load(std::memory_order_acquire); });
+                              : waitUntil(m_eventCv, lock, hostDeadline, [this]()
+                                          { return !m_events.empty() ||
+                                                   m_stopRequested.load(std::memory_order_acquire); });
     if (!skipHostWait)
         m_waitedSinceVBlank += std::chrono::steady_clock::now() - waitStart;
     if (!signaled)
