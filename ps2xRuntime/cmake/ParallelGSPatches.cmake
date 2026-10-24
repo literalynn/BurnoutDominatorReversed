@@ -71,5 +71,11 @@ parallel_gs_replace("\t\t\teffective_mode_width *= 2;\n\t\t\teffective_mode_heig
 parallel_gs_replace("int(high_resolution_scanout)" "(high_resolution_scanout ? scanout_scale_log2 : 0u)")
 parallel_gs_replace("\t\t\t\tvp.x *= 2.0f;\n\t\t\t\tvp.y *= 2.0f;\n\t\t\t\tvp.width *= 2.0f;\n\t\t\t\tvp.height *= 2.0f;"
     "\t\t\t\tvp.x *= float(1u << scanout_scale_log2);\n\t\t\t\tvp.y *= float(1u << scanout_scale_log2);\n\t\t\t\tvp.width *= float(1u << scanout_scale_log2);\n\t\t\t\tvp.height *= float(1u << scanout_scale_log2);")
+# The scan-out images (the circuits, the merged image, the deinterlaced one) are created at every
+# vsync. NVIDIA's driver prefers colour attachments in allocations of their own, so each one was a
+# vkAllocateMemory and a vkFreeMemory, 18 MiB at 4x resolution: at 240 frames a second about an
+# eighth of the GPU submission thread. Granite now places them in its heaps, which it keeps.
+parallel_gs_replace("\timage_info.misc |= Vulkan::IMAGE_MISC_MUTABLE_SRGB_BIT;"
+    "\timage_info.misc |= Vulkan::IMAGE_MISC_MUTABLE_SRGB_BIT | Vulkan::IMAGE_MISC_FORCE_NO_DEDICATED_BIT;")
 parallel_gs_use_patched(${patch_file} gs_renderer_patched.cpp)
 target_include_directories(parallel-gs PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/shaders")
