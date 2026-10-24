@@ -180,6 +180,9 @@ struct Block
 // FSOR), so the sticky conditions are not built either.
 inline constexpr uint32_t kFlagsUnseen = 1u;
 inline constexpr uint32_t kStatusUnseen = 2u;
+// Added to the generator's hints by Frame::pair from normalOperandsOf below.
+inline constexpr uint32_t kLeftNormal = 4u;
+inline constexpr uint32_t kRightNormal = 8u;
 
 // No compiled pair writes a VF or VI register with a longer latency.
 inline constexpr uint32_t kMaxWriteLatency = 4u;
@@ -341,6 +344,56 @@ constexpr bool upperPublishesFlags(uint32_t upper)
     return code != 0x2Fu && code != 0x30u;
 }
 
+// The fast FMAC path's VF operands that hold no denormal, infinity or NaN in
+// the lanes it reads, per pair of a block: kLeftNormal for fs, kRightNormal for
+// ft. Such an operand was written earlier in the block by an FMAC instruction,
+// ABS or ITOF, whose results never do, and skips the denormal flush. Registers
+// are unknown at the block's start, vf0 aside.
+template <const auto &Code>
+constexpr auto normalOperandsOf()
+{
+    constexpr size_t pairs = std::size(Code.words);
+    std::array<uint32_t, pairs> hints{};
+    uint8_t known[32] = {0xFu};
+    for (size_t index = 0u; index < pairs; ++index)
+    {
+        const uint32_t lower = static_cast<uint32_t>(Code.words[index]);
+        const uint32_t upper = static_cast<uint32_t>(Code.words[index] >> 32u);
+        const uint32_t code = upperCode(upper);
+        const bool special = (upper & 0x3Fu) >= 0x3Cu;
+        if (upperPublishesFlags(upper))
+        {
+            const uint8_t dest = static_cast<uint8_t>((upper >> 21u) & 15u);
+            const uint8_t fs = static_cast<uint8_t>((upper >> 11u) & 31u);
+            const uint8_t ft = static_cast<uint8_t>((upper >> 16u) & 31u);
+            // OPMSUB and OPMULA read x, y and z of both operands.
+            const uint8_t lanes = code == 0x2Eu ? 0xEu : dest;
+            const bool broadcast = code <= 0xFu || (code >= 0x18u && code <= 0x1Bu);
+            const bool scalar = code == 0x1Cu || code == 0x1Eu || (code >= 0x20u && code <= 0x27u); // Q or I
+            const uint8_t rightLanes = broadcast ? static_cast<uint8_t>(8u >> (code & 3u)) : lanes;
+            if ((known[fs] & lanes) == lanes)
+                hints[index] |= kLeftNormal;
+            if (!scalar && (known[ft] & rightLanes) == rightLanes)
+                hints[index] |= kRightNormal;
+        }
+        const Access::Decoded decoded = Access::decode(lower, upper);
+        const auto &upperWrite = decoded.upperUsage.vfWrite;
+        const auto &lowerWrite = decoded.lowerUsage.vfWrite;
+        const bool normalizing =
+            upperPublishesFlags(upper) || (special && ((code >= 0x10u && code <= 0x13u) || code == 0x1Du));
+        if (upperWrite.reg != 0u)
+            known[upperWrite.reg] = static_cast<uint8_t>(normalizing ? known[upperWrite.reg] | upperWrite.lanes
+                                                                     : known[upperWrite.reg] & ~upperWrite.lanes);
+        // A lower write to the register the upper half also writes is dropped.
+        if (lowerWrite.reg != 0u && lowerWrite.reg != upperWrite.reg)
+            known[lowerWrite.reg] = static_cast<uint8_t>(known[lowerWrite.reg] & ~lowerWrite.lanes);
+    }
+    return hints;
+}
+
+template <const auto &Code>
+inline constexpr auto kNormalOperands = normalOperandsOf<Code>();
+
 // Queued FMAC conditions use the MAC register's groups (Z, S, U, O), one bit
 // per lane, but with lane x in the low bit of each group, as the vector
 // movemasks produce them; reverseLanes gives the register's order (x high).
@@ -409,6 +462,16 @@ inline constexpr int kLanes = kReversed[Dest];
 PS2_VU_FORCE_INLINE int mask(__m128i lanes)
 {
     return _mm_movemask_ps(_mm_castsi128_ps(lanes));
+}
+
+// Whether every Dest lane is set. Movemask sets the low four bits only.
+template <uint8_t Dest>
+PS2_VU_FORCE_INLINE bool all(__m128i lanes)
+{
+    if constexpr (kLanes<Dest> == 15)
+        return mask(lanes) == 15;
+    else
+        return (mask(lanes) & kLanes<Dest>) == kLanes<Dest>;
 }
 
 // Lane masks in the queue's layout, movemask order, limited to the Dest lanes.
@@ -712,7 +775,7 @@ public:
     {
         constexpr uint64_t word = Code.words[Index];
         return issue<(Code.pc + Index * 8u) & 0x3FFFu, static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32u),
-                     settledReads<Code, Index>(), Hint>(nextPc);
+                     settledReads<Code, Index>(), Hint | kNormalOperands<Code>[Index]>(nextPc);
     }
 
     // Return to the driver, which continues with the routine at pc.
@@ -810,6 +873,17 @@ private:
 #endif
     }
 
+#if PS2_VU_PROGRAM_SSE
+    template <uint8_t Mask>
+    static PS2_VU_FORCE_INLINE void writeLanes(float *target, __m128 value)
+    {
+        if constexpr (Mask == 0xFu)
+            _mm_storeu_ps(target, value);
+        else if constexpr (Mask != 0u)
+            _mm_storeu_ps(target, _mm_blend_ps(_mm_loadu_ps(target), value, fast::kLanes<Mask>));
+    }
+#endif
+
     template <uint8_t Mask>
     static PS2_VU_FORCE_INLINE void setReady(uint32_t *lanes, uint32_t ready)
     {
@@ -872,16 +946,24 @@ private:
     template <uint32_t Pc, uint32_t Lower, uint32_t Upper>
     PS2_VU_FORCE_INLINE bool stale(uint32_t nextPc);
 
+    // An upper result. With SSE it stays in a register: an array is stored and read
+    // back on its way to the VF register or ACC, a delay in every dependent chain.
+#if PS2_VU_PROGRAM_SSE
+    using UpperValue = __m128;
+#else
+    using UpperValue = float[4];
+#endif
+
     template <uint32_t Upper, uint32_t Hint>
-    PS2_VU_FORCE_INLINE void upper(float *value);
+    PS2_VU_FORCE_INLINE void upper(UpperValue &value);
 
 #if PS2_VU_PROGRAM_NEON || PS2_VU_PROGRAM_SSE
     template <uint32_t Upper, uint32_t Hint>
-    PS2_VU_FORCE_INLINE bool fastUpper(float *value);
+    PS2_VU_FORCE_INLINE bool fastUpper(UpperValue &value);
 #endif
 
     template <uint32_t Upper>
-    PS2_VU_FORCE_INLINE uint32_t plainUpper(float *value);
+    PS2_VU_FORCE_INLINE uint32_t plainUpper(UpperValue &value);
 
     template <uint32_t Pc, uint32_t Lower>
     PS2_VU_FORCE_INLINE void lower(float *vfResult, int32_t &viResult);
@@ -1055,7 +1137,7 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
     constexpr uint8_t upperReg = decoded.upperUsage.vfWrite.reg;
     constexpr uint8_t upperLanes = decoded.upperUsage.vfWrite.lanes;
     constexpr uint8_t accLanes = decoded.upperUsage.accWrite;
-    float upperValue[4];
+    UpperValue upperValue;
     if constexpr (!upperIsNop(Upper))
     {
         if constexpr (upperReadsQ(Upper))
@@ -1098,9 +1180,9 @@ PS2_VU_FORCE_INLINE bool Frame::issue(uint32_t nextPc)
     {
 #if PS2_VU_PROGRAM_SSE
         if constexpr (accLanes == 0xFu)
-            m_acc = _mm_loadu_ps(upperValue);
+            m_acc = upperValue;
         else
-            m_acc = _mm_blend_ps(m_acc, _mm_loadu_ps(upperValue), fast::kLanes<accLanes>);
+            m_acc = _mm_blend_ps(m_acc, upperValue, fast::kLanes<accLanes>);
 #else
         writeLanes<accLanes>(m_state.acc, upperValue);
 #endif
@@ -1153,7 +1235,7 @@ PS2_VU_FORCE_INLINE bool Frame::stale(uint32_t nextPc)
 }
 
 template <uint32_t Upper, uint32_t Hint>
-PS2_VU_FORCE_INLINE void Frame::upper(float *value)
+PS2_VU_FORCE_INLINE void Frame::upper(UpperValue &value)
 {
     if constexpr (!upperPublishesFlags(Upper))
     {
@@ -1175,7 +1257,11 @@ PS2_VU_FORCE_INLINE void Frame::upper(float *value)
 #endif
         m_run.exactUpper(Upper);
         const UpperSink &exact = m_run.m_upper;
+#if PS2_VU_PROGRAM_SSE
+        value = _mm_loadu_ps(exact.value);
+#else
         std::memcpy(value, exact.value, sizeof(exact.value));
+#endif
         if (exact.hasFmac)
             pushFlags(3u, reverseLanes(exact.mac), spreadStatus(exact.sticky));
     }
@@ -1185,7 +1271,7 @@ PS2_VU_FORCE_INLINE void Frame::upper(float *value)
 // The upper instructions without FMAC flags, with computeUpper's operands and
 // comparisons. Returns CLIP's six bits.
 template <uint32_t Upper>
-PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
+PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(UpperValue &value)
 {
     constexpr uint32_t code = upperCode(Upper);
     constexpr bool special = (Upper & 0x3Fu) >= 0x3Cu;
@@ -1243,7 +1329,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
 #elif PS2_VU_PROGRAM_SSE
 // The same instructions in SSE2, with the results of computeUpper's arithmetic.
 template <uint32_t Upper>
-PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
+PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(UpperValue &value)
 {
     constexpr uint32_t code = upperCode(Upper);
     constexpr bool special = (Upper & 0x3Fu) >= 0x3Cu;
@@ -1258,7 +1344,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
         __m128 result = _mm_cvtepi32_ps(source);
         if constexpr (code != 0x10u)
             result = _mm_mul_ps(result, _mm_set1_ps(scale));
-        _mm_storeu_ps(value, result);
+        value = result;
     }
     else if constexpr (special && code >= 0x14u && code <= 0x17u) // FTOI0, FTOI4, FTOI12, FTOI15
     {
@@ -1271,7 +1357,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
         if constexpr (code != 0x14u)
             scaled = _mm_mul_ps(scaled, _mm_set1_ps(scale));
         const __m128i positiveOverflow = _mm_cmpgt_epi32(_mm_castps_si128(scaled), _mm_set1_epi32(0x4EFFFFFF));
-        _mm_storeu_si128(reinterpret_cast<__m128i *>(value), _mm_xor_si128(_mm_cvttps_epi32(scaled), positiveOverflow));
+        value = _mm_castsi128_ps(_mm_xor_si128(_mm_cvttps_epi32(scaled), positiveOverflow));
     }
     else if constexpr (special && code == 0x1Du) // ABS of normalizeOperand: a denormal gives 0, NaN and infinity FLT_MAX
     {
@@ -1279,7 +1365,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
         const __m128i normal = _mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x007FFFFF));
         const __m128i huge = _mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF));
         const __m128i result = _mm_or_si128(_mm_andnot_si128(huge, magnitude), _mm_and_si128(huge, _mm_set1_epi32(0x7F7FFFFF)));
-        _mm_storeu_si128(reinterpret_cast<__m128i *>(value), _mm_and_si128(result, normal));
+        value = _mm_castsi128_ps(_mm_and_si128(result, normal));
     }
     else if constexpr (special && code == 0x1Fu) // CLIP, on the raw bit patterns
     {
@@ -1312,8 +1398,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
         const __m128i larger = _mm_or_si128(_mm_and_si128(bothNegative, less), _mm_andnot_si128(bothNegative, greater));
         const __m128i smaller = _mm_or_si128(_mm_and_si128(bothNegative, greater), _mm_andnot_si128(bothNegative, less));
         const __m128i pickSource = max ? larger : smaller;
-        _mm_storeu_si128(reinterpret_cast<__m128i *>(value),
-                         _mm_or_si128(_mm_and_si128(pickSource, source), _mm_andnot_si128(pickSource, right)));
+        value = _mm_castsi128_ps(_mm_or_si128(_mm_and_si128(pickSource, source), _mm_andnot_si128(pickSource, right)));
     }
     return 0u;
 }
@@ -1321,7 +1406,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
 // The same instructions lane by lane, in computeUpper's arithmetic. Inlining
 // computeUpper itself cost more compile time than the rest of a routine.
 template <uint32_t Upper>
-PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
+PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(UpperValue &value)
 {
     using ps2_vu_detail::upper::normalizeOperand;
     constexpr uint32_t code = upperCode(Upper);
@@ -1395,7 +1480,7 @@ PS2_VU_FORCE_INLINE uint32_t Frame::plainUpper(float *value)
 // built straight into the MAC layout. Results the checks do not clear take
 // the exact path.
 template <uint32_t Upper, uint32_t Hint>
-PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
+PS2_VU_FORCE_INLINE bool Frame::fastUpper(UpperValue &value)
 {
     constexpr uint32_t code = upperCode(Upper);
     constexpr uint8_t dest = static_cast<uint8_t>((Upper >> 21u) & 15u);
@@ -1515,7 +1600,8 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
         using fast::flushDenormals;
         const __m128i magnitudeMask = _mm_set1_epi32(0x7FFFFFFF);
         const __m128i none = _mm_setzero_si128();
-        __m128 left = flushDenormals(_mm_loadu_ps(m_state.vf[fs]));
+        // Not flushed yet: the product path flushes with the exponents its checks need.
+        __m128 left = _mm_loadu_ps(m_state.vf[fs]);
         __m128 right;
         if constexpr (code <= 0xFu || (code >= 0x18u && code <= 0x1Bu))
             right = _mm_set1_ps(m_state.vf[ft][code & 3u]);
@@ -1525,17 +1611,20 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
             right = _mm_set1_ps(m_state.i);
         else
             right = _mm_loadu_ps(m_state.vf[ft]);
-        right = flushDenormals(right);
         if constexpr (cross)
         {
             left = _mm_shuffle_ps(left, left, _MM_SHUFFLE(3, 0, 2, 1));
             right = _mm_shuffle_ps(right, right, _MM_SHUFFLE(3, 1, 0, 2));
         }
-        const __m128i leftBits = _mm_castps_si128(left);
-        const __m128i rightBits = _mm_castps_si128(right);
 
         if constexpr (!productSum)
         {
+            if constexpr ((Hint & kLeftNormal) == 0u)
+                left = flushDenormals(left);
+            if constexpr ((Hint & kRightNormal) == 0u)
+                right = flushDenormals(right);
+            const __m128i leftBits = _mm_castps_si128(left);
+            const __m128i rightBits = _mm_castps_si128(right);
             __m128 result;
             if constexpr (simpleAdd)
                 result = _mm_add_ps(left, right);
@@ -1544,12 +1633,14 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
             else
                 result = _mm_mul_ps(left, right);
             const __m128i magnitude = _mm_and_si128(_mm_castps_si128(result), magnitudeMask);
-            const __m128i normal = _mm_and_si128(_mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x00800000)),
-                                                 _mm_cmplt_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF)));
-            if ((fast::mask(normal) & fast::kLanes<dest>) == fast::kLanes<dest>) [[likely]]
+            // FLT_MIN < magnitude < FLT_MAX in one compare: the bias carries FLT_MAX and
+            // above past INT32_MAX, where the signed compare sees them negative.
+            const __m128i normal = _mm_cmpgt_epi32(_mm_add_epi32(magnitude, _mm_set1_epi32(0x00800001)),
+                                                   _mm_set1_epi32(0x01000001));
+            if (fast::all<dest>(normal)) [[likely]]
             {
                 // Every result normal: no zero flag, and no exact zero to check.
-                _mm_storeu_ps(value, result);
+                value = result;
                 if constexpr (dest != 0u)
                     fmacFlags<Hint>(fast::layout<dest>(0, _mm_movemask_ps(result), 0), 0u);
                 return true;
@@ -1567,63 +1658,87 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(float *value)
             }
             const __m128i zero = _mm_cmpeq_epi32(magnitude, none);
             const __m128i safe = _mm_or_si128(normal, _mm_and_si128(zero, exactZero));
-            if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>) [[unlikely]]
+            if (!fast::all<dest>(safe)) [[unlikely]]
             {
                 // Without status readers no product condition is needed (VU1).
                 if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
                 {
                     constexpr auto kind = simpleAdd ? fast::Exact::Add : simpleSub ? fast::Exact::Subtract : fast::Exact::Multiply;
-                    const uint32_t conditions = fast::exactLanes<kind>(left, right, _mm_setzero_ps(), value);
+                    float exact[4];
+                    const uint32_t conditions = fast::exactLanes<kind>(left, right, _mm_setzero_ps(), exact);
+                    value = _mm_loadu_ps(exact);
                     fmacFlags<Hint>(conditions & (static_cast<uint32_t>(fast::kLanes<dest>) * 0x1111u), 0u);
                     return true;
                 }
                 else
                     return false;
             }
-            _mm_storeu_ps(value, result);
+            value = result;
             if constexpr (dest != 0u)
                 fmacFlags<Hint>(fast::layout<dest>(fast::mask(zero), _mm_movemask_ps(result), 0), 0u);
             return true;
         }
         else
         {
+            // A denormal has exponent 0, as a zero has: the exponents the checks
+            // need flush the operands as flushDenormals does.
+            const __m128i exponentMask = _mm_set1_epi32(0xFF);
+            const __m128i leftExponent = _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(left), 23), exponentMask);
+            const __m128i rightExponent = _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(right), 23), exponentMask);
+            const __m128i leftZero = _mm_cmpeq_epi32(leftExponent, none);
+            const __m128i rightZero = _mm_cmpeq_epi32(rightExponent, none);
+            if constexpr ((Hint & kLeftNormal) == 0u)
+                left = _mm_andnot_ps(_mm_castsi128_ps(_mm_and_si128(leftZero, magnitudeMask)), left);
+            if constexpr ((Hint & kRightNormal) == 0u)
+                right = _mm_andnot_ps(_mm_castsi128_ps(_mm_and_si128(rightZero, magnitudeMask)), right);
             const __m128 result = fast::productSum<subtract>(m_acc, left, right);
             const __m128i bits = _mm_castps_si128(result);
-            const __m128i exponentMask = _mm_set1_epi32(0xFF);
             const __m128i resultExponent = _mm_and_si128(_mm_srli_epi32(bits, 23), exponentMask);
-            const __m128i leftExponent = _mm_and_si128(_mm_srli_epi32(leftBits, 23), exponentMask);
-            const __m128i rightExponent = _mm_and_si128(_mm_srli_epi32(rightBits, 23), exponentMask);
             const __m128i productBound = _mm_add_epi32(leftExponent, rightExponent);
-            const __m128i zeroProduct =
-                _mm_or_si128(_mm_cmpeq_epi32(leftExponent, none), _mm_cmpeq_epi32(rightExponent, none));
-            // A nonzero product that may be infinite, or round by too much next to the result.
-            const __m128i risky = _mm_andnot_si128(
-                zeroProduct, _mm_or_si128(_mm_cmpgt_epi32(productBound, _mm_set1_epi32(379)),
-                                          _mm_cmpgt_epi32(productBound, _mm_add_epi32(resultExponent, _mm_set1_epi32(146)))));
-            const __m128i resultSafe = _mm_and_si128(_mm_cmpgt_epi32(resultExponent, _mm_set1_epi32(1)),
-                                                     _mm_cmplt_epi32(resultExponent, _mm_set1_epi32(254)));
-            const __m128i zero = _mm_cmpeq_epi32(_mm_and_si128(bits, magnitudeMask), none);
-            const __m128i safe = _mm_or_si128(_mm_andnot_si128(risky, resultSafe), _mm_and_si128(zero, zeroProduct));
-            if ((fast::mask(safe) & fast::kLanes<dest>) != fast::kLanes<dest>) [[unlikely]]
+            const __m128i zeroProduct = _mm_or_si128(leftZero, rightZero);
+            // Most lanes have a result exponent from 2 to 233 and a product exponent at
+            // most 146 above it (so at most 379): those pass the full check below and
+            // are not zero. One signed compare a bound, as in the simple path.
+            const __m128i quick = _mm_and_si128(
+                _mm_cmpgt_epi32(_mm_add_epi32(resultExponent, _mm_set1_epi32(0x7FFFFFFF - 233)),
+                                _mm_set1_epi32(0x7FFFFFFF - 232)),
+                _mm_cmplt_epi32(_mm_sub_epi32(productBound, resultExponent), _mm_set1_epi32(147)));
+            int zeroLanes = 0;
+            if (!fast::all<dest>(quick)) [[unlikely]]
             {
-                if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
+                // A product that may be infinite, or round by too much next to the result.
+                const __m128i far = _mm_or_si128(_mm_cmpgt_epi32(productBound, _mm_set1_epi32(379)),
+                                                 _mm_cmpgt_epi32(productBound, _mm_add_epi32(resultExponent, _mm_set1_epi32(146))));
+                const __m128i resultSafe = _mm_and_si128(_mm_cmpgt_epi32(resultExponent, _mm_set1_epi32(1)),
+                                                         _mm_cmplt_epi32(resultExponent, _mm_set1_epi32(254)));
+                // A zero product neither overflows nor rounds the result.
+                const __m128i risky = _mm_andnot_si128(zeroProduct, far);
+                const __m128i zero = _mm_cmpeq_epi32(_mm_and_si128(bits, magnitudeMask), none);
+                const __m128i safe = _mm_or_si128(_mm_andnot_si128(risky, resultSafe), _mm_and_si128(zero, zeroProduct));
+                if (!fast::all<dest>(safe)) [[unlikely]]
                 {
-                    constexpr auto kind = subtract ? fast::Exact::ProductSubtract : fast::Exact::ProductAdd;
-                    const uint32_t conditions = fast::exactLanes<kind>(left, right, m_acc, value);
-                    fmacFlags<Hint>(conditions & (static_cast<uint32_t>(fast::kLanes<dest>) * 0x1111u), 0u);
-                    return true;
+                    if constexpr (fast::kExactInDouble && (Hint & kStatusUnseen) != 0u)
+                    {
+                        constexpr auto kind = subtract ? fast::Exact::ProductSubtract : fast::Exact::ProductAdd;
+                        float exact[4];
+                        const uint32_t conditions = fast::exactLanes<kind>(left, right, m_acc, exact);
+                        value = _mm_loadu_ps(exact);
+                        fmacFlags<Hint>(conditions & (static_cast<uint32_t>(fast::kLanes<dest>) * 0x1111u), 0u);
+                        return true;
+                    }
+                    else
+                        return false;
                 }
-                else
-                    return false;
+                zeroLanes = fast::mask(zero);
             }
-            _mm_storeu_ps(value, result);
+            value = result;
             if constexpr (dest != 0u)
             {
                 const __m128i product = _mm_and_si128(_mm_castps_si128(_mm_mul_ps(left, right)), magnitudeMask);
                 const __m128i tiny = _mm_cmplt_epi32(product, _mm_set1_epi32(0x00800000));
                 const uint32_t conditions = fast::layout<dest>(fast::mask(tiny), _mm_movemask_ps(_mm_xor_ps(left, right)),
                                                                fast::mask(_mm_andnot_si128(zeroProduct, tiny)));
-                fmacFlags<Hint>(fast::layout<dest>(fast::mask(zero), _mm_movemask_ps(result), 0), conditions);
+                fmacFlags<Hint>(fast::layout<dest>(zeroLanes, _mm_movemask_ps(result), 0), conditions);
             }
             return true;
         }

@@ -271,15 +271,19 @@ void Sampler::report() {
     for (const uint64_t rip : samples)
         ++perAddress[rip];
 
+    // BDR_PROFILE_DUMP=FILE: every sampled address with its count, module, symbol and offset, to
+    // map the samples onto a compiler listing (/FAcs) where the PDB has no inlined lines.
+    const char* dumpPath = std::getenv("BDR_PROFILE_DUMP");
+    FILE* dump = dumpPath ? std::fopen(dumpPath, "w") : nullptr;
     std::map<std::string, uint32_t> perFunction;
     alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 512];
     for (const auto& [address, count] : perAddress) {
         std::string name;
+        DWORD64 displacement = 0;
         if (symbols) {
             auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
             symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
             symbol->MaxNameLen = 511;
-            DWORD64 displacement = 0;
             if (SymFromAddr(process, address, &displacement, symbol))
                 name = symbol->Name;
         }
@@ -289,7 +293,16 @@ void Sampler::report() {
             name = text;
         }
         perFunction[name] += count;
+        if (dump) {
+            IMAGEHLP_MODULE64 module{};
+            module.SizeOfStruct = sizeof(module);
+            const bool moduled = symbols && SymGetModuleInfo64(process, address, &module);
+            std::fprintf(dump, "%u\t%s\t%s\t0x%llx\n", count, moduled ? module.ModuleName : "?", name.c_str(),
+                         static_cast<unsigned long long>(displacement));
+        }
     }
+    if (dump)
+        std::fclose(dump);
 
     std::vector<std::pair<std::string, uint32_t>> ranked(perFunction.begin(), perFunction.end());
     std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
