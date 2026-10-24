@@ -2053,33 +2053,37 @@ void register_code_generator_tests()
                      "jalr fallback should not dispatch directly to tail-jump delay slot");
         });
 
-        tc.Run("VU random helpers emit line comments on separate lines", [](TestCase &t) {
+        tc.Run("VU0 macro random instructions use the 23-bit R LFSR", [](TestCase &t) {
             CodeGenerator gen({}, {});
 
             Instruction inst{};
             inst.rd = 7;
+            inst.rt = 3;
+            inst.vectorInfo.vectorField = 0x8; // x
             inst.vectorInfo.fsf = 2;
 
             std::string vrnext = gen.translateVU_VRNEXT(inst);
-            printGeneratedCode("VU random helpers emit line comments on separate lines - VRNEXT", vrnext);
-            t.IsTrue(vrnext.find("// Simple LFSR-based random number generation (PS2-like behavior)\n"
-                                 "    uint32_t feedback") != std::string::npos,
-                     "VRNEXT should place the generated line comment on its own line");
+            printGeneratedCode("VU0 macro random instructions - VRNEXT", vrnext);
+            t.IsTrue(vrnext.find("r = (((r << 1) ^ ((r >> 4) & 1u) ^ ((r >> 22) & 1u)) & 0x007FFFFFu) | 0x3F800000u;") != std::string::npos,
+                     "VRNEXT should step the LFSR with taps at bits 4 and 22 and keep a 1.x float");
+            t.IsTrue(vrnext.find("ctx->vu0_vf[3] = _mm_blendv_ps(ctx->vu0_vf[3], ctx->vu0_r, _mm_castsi128_ps(_mm_set_epi32(0, 0, 0, -1)));") != std::string::npos,
+                     "VRNEXT should write the new R to the destination fields of FT");
+
+            inst.rt = 0;
+            std::string discard = gen.translateVU_VRNEXT(inst);
+            t.IsTrue(discard.find("ctx->vu0_r =") != std::string::npos && discard.find("vu0_vf[0]") == std::string::npos,
+                     "VRNEXT vf0 should advance R without writing VF0");
 
             std::string vrinit = gen.translateVU_VRINIT(inst);
-            printGeneratedCode("VU random helpers emit line comments on separate lines - VRINIT", vrinit);
-            t.IsTrue(vrinit.find("// PS2 uses a specific LFSR initialization pattern\n"
-                                 "    if (seed == 0) seed = 1;") != std::string::npos,
-                     "VRINIT should place the generated line comment on its own line");
+            printGeneratedCode("VU0 macro random instructions - VRINIT", vrinit);
+            t.IsTrue(vrinit.find("_MM_SHUFFLE(0,0,0,2)") != std::string::npos &&
+                         vrinit.find("0x3F800000u | (bits & 0x007FFFFFu)") != std::string::npos,
+                     "VRINIT should keep the low 23 bits of FS.fsf under a 1.x exponent");
 
             std::string vrxor = gen.translateVU_VRXOR(inst);
-            printGeneratedCode("VU random helpers emit line comments on separate lines - VRXOR", vrxor);
-            t.IsTrue(vrxor.find("// XOR the current random value with the data from the VU vector register\n"
-                                "    __m128i xored") != std::string::npos,
-                     "VRXOR should keep the XOR comment on its own line");
-            t.IsTrue(vrxor.find("// Apply a simple mixing function similar to PS2's LFSR\n"
-                                "    __m128i mixed") != std::string::npos,
-                     "VRXOR should keep the LFSR comment on its own line");
+            printGeneratedCode("VU0 macro random instructions - VRXOR", vrxor);
+            t.IsTrue(vrxor.find("0x3F800000u | ((r ^ bits) & 0x007FFFFFu)") != std::string::npos,
+                     "VRXOR should XOR the low 23 bits of FS.fsf into R");
         });
 
         tc.Run("resolveStubTarget allows leading underscore alias", [](TestCase &t) {
