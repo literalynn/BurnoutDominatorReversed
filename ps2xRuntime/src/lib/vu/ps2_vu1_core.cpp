@@ -504,19 +504,26 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeGs = &gs;
     m_activeMemory = memory;
 
-    // The game thread already rounds toward zero (EeScheduler::run); setting MXCSR
-    // again at every VU0 call is not free. With MSVC on x86-64 floating point is SSE only
-    // (long double is double): its rounding field is set inline, without the C library's
-    // x87 round trip. Elsewhere long double is x87, which the exact paths use.
+    // VU rounding, toward zero, and on x86 denormal operands read as zero
+    // (PS2_VU_HOST_DAZ). The game thread already rounds toward zero (EeScheduler::run)
+    // but keeps denormals, so a VU0 call there sets MXCSR as well. With MSVC on x86-64
+    // floating point is SSE only (long double is double): MXCSR is set inline, without
+    // the C library's x87 round trip. Elsewhere long double is x87, which the exact paths use.
 #if defined(_MSC_VER) && defined(_M_X64)
+    constexpr unsigned vuCsrMask = _MM_ROUND_MASK | (PS2_VU_HOST_DAZ ? _MM_DENORMALS_ZERO_MASK : 0u);
+    constexpr unsigned vuCsr = _MM_ROUND_TOWARD_ZERO | (PS2_VU_HOST_DAZ ? _MM_DENORMALS_ZERO_ON : 0u);
     const unsigned previousCsr = _mm_getcsr();
-    const bool useVuRounding = (previousCsr & _MM_ROUND_MASK) != _MM_ROUND_TOWARD_ZERO;
+    const bool useVuRounding = (previousCsr & vuCsrMask) != vuCsr;
     if (useVuRounding)
-        _mm_setcsr((previousCsr & ~_MM_ROUND_MASK) | _MM_ROUND_TOWARD_ZERO);
+        _mm_setcsr((previousCsr & ~vuCsrMask) | vuCsr);
 #else
     const int previousRoundingMode = std::fegetround();
     const bool changeRounding = previousRoundingMode != FE_TOWARDZERO;
     const bool useVuRounding = changeRounding && std::fesetround(FE_TOWARDZERO) == 0;
+#if PS2_VU_HOST_DAZ
+    const unsigned previousDaz = _MM_GET_DENORMALS_ZERO_MODE();
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
 #endif
     const uint64_t budgetEnd = m_cycle + maxCycles;
     bool programEnded = false;
@@ -586,10 +593,13 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_state.cycles = m_cycle;
 #if defined(_MSC_VER) && defined(_M_X64)
     if (useVuRounding) // the exception flags raised meanwhile stay, as with fesetround
-        _mm_setcsr((_mm_getcsr() & ~_MM_ROUND_MASK) | (previousCsr & _MM_ROUND_MASK));
+        _mm_setcsr((_mm_getcsr() & ~vuCsrMask) | (previousCsr & vuCsrMask));
 #else
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
+#if PS2_VU_HOST_DAZ
+    _MM_SET_DENORMALS_ZERO_MODE(previousDaz);
+#endif
 #endif
     const uint64_t pairsAfter = m_compiledPairsExecuted + m_interpretedPairsExecuted;
     if (ps2_vu_detail::profileRegions)

@@ -41,6 +41,15 @@
 #define PS2_VU_PROGRAM_SSE 0
 #endif
 
+// On x86 VU1Interpreter::run sets the host's DAZ bit for the run: SSE arithmetic
+// then reads a denormal operand as a zero of its sign, as the VU and flushDenormals
+// do, and the SSE fast paths leave that to the host. sse2neon flushes results too.
+#if PS2_VU_PROGRAM_SSE && !defined(__aarch64__)
+#define PS2_VU_HOST_DAZ 1
+#else
+#define PS2_VU_HOST_DAZ 0
+#endif
+
 namespace ps2_vu_program
 {
 using Unit = VU1Interpreter::Unit;
@@ -1763,9 +1772,11 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(UpperValue &value)
 
         if constexpr (!productSum)
         {
-            if constexpr ((Hint & kLeftNormal) == 0u)
+            // Under the host's DAZ a denormal operand keeps its bits, which the zero
+            // checks below take for a non-zero value: its lanes go the exact way.
+            if constexpr (!PS2_VU_HOST_DAZ && (Hint & kLeftNormal) == 0u)
                 left = flushDenormals(left);
-            if constexpr ((Hint & kRightNormal) == 0u)
+            if constexpr (!PS2_VU_HOST_DAZ && (Hint & kRightNormal) == 0u)
                 right = flushDenormals(right);
             const __m128i leftBits = _mm_castps_si128(left);
             const __m128i rightBits = _mm_castps_si128(right);
@@ -1825,15 +1836,15 @@ PS2_VU_FORCE_INLINE bool Frame::fastUpper(UpperValue &value)
         else
         {
             // A denormal has exponent 0, as a zero has: the exponents the checks
-            // need flush the operands as flushDenormals does.
+            // need flush the operands as flushDenormals does, or the host's DAZ.
             const __m128i exponentMask = _mm_set1_epi32(0xFF);
             const __m128i leftExponent = _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(left), 23), exponentMask);
             const __m128i rightExponent = _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(right), 23), exponentMask);
             const __m128i leftZero = _mm_cmpeq_epi32(leftExponent, none);
             const __m128i rightZero = _mm_cmpeq_epi32(rightExponent, none);
-            if constexpr ((Hint & kLeftNormal) == 0u)
+            if constexpr (!PS2_VU_HOST_DAZ && (Hint & kLeftNormal) == 0u)
                 left = _mm_andnot_ps(_mm_castsi128_ps(_mm_and_si128(leftZero, magnitudeMask)), left);
-            if constexpr ((Hint & kRightNormal) == 0u)
+            if constexpr (!PS2_VU_HOST_DAZ && (Hint & kRightNormal) == 0u)
                 right = _mm_andnot_ps(_mm_castsi128_ps(_mm_and_si128(rightZero, magnitudeMask)), right);
             const __m128 result = fast::productSum<subtract>(m_acc, left, right);
             const __m128i bits = _mm_castps_si128(result);
