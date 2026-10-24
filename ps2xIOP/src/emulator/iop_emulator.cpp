@@ -29,6 +29,14 @@
 #include <sstream>
 #include <utility>
 
+// Cold paths that step() and schedulePendingDma() call: their string streams gave
+// both a large stack frame and a stack cookie, set up for every IOP instruction.
+#if defined(_MSC_VER)
+#define PS2X_IOP_COLD __declspec(noinline)
+#else
+#define PS2X_IOP_COLD __attribute__((noinline))
+#endif
+
 namespace ps2x::iop::detail
 {
     namespace
@@ -286,8 +294,12 @@ namespace ps2x::iop::detail
 
         void schedulePendingDma()
         {
-            if (!memory.dmaStartPending()) // after every instruction
-                return;
+            if (memory.dmaStartPending()) [[unlikely]] // after every instruction
+                startPendingDma();
+        }
+
+        PS2X_IOP_COLD void startPendingDma()
+        {
             if (const auto dma = memory.takeDmaStart())
             {
                 pendingDmaInterrupts[dma->irq] = totalCycles + dma->delayCycles;
@@ -576,53 +588,17 @@ namespace ps2x::iop::detail
                 return false;
             }
             if (physicalAddress(cpu.pc) >= kRamSize)
-            {
-                std::ostringstream out;
-                out << "[IOP] execution outside RAM pc=0x" << std::hex << cpu.pc;
-                log(LogLevel::Error, out.str());
-                cpu.stopped = true;
-                return false;
-            }
+                return stopOutsideRam(cpu);
             if (checkInterrupt(cpu))
                 return true;
-
             if (!tracedPcs.empty())
-            {
-                for (auto pending = tracedReturns.begin(); pending != tracedReturns.end(); ++pending)
-                {
-                    if (pending->returnAddress == cpu.pc && pending->stackPointer == cpu.gpr[29])
-                    {
-                        std::ostringstream out;
-                        out << "[iop-ret] cyc=" << totalCycles << " " << pending->name << " v0=0x" << std::hex << cpu.gpr[2];
-                        log(LogLevel::Info, out.str());
-                        tracedReturns.erase(pending);
-                        break;
-                    }
-                }
-                if (tracedPcs.count(cpu.pc) != 0u && traceCallCount < 4000u)
-                {
-                    ++traceCallCount;
-                    std::ostringstream out;
-                    out << "[iop-call] cyc=" << totalCycles << " " << symbolize(cpu.pc) << " a0=0x" << std::hex << cpu.gpr[4]
-                        << " a1=0x" << cpu.gpr[5] << " a2=0x" << cpu.gpr[6] << " a3=0x" << cpu.gpr[7] << " sp0=0x"
-                        << memory.read32(cpu.gpr[29] + 16u) << " ra=" << symbolize(cpu.gpr[31]);
-                    log(LogLevel::Info, out.str());
-                    if (tracedReturns.size() < 256u)
-                        tracedReturns.push_back({cpu.gpr[31], cpu.gpr[29], symbolize(cpu.pc)});
-                }
-            }
+                traceCallsAndReturns(cpu);
 
             // Import stubs start with jr $ra: other instructions skip the out-of-line decode.
-            if (const auto import = memory.read32(cpu.pc) == 0x03E00008u ? imports.decode(cpu.pc) : std::nullopt)
+            if (memory.read32(cpu.pc) == 0x03E00008u)
             {
-                const ImportDisposition disposition = dispatchImport(*import, cpu);
-                ++totalInstructions;
-                ++totalCycles;
-                if (disposition == ImportDisposition::JumpToGuest)
-                    return true;
-                cpu.pc = cpu.gpr[31];
-                cpu.branchPending = false;
-                return !cpu.stopped;
+                if (const std::optional<bool> running = stepImport(cpu))
+                    return *running;
             }
 
             const bool running = cpuCore.executeInstruction(cpu);
@@ -630,6 +606,57 @@ namespace ps2x::iop::detail
             ++totalInstructions;
             ++totalCycles;
             return running;
+        }
+
+        PS2X_IOP_COLD bool stopOutsideRam(CpuState &cpu)
+        {
+            std::ostringstream out;
+            out << "[IOP] execution outside RAM pc=0x" << std::hex << cpu.pc;
+            log(LogLevel::Error, out.str());
+            cpu.stopped = true;
+            return false;
+        }
+
+        PS2X_IOP_COLD void traceCallsAndReturns(CpuState &cpu)
+        {
+            for (auto pending = tracedReturns.begin(); pending != tracedReturns.end(); ++pending)
+            {
+                if (pending->returnAddress == cpu.pc && pending->stackPointer == cpu.gpr[29])
+                {
+                    std::ostringstream out;
+                    out << "[iop-ret] cyc=" << totalCycles << " " << pending->name << " v0=0x" << std::hex << cpu.gpr[2];
+                    log(LogLevel::Info, out.str());
+                    tracedReturns.erase(pending);
+                    break;
+                }
+            }
+            if (tracedPcs.count(cpu.pc) != 0u && traceCallCount < 4000u)
+            {
+                ++traceCallCount;
+                std::ostringstream out;
+                out << "[iop-call] cyc=" << totalCycles << " " << symbolize(cpu.pc) << " a0=0x" << std::hex << cpu.gpr[4]
+                    << " a1=0x" << cpu.gpr[5] << " a2=0x" << cpu.gpr[6] << " a3=0x" << cpu.gpr[7] << " sp0=0x"
+                    << memory.read32(cpu.gpr[29] + 16u) << " ra=" << symbolize(cpu.gpr[31]);
+                log(LogLevel::Info, out.str());
+                if (tracedReturns.size() < 256u)
+                    tracedReturns.push_back({cpu.gpr[31], cpu.gpr[29], symbolize(cpu.pc)});
+            }
+        }
+
+        // The step of a jr $ra that is an import stub, or nothing for any other jr $ra.
+        PS2X_IOP_COLD std::optional<bool> stepImport(CpuState &cpu)
+        {
+            const auto import = imports.decode(cpu.pc);
+            if (!import)
+                return std::nullopt;
+            const ImportDisposition disposition = dispatchImport(*import, cpu);
+            ++totalInstructions;
+            ++totalCycles;
+            if (disposition == ImportDisposition::JumpToGuest)
+                return true;
+            cpu.pc = cpu.gpr[31];
+            cpu.branchPending = false;
+            return !cpu.stopped;
         }
 
         uint32_t runCpu(CpuState &cpu, uint32_t instructionBudget)
