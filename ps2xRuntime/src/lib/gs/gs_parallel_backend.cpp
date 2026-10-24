@@ -212,6 +212,14 @@ namespace
             }
         }
 
+        static bool hasAddressData(uint64_t descriptors, unsigned nreg)
+        {
+            for (unsigned i = 0; i < nreg; ++i)
+                if (((descriptors >> (i * 4)) & 15) == 14)
+                    return true;
+            return false;
+        }
+
         // Follows transfer boundaries only; paraLLEl-GS alone executes the
         // commands. Starts from its saved state for the path, so packets split
         // across DMA calls are followed correctly.
@@ -235,19 +243,29 @@ namespace
                     state.loop += uint32_t(count);
                     offset += count * 16;
                 }
+                else if (const uint64_t descriptors = word(reinterpret_cast<const uint8_t *>(&state.tag) + 8);
+                         state.tag.FLG == 1 || !hasAddressData(descriptors, nreg))
+                {
+                    // Nothing to follow (vertex data, mostly): to the tag's end or the packet's at once.
+                    // REGLIST puts two registers in a quadword; an odd count leaves the last half unused.
+                    const uint64_t perQword = state.tag.FLG == 1 ? 2 : 1;
+                    const uint64_t left = uint64_t(state.tag.NLOOP - state.loop) * nreg - state.reg;
+                    const uint64_t quadwords = std::min<uint64_t>((left + perQword - 1) / perQword, (size - offset) / 16);
+                    const uint64_t at = uint64_t(state.loop) * nreg + state.reg + std::min(left, quadwords * perQword);
+                    state.loop = uint32_t(at / nreg);
+                    state.reg = uint32_t(at % nreg);
+                    offset += size_t(quadwords) * 16;
+                }
                 else
                 {
                     // Only packed A+D can address the transfer registers (>= 0x50).
-                    const uint64_t descriptors = word(reinterpret_cast<const uint8_t *>(&state.tag) + 8);
-                    if (state.tag.FLG == 0 && ((descriptors >> (state.reg * 4)) & 15) == 14)
+                    if (((descriptors >> (state.reg * 4)) & 15) == 14)
                         observeRegister(uint8_t(word(data + offset + 8) & 127), word(data + offset));
-                    unsigned count = state.tag.FLG == 0 ? 1 : 2;
-                    while (count-- && state.loop < state.tag.NLOOP)
-                        if (++state.reg == nreg)
-                        {
-                            state.reg = 0;
-                            ++state.loop;
-                        }
+                    if (++state.reg == nreg)
+                    {
+                        state.reg = 0;
+                        ++state.loop;
+                    }
                     offset += 16;
                 }
             }

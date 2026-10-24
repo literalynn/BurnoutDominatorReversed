@@ -1643,6 +1643,39 @@ void register_ps2_gs_tests()
                 green += frame2.pixels[i + 1] >= 0x70 && frame2.pixels[i] < 0x10 ? 1u : 0u;
             t.IsTrue(green > 0u, "the uploaded square appears in the scanout");
         });
+
+        tc.Run("paraLLEl-GS follows a transfer set up behind PACKED and REGLIST data", [](TestCase &t)
+        {
+            GSRegisters regs{};
+            std::unique_ptr<GSRasterBackend> backend;
+            try
+            {
+                backend = CreateParallelGSBackend(regs);
+            }
+            catch (const std::exception &)
+            {
+                return; // No Vulkan device on this machine.
+            }
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            backend->Initialize(vram.data(), static_cast<uint32_t>(vram.size()));
+            // The backend skips data without A+D whole: the transfer registers after it must
+            // still be found, also behind a REGLIST of odd length (half its last quadword unused).
+            const std::vector<uint64_t> packet = {
+                3ull | (2ull << 60), 0x51ull, // PACKED RGBAQ, XYZ2 (ADC: no drawing) x3
+                0x80ull, 0ull, 0ull, 1ull << 47, 0x80ull, 0ull, 0ull, 1ull << 47, 0x80ull, 0ull, 0ull, 1ull << 47,
+                3ull | (1ull << 58) | (1ull << 60), 0x1ull, // REGLIST RGBAQ x3
+                0x80ull, 0x80ull, 0x80ull, 0ull,
+                3ull | (1ull << 15) | (1ull << 60), 0xEull, // A+D x3, EOP
+                (1ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24), GS_REG_BITBLTBUF,
+                8ull | (4ull << 32), GS_REG_TRXREG,
+                1ull, GS_REG_TRXDIR, // local to host
+            };
+            backend->ProcessGIF(2, reinterpret_cast<const uint8_t *>(packet.data()), static_cast<uint32_t>(packet.size() * 8u));
+            const GSTransferSnapshot transfer = backend->GetTransferSnapshot();
+            t.Equals(transfer.direction, 1u, "TRXDIR found behind the data");
+            t.Equals(transfer.totalPixels, 32u, "TRXREG found: 8 x 4 pixels");
+            t.Equals(transfer.localToHostPendingBytes, size_t(128), "32 CT32 pixels to read back");
+        });
 #endif
 
         tc.Run("GS subtractive FIX blend over a filled sprite thresholds texels", [](TestCase &t)
