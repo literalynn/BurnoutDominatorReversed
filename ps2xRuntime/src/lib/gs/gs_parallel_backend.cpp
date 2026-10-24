@@ -115,7 +115,12 @@ namespace
                                                       Vulkan::CONTEXT_CREATION_ENABLE_DESCRIPTOR_BUFFER_BIT))
                 throw std::runtime_error("Vulkan instance or device initialization failed");
             device.set_context(context);
-            device.init_frame_contexts(4);
+            // paraLLEl-GS moves to the next frame context at every submission, and FINISH
+            // submits (on_finish) several times a frame: with 4 contexts the submission thread
+            // waited for the GPU in the middle of frames, 24% of its time at 16 samples a pixel
+            // and 144 frames a second. Present still keeps it within a frame of the GPU; 16 were
+            // no faster than 8 and kept 500 MiB more of released GPU memory alive.
+            device.init_frame_contexts(8);
         }
     };
 
