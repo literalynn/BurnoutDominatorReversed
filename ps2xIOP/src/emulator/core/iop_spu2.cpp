@@ -524,6 +524,12 @@ namespace ps2x::iop::detail
         voice.nextAddress = (address + 8u) & RamMask;
     }
 
+    // Inline in tickSample, its one caller, for every voice at every sample.
+#if defined(_MSC_VER)
+    __forceinline
+#else
+    inline __attribute__((always_inline))
+#endif
     void Spu2::stepEnvelope(Voice &voice) const
     {
         bool increase = false;
@@ -560,15 +566,17 @@ namespace ps2x::iop::detail
         }
 
         uint32_t cycles = 1u << std::max(0, shift - 11);
-        int32_t amount = step * (1 << std::max(0, 11 - shift));
         if (exponential && increase && voice.level > 0x6000)
             cycles *= 4u;
-        if (exponential && !increase)
-            amount = (amount * voice.level) >> 15;
         if (++voice.counter < cycles)
             return;
         voice.counter = 0u;
-        voice.level = std::clamp(voice.level + amount, 0, 0x7FFF);
+        int32_t amount = step * (1 << std::max(0, 11 - shift));
+        if (exponential && !increase)
+            amount = (amount * voice.level) >> 15;
+        // Not std::clamp, which returns a reference: MSVC put the bounds on the stack.
+        const int32_t level = voice.level + amount;
+        voice.level = level < 0 ? 0 : (level > 0x7FFF ? 0x7FFF : level);
 
         switch (voice.phase)
         {
@@ -626,18 +634,26 @@ namespace ps2x::iop::detail
                         continue;
                 }
 
-                // Four-point (Catmull-Rom) interpolation over the current sample and the
-                // three before it, like the hardware's four-tap filter.
-                const uint32_t current = std::min<uint32_t>(voice.position >> 12u, 27u);
-                const int16_t *taps = voice.samples.data() + current;
-                const float t = static_cast<float>(voice.position & 0xFFFu) * (1.0f / 4096.0f);
-                const float p0 = taps[0], p1 = taps[1], p2 = taps[2], p3 = taps[3];
-                const float interpolated =
-                    p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
-                // lround without its library call, whatever the thread's rounding mode (the
-                // EE thread rounds toward zero): the float plus a half is exact in double.
-                const double rounded = static_cast<double>(interpolated) + std::copysign(0.5, interpolated);
-                int32_t sample = clamp16(static_cast<int32_t>(rounded));
+                // In a race more than half of the voices play at zero volume on both sides: they
+                // add nothing to the mix, so their sample is neither computed nor mixed. Voices 1
+                // and 3 also feed the memory output buffers.
+                const bool heard = voice.volume[0].level != 0 || voice.volume[1].level != 0 || index == 1 || index == 3;
+                int32_t sample = 0;
+                if (heard)
+                {
+                    // Four-point (Catmull-Rom) interpolation over the current sample and the
+                    // three before it, like the hardware's four-tap filter.
+                    const uint32_t current = std::min<uint32_t>(voice.position >> 12u, 27u);
+                    const int16_t *taps = voice.samples.data() + current;
+                    const float t = static_cast<float>(voice.position & 0xFFFu) * (1.0f / 4096.0f);
+                    const float p0 = taps[0], p1 = taps[1], p2 = taps[2], p3 = taps[3];
+                    const float interpolated =
+                        p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
+                    // lround without its library call, whatever the thread's rounding mode (the
+                    // EE thread rounds toward zero): the float plus a half is exact in double.
+                    const double rounded = static_cast<double>(interpolated) + std::copysign(0.5, interpolated);
+                    sample = clamp16(static_cast<int32_t>(rounded));
+                }
 
                 stepEnvelope(voice);
                 if (voice.phase == Phase::Off)
@@ -645,14 +661,17 @@ namespace ps2x::iop::detail
                     stopVoice(core, index);
                     continue;
                 }
-                sample = (sample * voice.level) >> 15;
-                if (index == 1)
-                    voice1Output = sample;
-                else if (index == 3)
-                    voice3Output = sample;
-                for (int channel = 0; channel < 2; ++channel)
-                    if ((dryMask[channel] & (1u << index)) != 0u)
-                        voices[channel] += (sample * voice.volume[static_cast<size_t>(channel)].level) >> 15;
+                if (heard)
+                {
+                    sample = (sample * voice.level) >> 15;
+                    if (index == 1)
+                        voice1Output = sample;
+                    else if (index == 3)
+                        voice3Output = sample;
+                    for (int channel = 0; channel < 2; ++channel)
+                        if ((dryMask[channel] & (1u << index)) != 0u)
+                            voices[channel] += (sample * voice.volume[static_cast<size_t>(channel)].level) >> 15;
+                }
 
                 voice.position += std::min<uint32_t>(voice.pitch, 0x3FFFu);
                 while ((voice.position >> 12u) >= 28u)

@@ -2,6 +2,12 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Silent SPU2 voices skip their interpolation and mixing (October 25, 2026)
+
+- `ps2xIOP/src/emulator/core/iop_spu2.cpp`: in a race 35 voices play on average, and 57% of them are at zero volume on both sides: their sample reached the mix only multiplied by zero. `tickSample` no longer interpolates or mixes them; voices 1 and 3, which also feed the memory output buffers, always are. Their envelope, position, block fetches, ENDX and IRQ tests run as before.
+- `stepEnvelope` tests its counter before it computes the level step, clamps the level by value (`std::clamp` returns a reference, and MSVC served the bounds from the stack) and is forced inline in `tickSample`, its one caller. Nearly every voice of a race is in its sustain phase, where most samples only count.
+- Measured with a temporary cycle counter around `tickSample` over the six-car race (three or six runs per step): 1,782 TSC ticks per sample before, 1,575 with the skip, 1,442 with the envelope changes (-19%). In a 15-second game-thread profile the SPU2 functions take 494 samples against 567. A differential harness that runs both versions on random voices, envelopes, sweeps, loops, IRQ addresses and zero volumes gives the same output frames, ENDX, IRQ count and sound RAM over 14 runs, rounding toward zero and to nearest. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000. The SPU2 and IOP tests pass, and GCC 13 builds the file.
+
 ## The VU scheduler clears its register scoreboard in place (October 25, 2026)
 
 - `ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp`: `VU1Interpreter::resetScheduler` cleared the 1 KiB ready-cycle table of the float registers with `= {}`, which MSVC built as a zeroed copy on the stack and then copied into the member. It is now a `memset` of the member. The scheduler is reset twice for every VU0 microprogram call on the game thread, about 2,200 times per VBlank in a race. Game-thread profile over the six-car race: 11 samples in `resetScheduler` against 19. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000.
