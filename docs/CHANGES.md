@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Compiled VU runs test their VI results in vector registers (October 25, 2026)
+
+- `ps2xRuntime/src/lib/vu/ps2_vu1_program.cpp`: when a compiled VU run hands back to the interpreter, `Run::handBack` queues the VI results that have not landed yet. It tested the 15 ready cycles one at a time, reloading the run's cycle after each test, although nearly every hand-back has none pending. `anyLater`, which already tested the 128 VF lanes in four vector registers, now takes any multiple of 16 cycles and filters the VI loop the same way; when a cycle lands later, the loop runs as before. Over the six-car race, `handBack` takes 54 samples of the GS worker in a 15-second profile against 77, and 75 of the game thread against 110. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000.
+
 ## The guest call history is not thread_local (October 25, 2026)
 
 - `ps2xRuntime/src/lib/ps2_runtime.cpp`: `dispatchGuestBranch` records every call target in a 64-entry history that missing-function reports print. The history was `thread_local`, so every guest call went through the thread-local lookup, a chain of four dependent loads, and MSVC reloaded the ring index after storing the entry. Only the scheduler's executor thread runs guest code: the history is now a plain global, and the next index is computed before the store. `dispatchGuestBranch` takes 226 samples in a 15-second game-thread profile of the race, against 269. The GIF stream and the RDRAM are identical on the race run and the runtime tests pass.

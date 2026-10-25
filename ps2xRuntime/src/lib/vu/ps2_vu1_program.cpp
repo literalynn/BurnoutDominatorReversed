@@ -444,31 +444,33 @@ void Run::commitP(uint32_t cycle)
         }
 }
 
-// Whether a VF lane's result lands after `cycle`: most hand-backs have none.
-static bool anyLater(const std::array<std::array<uint32_t, 4>, 32> &ready, uint32_t cycle)
+// Whether one of `count` (a multiple of 16) result cycles lies after `cycle`: most
+// hand-backs have none, for VF lanes as for VI registers.
+static bool anyLater(const uint32_t *ready, size_t count, uint32_t cycle)
 {
 #if PS2_VU_PROGRAM_SSE
     // The latest cycle, in four registers so that the steps do not wait on each other: all
     // still hold `cycle` when no lane lands later.
     const __m128i now = _mm_set1_epi32(static_cast<int32_t>(cycle));
-    const auto lanes = [&ready](size_t reg) { return _mm_loadu_si128(reinterpret_cast<const __m128i *>(ready[reg].data())); };
+    const auto lanes = [ready](size_t index) { return _mm_loadu_si128(reinterpret_cast<const __m128i *>(ready + index)); };
     __m128i a = now, b = now, c = now, d = now;
-    for (size_t reg = 0; reg < ready.size(); reg += 4u)
+    for (size_t index = 0; index < count; index += 16u)
     {
-        a = _mm_max_epu32(a, lanes(reg));
-        b = _mm_max_epu32(b, lanes(reg + 1u));
-        c = _mm_max_epu32(c, lanes(reg + 2u));
-        d = _mm_max_epu32(d, lanes(reg + 3u));
+        a = _mm_max_epu32(a, lanes(index));
+        b = _mm_max_epu32(b, lanes(index + 4u));
+        c = _mm_max_epu32(c, lanes(index + 8u));
+        d = _mm_max_epu32(d, lanes(index + 12u));
     }
     const __m128i latest = _mm_max_epu32(_mm_max_epu32(a, b), _mm_max_epu32(c, d));
     return _mm_movemask_epi8(_mm_cmpeq_epi32(latest, now)) != 0xFFFF;
 #elif PS2_VU_PROGRAM_NEON
     uint32x4_t latest = vdupq_n_u32(0u);
-    for (const auto &lanes : ready)
-        latest = vmaxq_u32(latest, vld1q_u32(lanes.data()));
+    for (size_t index = 0; index < count; index += 4u)
+        latest = vmaxq_u32(latest, vld1q_u32(ready + index));
     return vmaxvq_u32(latest) > cycle;
 #else
     (void)ready;
+    (void)count;
     (void)cycle;
     return true;
 #endif
@@ -492,7 +494,7 @@ void Run::handBack()
                           fmac ? statusOf(entry.cum) : 0u, (entry.writes & 8u) != 0u ? entry.value : 0u,
                           static_cast<uint8_t>(entry.writes));
     }
-    for (uint8_t reg = anyLater(m_vfReady, m_cycle) ? 1u : 32u; reg < 32u; ++reg)
+    for (uint8_t reg = anyLater(m_vfReady[0].data(), 128u, m_cycle) ? 1u : 32u; reg < 32u; ++reg)
     {
         // Lanes written by one pair share a result cycle and an entry.
         uint8_t done = 0u;
@@ -509,7 +511,7 @@ void Run::handBack()
             Access::pendVf(m_vu, reg, lanes, m_base + ready);
         }
     }
-    for (uint8_t reg = 1u; reg < 16u; ++reg)
+    for (uint8_t reg = anyLater(m_viReady.data(), 16u, m_cycle) ? 1u : 16u; reg < 16u; ++reg)
         if (m_viReady[reg] > m_cycle)
             Access::pendVi(m_vu, reg, m_base + m_viReady[reg]);
     Access::finish(m_vu, m_base + m_cycle, m_workingClip, static_cast<uint8_t>(m_backupReg), m_backupValue,
