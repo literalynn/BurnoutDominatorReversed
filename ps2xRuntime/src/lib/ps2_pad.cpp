@@ -59,6 +59,8 @@ namespace
             // through XInput instead of raw input.
             SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
             SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
+            // SDL would turn SIGINT and SIGTERM into an SDL_QUIT event that nothing reads.
+            SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
             SDL_SetMainReady();
             if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0)
             {

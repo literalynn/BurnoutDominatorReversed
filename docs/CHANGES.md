@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Ctrl+C and SIGTERM stop the game again after the first pad read (October 25, 2026)
+
+- `ps2_pad.cpp`: `SDL_Init(SDL_INIT_GAMECONTROLLER)` starts SDL's event subsystem, which replaces default SIGINT and SIGTERM handlers with its own and turns both signals into an `SDL_QUIT` event. Nothing reads SDL's events (the window is GLFW's), so from the first pad read on, which initializes SDL whether or not a gamepad is connected, Ctrl+C in the terminal and `kill` no longer stopped the game, and Steam's "Stop" waited for its SIGKILL timeout. The pad now sets `SDL_HINT_NO_SIGNAL_HANDLERS` before `SDL_Init`, and the signals keep their default action. Checked on Linux: `raise(SIGTERM)` after `SDL_Init` ends the process with the hint and not without it. The same SDL code installs the SIGINT handler on Windows, where Ctrl+C in the console should stop the game again as well; this was not run on Windows.
+
 ## Gamepads switched on after the start are found with SDL 3 (October 25, 2026)
 
 - `ps2_pad.cpp`: with SDL 3, which is the SDL2 of Arch and Fedora among others through `sdl2-compat`, a gamepad switched on after the game had started was never opened. SDL 3 reads udev's hotplug events only in `SDL_PumpEvents`, and the thread that reads the pad called `SDL_GameControllerUpdate` alone, since the window is GLFW's and nothing ran SDL's event loop. That thread now pumps SDL's events before the update and empties the queue, which nothing reads. With SDL2 itself, pumping without SDL video runs the same joystick update, which the explicit call then repeats. Checked with SDL 3.4.18 through sdl2-compat 2.32.74: a uinput gamepad created after `SDL_Init` was found within 3.2 s and its removal noticed; in the game, a Steam Controller switched on at the start screen was opened, and found again after being switched off and on.
