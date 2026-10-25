@@ -1053,16 +1053,31 @@ private:
         return (static_cast<uint32_t>(qword) * 16u) & m_dataMask;
     }
 
-    template <uint8_t Dest>
-    PS2_VU_FORCE_INLINE void store(uint32_t addr, const uint32_t *words)
+    // Words: four words in memory, or with SSE a vector.
+    template <uint8_t Dest, class Words>
+    PS2_VU_FORCE_INLINE void store(uint32_t addr, Words words)
     {
         // PATH1 copies what it has to read so far first, and plans again after.
         const bool ahead = m_kickActive && m_run.kickReads(addr);
         if (ahead) [[unlikely]]
             m_kickActive = m_run.advanceKick(m_cycle, m_state.pc);
-        writeLanes<Dest>(m_data + addr, words);
+        writeLanes<Dest>(reinterpret_cast<float *>(m_data + addr), words);
         if (ahead && m_kickActive) [[unlikely]]
             m_run.scheduleKick();
+    }
+
+    // ISW and ISWR: the 16-bit value in every selected lane. With SSE the vector is made in
+    // a register: MSVC blended in four words just stored apart on the stack, a load that
+    // waited for those stores.
+    template <uint8_t Dest>
+    PS2_VU_FORCE_INLINE void storeInteger(uint32_t addr, uint32_t value)
+    {
+#if PS2_VU_PROGRAM_SSE
+        store<Dest>(addr, _mm_castsi128_ps(_mm_set1_epi32(static_cast<int32_t>(value))));
+#else
+        const uint32_t words[4] = {value, value, value, value};
+        store<Dest>(addr, words);
+#endif
     }
 
     template <uint8_t Dest, uint8_t Reg>
@@ -1929,11 +1944,7 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
         viResult = static_cast<int16_t>(value & 0xFFFFu);
     }
     else if constexpr (opcode == 0x05u) // ISW
-    {
-        const uint32_t value = static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF);
-        const uint32_t words[4] = {value, value, value, value};
-        store<dest>(address(m_state.vi[viS] + imm11), words);
-    }
+        storeInteger<dest>(address(m_state.vi[viS] + imm11), static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF));
     else if constexpr (opcode == 0x08u || opcode == 0x09u) // IADDIU, ISUBIU
     {
         constexpr int32_t imm15 = static_cast<int16_t>((Lower & 0x7FFu) | ((Lower >> 10u) & 0x7800u));
@@ -2156,11 +2167,8 @@ PS2_VU_FORCE_INLINE void Frame::lower(float *vfResult, int32_t &viResult)
             viResult = static_cast<int16_t>(value & 0xFFFFu);
         }
         else if constexpr (special == 0x3Fu) // ISWR
-        {
-            const uint32_t value = static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF);
-            const uint32_t words[4] = {value, value, value, value};
-            store<dest>(address(static_cast<uint16_t>(m_state.vi[viS])), words);
-        }
+            storeInteger<dest>(address(static_cast<uint16_t>(m_state.vi[viS])),
+                               static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF));
         else if constexpr (special == 0x64u) // MFP
         {
             commitP();
