@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The HUD smoothing patch compiles with GCC (October 25, 2026)
+
+- `cmake/ParallelGSPatches.cmake` (`gs_interface.cpp`): the HUD smoothing patch reads `bdr_smooth_ui_sprites` in the template member `GSInterface::drawing_kick_append`, about 1,700 lines before the patch defines it next to `set_hacks`. The name does not depend on the template's parameters, so GCC and Clang look it up where the template is defined and stop (GCC 16: `'bdr_smooth_ui_sprites' was not declared in this scope [-Wtemplate-body]`); MSVC, where the patch was written and tested, accepts it. The patched code now declares it `extern` in the block that reads it, and the Linux game builds with `PS2X_GS_BACKEND=PARALLEL_GS` again. CI builds the CPU rasterizer only, so it did not see this.
+
 ## VIF1 reads runs of NOPs at once and unpacks strided streams without block counters (October 25, 2026)
 
 - `ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp`: a race VBlank gives VIF1 about 25,000 codes, 45% of them padding NOPs. Each one went through the PATH3 window test, two trace tests that each loaded the VSync counter, and the command chain. A run of NOPs is now read in one go: it leaves CODE and NUM at zero and gives an open PATH3 unmask window one qword per NOP, as before. With `BDR_TRACE_VIF1` set, NOPs still go one at a time so that each is printed; the trace window is tested once per call.
