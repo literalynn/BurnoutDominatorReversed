@@ -601,13 +601,14 @@ namespace ps2x::iop::detail
                 traceCallsAndReturns(cpu);
 
             // Import stubs start with jr $ra: other instructions skip the out-of-line decode.
-            if (memory.read32(cpu.pc) == 0x03E00008u)
+            const uint32_t instruction = memory.read32(cpu.pc);
+            if (instruction == 0x03E00008u)
             {
                 if (const std::optional<bool> running = stepImport(cpu))
                     return *running;
             }
 
-            const bool running = cpuCore.executeInstruction(cpu);
+            const bool running = cpuCore.executeInstruction(cpu, instruction);
             schedulePendingDma();
             ++totalInstructions;
             ++totalCycles;

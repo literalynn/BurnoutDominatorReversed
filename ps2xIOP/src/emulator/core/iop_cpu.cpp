@@ -52,10 +52,18 @@ namespace ps2x::iop::detail
         cpu.exception = true;
     }
 
-    bool IopCpuCore::executeInstruction(IopCpuState &cpu)
+    namespace
+    {
+        // ADD, ADDI and SUB trap instead of writing a result outside 32 bits.
+        constexpr bool overflows(int64_t result)
+        {
+            return result > std::numeric_limits<int32_t>::max() || result < std::numeric_limits<int32_t>::min();
+        }
+    }
+
+    bool IopCpuCore::executeInstruction(IopCpuState &cpu, uint32_t instruction)
     {
         const uint32_t pc = cpu.pc;
-        const uint32_t instruction = m_memory.read32(pc);
         const bool wasDelaySlot = cpu.branchPending;
         const uint32_t priorBranchTarget = cpu.branchTarget;
 
@@ -95,22 +103,6 @@ namespace ps2x::iop::detail
         auto load = [&](uint32_t reg, uint32_t value)
         {
             scheduleLoad(reg, value, scheduledLoad, scheduledReg, scheduledValue);
-        };
-        auto overflowAdd = [&](int32_t lhs, int32_t rhs, uint32_t reg)
-        {
-            const int64_t result = static_cast<int64_t>(lhs) + rhs;
-            if (result > std::numeric_limits<int32_t>::max() || result < std::numeric_limits<int32_t>::min())
-                raiseException(cpu, 12u, pc, wasDelaySlot);
-            else
-                write(reg, static_cast<uint32_t>(static_cast<int32_t>(result)));
-        };
-        auto overflowSub = [&](int32_t lhs, int32_t rhs, uint32_t reg)
-        {
-            const int64_t result = static_cast<int64_t>(lhs) - rhs;
-            if (result > std::numeric_limits<int32_t>::max() || result < std::numeric_limits<int32_t>::min())
-                raiseException(cpu, 12u, pc, wasDelaySlot);
-            else
-                write(reg, static_cast<uint32_t>(static_cast<int32_t>(result)));
         };
 
         // TODO kill this magic number and make it a constant somewhere
@@ -212,14 +204,26 @@ namespace ps2x::iop::detail
                 }
                 break;
             case 0x20:
-                overflowAdd(static_cast<int32_t>(cpu.gpr[rs]), static_cast<int32_t>(cpu.gpr[rt]), rd);
+            {
+                const int64_t result = static_cast<int64_t>(static_cast<int32_t>(cpu.gpr[rs])) + static_cast<int32_t>(cpu.gpr[rt]);
+                if (overflows(result))
+                    raiseException(cpu, 12u, pc, wasDelaySlot);
+                else
+                    write(rd, static_cast<uint32_t>(result));
                 break;
+            }
             case 0x21:
                 write(rd, cpu.gpr[rs] + cpu.gpr[rt]);
                 break;
             case 0x22:
-                overflowSub(static_cast<int32_t>(cpu.gpr[rs]), static_cast<int32_t>(cpu.gpr[rt]), rd);
+            {
+                const int64_t result = static_cast<int64_t>(static_cast<int32_t>(cpu.gpr[rs])) - static_cast<int32_t>(cpu.gpr[rt]);
+                if (overflows(result))
+                    raiseException(cpu, 12u, pc, wasDelaySlot);
+                else
+                    write(rd, static_cast<uint32_t>(result));
                 break;
+            }
             case 0x23:
                 write(rd, cpu.gpr[rs] - cpu.gpr[rt]);
                 break;
@@ -290,8 +294,14 @@ namespace ps2x::iop::detail
             branch(static_cast<int32_t>(cpu.gpr[rs]) > 0);
             break;
         case 0x08:
-            overflowAdd(static_cast<int32_t>(cpu.gpr[rs]), simm, rt);
+        {
+            const int64_t result = static_cast<int64_t>(static_cast<int32_t>(cpu.gpr[rs])) + simm;
+            if (overflows(result))
+                raiseException(cpu, 12u, pc, wasDelaySlot);
+            else
+                write(rt, static_cast<uint32_t>(result));
             break;
+        }
         case 0x09:
             write(rt, cpu.gpr[rs] + static_cast<uint32_t>(simm));
             break;

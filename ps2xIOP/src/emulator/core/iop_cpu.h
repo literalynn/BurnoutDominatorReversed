@@ -30,7 +30,8 @@ namespace ps2x::iop::detail
     public:
         explicit IopCpuCore(IopMemory &memory) noexcept;
 
-        [[nodiscard]] bool executeInstruction(IopCpuState &cpu);
+        // `instruction` is the word at cpu.pc, which the caller has already read.
+        [[nodiscard]] bool executeInstruction(IopCpuState &cpu, uint32_t instruction);
         void raiseException(IopCpuState &cpu, uint32_t code, uint32_t faultPc, bool delaySlot, std::optional<uint32_t> badAddress = std::nullopt) const;
 
     private:

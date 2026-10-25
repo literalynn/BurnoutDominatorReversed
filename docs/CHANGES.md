@@ -2,6 +2,12 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The IOP interpreter keeps its step in registers and reads each instruction once (October 25, 2026)
+
+- `ps2xIOP/src/emulator/core/iop_cpu.cpp`, `iop_cpu.h`: ADD, ADDI and SUB went through two lambdas that MSVC did not inline. Their closures captured the other lambdas by reference, so every instruction built closure objects on the stack and kept the step's locals (the written register, the scheduled load, the new branch) in memory, with a 0xA8-byte frame. The overflow test is now a plain function and the three cases write their result themselves; the frame is 0x58 bytes and the locals stay in registers. `executeInstruction` takes the instruction word from its caller.
+- `ps2xIOP/src/emulator/iop_emulator.cpp`: `step` already reads the word at the PC to recognize import stubs (`jr $ra`); it now passes that word on instead of letting the interpreter read it again.
+- Game-thread profile over the six-car race: `executeInstruction` 87 samples against 126, the IOP 20.0% of the busy samples against 21.9%. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000.
+
 ## VIF unpacks of 32-bit V1/V2 and in offset mode take the fast path; VU routine entry and exit cost less (October 25, 2026)
 
 - `ps2_vif1_interpreter.cpp`: counted over the six-car race, 12% of the vectors VIF1 unpacks went through the general per-element loop (a division and a mask test for every vector and field): Burnout's V3-8 in offset mode (26 million vectors, STMOD 1 adds ROW to every element) and V2-32 (5.6 million). The per-format loop for 16- and 8-bit data now also takes 32-bit elements and the offset mode: ROW is added to the four lanes after the format's own steps, as the general loop does (a V3's w lane included, read from the next element or kept). Masked unpacks, the difference mode, mode 3 and CL < WL keep the general loop. New test: V3-8 in offset mode.
