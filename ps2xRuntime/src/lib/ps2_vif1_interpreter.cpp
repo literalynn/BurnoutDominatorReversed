@@ -57,14 +57,24 @@ namespace
             else
                 return ZeroExtend ? *source : static_cast<uint32_t>(static_cast<int8_t>(*source));
         };
+        // Write `writeIndex` goes to block writeIndex / WL, row writeIndex % WL. With WL 1 (every
+        // CL-th qword) or CL = WL (consecutive qwords), most streams, that is one step a write.
+        const bool stepped = wl == 1u || cl == wl;
+        const uint32_t step = wl == 1u ? cl : 1u;
         uint32_t blockStart = vuAddr, cycleRow = 0u;
         for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
         {
-            uint8_t *destination = vuData + ((blockStart + cycleRow) & qwordMask) * 16u;
-            if (++cycleRow == wl)
+            uint8_t *destination;
+            if (stepped)
+                destination = vuData + ((vuAddr + writeIndex * step) & qwordMask) * 16u;
+            else
             {
-                cycleRow = 0u;
-                blockStart += cl;
+                destination = vuData + ((blockStart + cycleRow) & qwordMask) * 16u;
+                if (++cycleRow == wl)
+                {
+                    cycleRow = 0u;
+                    blockStart += cl;
+                }
             }
             const uint8_t *srcVec = srcBase + writeIndex * bytesPerVector;
             uint32_t lanes[4];
@@ -176,6 +186,15 @@ namespace
         if (vuData && totalBytes > 0 && pos + totalBytes <= sizeBytes)
         {
             const uint8_t *srcBase = data + pos;
+            // V4-32 into every CL-th qword (WL 1) or consecutive ones (CL = WL): the vertex
+            // positions. The general loop below spent more on its block counters than on the copy.
+            if (vl == 0u && vn == 3u && !maskEnable && (regs.mode & 3u) == 0u && (wl == 1u || cl == wl))
+            {
+                const uint32_t step = wl == 1u ? cl : 1u;
+                for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+                    std::memcpy(vuData + ((vuAddr + writeIndex * step) & qwordMask) * 16u, srcBase + writeIndex * 16u, 16u);
+                return totalBytes;
+            }
             // V4-32 and V3-32 without mask or mode, the vertex streams: every write
             // has its source vector (CL >= WL), copied whole. A V3's w takes the
             // source word after z, or keeps its value when the data ends there.
@@ -648,6 +667,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
     }();
     static const int traceDataLevel = std::getenv("BDR_TRACE_VIF1_DATA") ? std::atoi(std::getenv("BDR_TRACE_VIF1_DATA")) : 0;
     static const bool traceData = traceDataLevel != 0;
+    const bool tracing = traceWindow.first <= traceWindow.second;
 
     while (pos + 4 <= sizeBytes)
     {
@@ -682,6 +702,27 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         memcpy(&cmd, data + pos, 4);
         pos += 4;
 
+        // About half the codes of a race frame are padding NOPs. A run of them leaves CODE and
+        // NUM at zero and gives a PATH3 unmask window one qword each, as one at a time would.
+        if (cmd == 0u && !tracing)
+        {
+            uint32_t nops = 1u;
+            while (pos + 4u <= sizeBytes)
+            {
+                uint32_t next;
+                std::memcpy(&next, data + pos, sizeof(next));
+                if (next != 0u)
+                    break;
+                pos += 4u;
+                ++nops;
+            }
+            if (m_path3Window && !m_path3Masked)
+                m_path3WindowBudget += nops;
+            vif1_regs.code = 0u;
+            vif1_regs.num = 0u;
+            continue;
+        }
+
         uint8_t opcode = (cmd >> 24) & 0x7F;
         uint16_t imm = cmd & 0xFFFF;
         uint8_t num = (cmd >> 16) & 0xFF;
@@ -698,16 +739,15 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 releasePath3Window();
         }
 
-        if (const uint64_t tick = gs_regs.vsyncTick.load(std::memory_order_relaxed);
-            tick >= traceWindow.first && tick <= traceWindow.second)
+        const uint64_t tick = tracing ? gs_regs.vsyncTick.load(std::memory_order_relaxed) : 0u;
+        if (tracing && tick >= traceWindow.first && tick <= traceWindow.second)
             std::printf("[vif1] v=%llu pos=0x%x/0x%x cmd=%08x op=%02x num=%u imm=%04x tops=%03x itops=%03x base=%03x ofst=%03x dbf=%u cycle=%04x mode=%u\n",
                         static_cast<unsigned long long>(tick), pos - 4u, sizeBytes, cmd, opcode, num, imm,
                         vif1_regs.tops & 0x3FFu, vif1_regs.itops & 0x3FFu, vif1_regs.base & 0x3FFu, vif1_regs.ofst & 0x3FFu,
                         (vif1_regs.stat >> 7) & 1u, vif1_regs.cycle & 0xFFFFu, vif1_regs.mode & 3u);
         // BDR_TRACE_VIF1_DATA=1: also the first qword of short (1 to 5 qword) V4-32 UNPACKs, the microcode's parameters;
         // =2: the first 16 bytes of every UNPACK.
-        if (const uint64_t tick = gs_regs.vsyncTick.load(std::memory_order_relaxed);
-            traceData && tick >= traceWindow.first && tick <= traceWindow.second && pos + 16u <= sizeBytes &&
+        if (tracing && traceData && tick >= traceWindow.first && tick <= traceWindow.second && pos + 16u <= sizeBytes &&
             (traceDataLevel >= 2 ? (opcode & 0x60u) == 0x60u : ((opcode & 0x6Fu) == 0x6Cu && num >= 1u && num <= 5u)))
         {
             uint32_t words[4];
@@ -916,7 +956,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if ((opcode & 0x60) == 0x60)
         {
             const uint32_t totalBytes = unpackToVu(vif1_regs, m_vu1Data, 0x3FFu, true, data, sizeBytes, pos,
-                                                   opcode, imm, num, traceWindow.first <= traceWindow.second);
+                                                   opcode, imm, num, tracing);
             pos += totalBytes;
 
             if (pos > sizeBytes)
