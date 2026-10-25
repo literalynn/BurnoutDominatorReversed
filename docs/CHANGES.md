@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Generated code writes a register's low half with one store (October 25, 2026)
+
+- `ps2_runtime_macros.h`: `SET_GPR_U32`, `SET_GPR_S32`, `SET_GPR_ZE32` and `SET_GPR_U64`, used by almost every guest instruction, merged their 64-bit result into the 128-bit register: a load of the register, a blend and a 128-bit store, so each write waited for the register's previous one. `Ps2SetGprLow64` now takes the 64-bit value and stores only that, leaving the upper half as before. Game-thread profile over the six-car race: guest code took 812 of 2,390 busy samples, now 679, and the executable shrinks from 94.6 MB to 82.0 MB. With the three changes below, over 1,500 VBlanks of the race, alternating five runs against the executable before them: game thread CPU medians 5.34 s before, 4.95 s after. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000.
+
 ## LQ and SQ to the scratchpad take one call (October 25, 2026)
 
 - `ps2_runtime_macros.h`: a guest 128-bit load or store outside plain RAM goes out of line to `Ps2SlowRead128` or `Ps2SlowWrite128`. These called `PS2Runtime::Load128` or `Store128`, which serve aligned scratchpad quadwords in place; Burnout moves most of its per-object data through the scratchpad. The first function now serves the scratchpad itself, with the same test, and sends the rest to the runtime as before. Game-thread profile over the six-car race: `Load128` and `Store128` took 37 of 2,390 busy samples, now 1.

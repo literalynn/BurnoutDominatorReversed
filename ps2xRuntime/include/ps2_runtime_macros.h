@@ -709,12 +709,12 @@ inline __m128i ps2_qfsrv(__m128i rs, __m128i rt, uint32_t sa)
 #define GPR_S64(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0LL : PS2_EXTRACT_EPI64_0(ctx_ptr->r[reg_idx]))
 #define GPR_VEC(ctx_ptr, reg_idx) ((reg_idx == 0) ? _mm_setzero_si128() : ctx_ptr->r[reg_idx])
 
-static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
+// Writes a GPR's low 64 bits and keeps its upper half with a 64-bit store. Merging into the
+// whole register (load, blend, store) made each write wait for the register's previous one.
+static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, int64_t value)
 {
     if (reg != 0)
-    {
-        ctx->r[reg] = _mm_castpd_si128(_mm_move_sd(_mm_castsi128_pd(ctx->r[reg]), _mm_castsi128_pd(new_low)));
-    }
+        std::memcpy(&ctx->r[reg], &value, sizeof(value));
 }
 
 #define SET_GPR_U32(ctx_ptr, reg_idx, val)                                \
@@ -722,7 +722,7 @@ static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
     {                                                                     \
         if ((reg_idx) != 0)                                               \
         {                                                                 \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(int32_t)(val)); \
+            const int64_t _newVal = (int64_t)(int32_t)(val);              \
                                                                           \
             Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);                    \
         }                                                                 \
@@ -734,7 +734,7 @@ static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
     {                                                                     \
         if ((reg_idx) != 0)                                               \
         {                                                                 \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(uint32_t)(val)); \
+            const int64_t _newVal = (int64_t)(uint32_t)(val);             \
             Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);                    \
         }                                                                 \
     } while (0)
@@ -744,7 +744,7 @@ static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
     {                                                                     \
         if ((reg_idx) != 0)                                               \
         {                                                                 \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(int32_t)(val)); \
+            const int64_t _newVal = (int64_t)(int32_t)(val);              \
             Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);                    \
         }                                                                 \
     } while (0)
@@ -754,7 +754,7 @@ static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
     {                                                            \
         if ((reg_idx) != 0)                                      \
         {                                                        \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(val)); \
+            const int64_t _newVal = (int64_t)(val);              \
             Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);           \
         }                                                        \
     } while (0)
