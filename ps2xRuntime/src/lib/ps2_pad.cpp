@@ -72,7 +72,11 @@ namespace
         SDL_GameController *&controller = g_controller;
         if (!ready)
             return false;
+        // SDL 3, also through sdl2-compat, polls udev for hotplug only in the event pump. Nothing
+        // reads the queue: the window is GLFW's.
+        SDL_PumpEvents();
         SDL_GameControllerUpdate();
+        SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
         if (controller && !SDL_GameControllerGetAttached(controller))
         {
             std::cerr << "[pad] gamepad disconnected" << std::endl;

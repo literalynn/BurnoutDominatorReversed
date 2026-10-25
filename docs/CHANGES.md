@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Gamepads switched on after the start are found with SDL 3 (October 25, 2026)
+
+- `ps2_pad.cpp`: with SDL 3, which is the SDL2 of Arch and Fedora among others through `sdl2-compat`, a gamepad switched on after the game had started was never opened. SDL 3 reads udev's hotplug events only in `SDL_PumpEvents`, and the thread that reads the pad called `SDL_GameControllerUpdate` alone, since the window is GLFW's and nothing ran SDL's event loop. That thread now pumps SDL's events before the update and empties the queue, which nothing reads. With SDL2 itself, pumping without SDL video runs the same joystick update, which the explicit call then repeats. Checked with SDL 3.4.18 through sdl2-compat 2.32.74: a uinput gamepad created after `SDL_Init` was found within 3.2 s and its removal noticed; in the game, a Steam Controller switched on at the start screen was opened, and found again after being switched off and on.
+
 ## VIF1 reads runs of NOPs at once and unpacks strided streams without block counters (October 25, 2026)
 
 - `ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp`: a race VBlank gives VIF1 about 25,000 codes, 45% of them padding NOPs. Each one went through the PATH3 window test, two trace tests that each loaded the VSync counter, and the command chain. A run of NOPs is now read in one go: it leaves CODE and NUM at zero and gives an open PATH3 unmask window one qword per NOP, as before. With `BDR_TRACE_VIF1` set, NOPs still go one at a time so that each is printed; the trace window is tested once per call.
