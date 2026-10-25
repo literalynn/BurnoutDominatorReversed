@@ -30,13 +30,13 @@ namespace ps2x::iop::detail
     public:
         explicit IopCpuCore(IopMemory &memory) noexcept;
 
-        // `instruction` is the word at cpu.pc, which the caller has already read.
-        [[nodiscard]] bool executeInstruction(IopCpuState &cpu, uint32_t instruction);
+        // `instruction` is the word at cpu.pc, which the caller has already read. Defined in iop_cpu_execute.h.
+        [[nodiscard]] inline bool executeInstruction(IopCpuState &cpu, uint32_t instruction);
         void raiseException(IopCpuState &cpu, uint32_t code, uint32_t faultPc, bool delaySlot, std::optional<uint32_t> badAddress = std::nullopt) const;
 
     private:
-        static void writeRegister(IopCpuState &cpu, uint32_t reg, uint32_t value, uint32_t &writtenReg);
-        static void scheduleLoad(uint32_t reg, uint32_t value, bool &scheduled, uint32_t &scheduledReg, uint32_t &scheduledValue);
+        static inline void writeRegister(IopCpuState &cpu, uint32_t reg, uint32_t value, uint32_t &writtenReg);
+        static inline void scheduleLoad(uint32_t reg, uint32_t value, bool &scheduled, uint32_t &scheduledReg, uint32_t &scheduledValue);
 
         IopMemory &m_memory;
     };

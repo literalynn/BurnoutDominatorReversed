@@ -1,7 +1,7 @@
 #include "iop_emulator.h"
 #include "ps2x/state_archive.h"
 #include "imports/iop_cdvd.h"
-#include "core/iop_cpu.h"
+#include "core/iop_cpu_execute.h"
 #include "imports/iop_heaplib.h"
 #include "imports/iop_imports.h"
 #include "imports/iop_intrman.h"
@@ -363,7 +363,7 @@ namespace ps2x::iop::detail
             host.log(level, text);
         }
 
-        bool checkInterrupt(CpuState &cpu)
+        PS2X_IOP_FORCEINLINE bool checkInterrupt(CpuState &cpu)
         {
             const uint32_t status = cpu.cop0[12];
             if ((status & 1u) == 0u)
@@ -584,7 +584,7 @@ namespace ps2x::iop::detail
             return ImportDisposition::Missing;
         }
 
-        bool step(CpuState &cpu)
+        PS2X_IOP_FORCEINLINE bool step(CpuState &cpu)
         {
             if (cpu.stopped)
                 return false;
@@ -609,8 +609,10 @@ namespace ps2x::iop::detail
             }
 
             const bool running = cpuCore.executeInstruction(cpu, instruction);
-            schedulePendingDma();
+            // Apart: MSVC added the two counters as one 16-byte vector, and the loads of
+            // totalCycles that follow waited for its store.
             ++totalInstructions;
+            schedulePendingDma();
             ++totalCycles;
             return running;
         }
