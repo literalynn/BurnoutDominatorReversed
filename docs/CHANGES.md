@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## SPU2 samples are clamped without std::clamp (October 25, 2026)
+
+- `core/iop_spu2.cpp`: `clamp16`, run for every interpolated voice sample, called `std::clamp`, whose reference result made MSVC keep the bounds in memory and select an address. It now compares values, and `decodeAdpcm` uses it instead of its own `std::clamp`. Over a randomized run of 48 voices (3.4 million output frames, rounding toward zero and to nearest), the output, ENDX, IRQ count and sound RAM hash the same as before and the run takes 8% less time. Interpolating all voices in a separate branch-free pass was slower than this change alone.
+
 ## The IOP scheduler walks its threads in a vector (October 25, 2026)
 
 - `core/iop_kernel.h`, `core/iop_kernel.cpp`: `beginNextReady` runs at every pass of the IOP loop, about 3,100 times a VBlank in a race, and nearly always finds no thread ready. It walked the `std::map` of threads, a pointer chase per node. It now walks a vector of pointers to the map's nodes, rebuilt after any insertion or removal (a map node keeps its address until it is erased). It picks the same thread, the lowest priority then id among the ready ones, in whatever order it walks them. Game-thread profile over the six-car race: `beginNextReady` took 67 of 2,390 busy samples, now 18.

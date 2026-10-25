@@ -23,9 +23,10 @@ namespace ps2x::iop::detail
             return (current & 0xF0000u) | value;
         }
 
+        // std::clamp returns a reference: MSVC kept the bounds in memory and selected an address.
         int32_t clamp16(int32_t value) noexcept
         {
-            return std::clamp(value, -32768, 32767);
+            return value < -32768 ? -32768 : (value > 32767 ? 32767 : value);
         }
 
         // Save states of format version 2 hold the cores in this layout.
@@ -482,7 +483,7 @@ namespace ps2x::iop::detail
             const int nibble = (i & 1) != 0 ? (byte >> 4) & 0xF : byte & 0xF;
             int32_t sample = static_cast<int16_t>(static_cast<uint16_t>(nibble << 12)) >> shift;
             sample += (history1 * coefficient0 + history2 * coefficient1 + 32) >> 6;
-            sample = std::clamp(sample, -32768, 32767);
+            sample = clamp16(sample);
             samples[i] = static_cast<int16_t>(sample);
             history2 = history1;
             history1 = sample;
