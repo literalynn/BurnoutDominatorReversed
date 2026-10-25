@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The EE checkpoint runs without a stack frame when nothing is due (October 25, 2026)
+
+- `Kernel/EeScheduler.cpp`, `runtime/ee_scheduler.h`: `checkpointDue` runs at every backward branch and guest dispatch. Its full path calls other functions when something is due, so MSVC gave it a stack frame and saved registers at every call. It now tests first whether nothing is due (no device batch to flush, no timer interrupt, no deadline or end of time slice reached, no pending checkpoint or stop, the running thread cached when COP0 Count runs) and then only charges the cycles, as the full path would, without a call: a leaf function without a frame. Any other checkpoint goes through the former function, renamed `checkpointDueSlow`, from its start. Game-thread profile over the six-car race: the two functions took 75 of 2,084 busy samples, against 92 of 2,109 for `checkpointDue` before. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000.
+
 ## Debug switches are read at start-up (October 25, 2026)
 
 - `Kernel/EeScheduler.cpp`: `BDR_WATCH_WORD` and `BDR_DISPATCH_HISTORY` were read into function-local statics, tested at every guest dispatch: each test was a call and a thread-safe initialization check. They are now constants initialized at start-up, as `BDR_EE_CYCLE_SCALE` already was; nothing sets the environment later. Game-thread profile over the six-car race: the two functions took 7 and 7 of 2,126 busy samples, now none.

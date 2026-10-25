@@ -699,6 +699,36 @@ void EeScheduler::flushDeviceCycles() noexcept
 
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 {
+    // Nearly always nothing is due and the whole path below only charges the cycles. That
+    // case is tested first and done here without a call, so this function needs no stack
+    // frame; anything else goes through the whole path, from its start.
+    if (g_eeCycleScalePercent == 100u)
+    {
+        const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
+        const uint64_t cycle = m_eeCycle + elapsed;
+        const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
+        if (m_deviceCycleDebt + elapsed < kDeviceBatchCycles && m_pendingEeTimerInterrupts == 0u &&
+            cycle < m_sliceEndCycle && (nextEventCycle == 0u || cycle < nextEventCycle) &&
+            (!g_countRuns || (m_currentThreadId != 0 && m_currentThreadId == m_cachedThreadId)) &&
+            !m_checkpointPending.load(std::memory_order_acquire) && !m_stopRequested.load(std::memory_order_acquire))
+        {
+            m_eeCycle = cycle;
+            if (g_countRuns) // a cached id always has its thread
+                m_cachedThread->activeContext().cop0_count = static_cast<uint32_t>(cycle + g_countLagCycles);
+            m_deviceCycleDebt += elapsed;
+            return false;
+        }
+    }
+    return checkpointDueSlow(cycles);
+}
+
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+bool EeScheduler::checkpointDueSlow(uint32_t cycles) noexcept
+{
     const uint32_t percent = g_eeCycleScalePercent;
     chargeCycles(percent == 100u ? cycles : std::max<uint32_t>(1u, static_cast<uint32_t>((static_cast<uint64_t>(cycles) * percent) / 100u)));
 

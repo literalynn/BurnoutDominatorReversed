@@ -415,6 +415,8 @@ private:
     // accountCycles' work, inlined into checkpointDue (reached about 80,000 times a VBlank).
     void chargeCycles(uint32_t cycles) noexcept;
     void flushDeviceCycles() noexcept;
+    // checkpointDue's whole work, for the checkpoints where something is due.
+    [[nodiscard]] bool checkpointDueSlow(uint32_t cycles) noexcept;
     [[nodiscard]] static bool hasGeneratedFunction(uint32_t address) noexcept;
     void copyMainContextToRuntime();
     void publishDebugContext(const R5900Context &context);
