@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The IOP scheduler walks its threads in a vector (October 25, 2026)
+
+- `core/iop_kernel.h`, `core/iop_kernel.cpp`: `beginNextReady` runs at every pass of the IOP loop, about 3,100 times a VBlank in a race, and nearly always finds no thread ready. It walked the `std::map` of threads, a pointer chase per node. It now walks a vector of pointers to the map's nodes, rebuilt after any insertion or removal (a map node keeps its address until it is erased). It picks the same thread, the lowest priority then id among the ready ones, in whatever order it walks them. Game-thread profile over the six-car race: `beginNextReady` took 67 of 2,390 busy samples, now 18.
+
 ## The IOP interpreter steps without a stack cookie (October 25, 2026)
 
 - `iop_emulator.cpp`: `step()` and `schedulePendingDma()`, called for every IOP instruction (about 33,000 a VBlank in a race), held their trace and error paths inline. Their string streams gave both functions a large frame (0x190 and 0x170 bytes, seven or eight saved registers) and a stack cookie, set up and checked at every call, and kept `step()` out of line. Those paths are now separate functions that are never inlined (`stopOutsideRam`, `traceCallsAndReturns`, `stepImport` for the `jr $ra` that may be an import stub, `startPendingDma`); the per-instruction path keeps the same tests in the same order and now inlines into `runCpu`. Over 1,500 VBlanks of the six-car race, alternating runs against the executable before this change and the previous one: game thread CPU medians 5.84 s before both, 5.45 s after both (wall unchanged, the headless run waits on GPU readbacks). The GIF stream is identical over the 12.3 million packets of the shorter run, and the RDRAM at VSync 18,000 differs only in words that also vary between runs of one executable.

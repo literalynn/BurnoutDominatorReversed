@@ -136,6 +136,11 @@ namespace ps2x::iop::detail
 
         IopMemory &m_memory;
         std::map<int, IopThread> m_threads;
+        // m_threads' nodes for beginNextReady, which runs at every pass of the IOP loop
+        // (thousands a VBlank): walking the tree cost more than the threads' tests.
+        // Rebuilt after any insertion or removal; nodes keep their address until erased.
+        std::vector<IopThread *> m_threadOrder;
+        bool m_threadOrderStale = true;
         std::vector<uint32_t> m_freeCallStacks;
         bool m_deadThreadPending = false; // a thread entered the Dead state since the last cleanup
         std::map<int, Semaphore> m_semaphores;

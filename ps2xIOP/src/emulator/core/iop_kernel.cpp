@@ -206,6 +206,7 @@ namespace ps2x::iop::detail
     void IopKernel::reset()
     {
         m_threads.clear();
+        m_threadOrderStale = true;
         m_freeCallStacks.clear();
         m_semaphores.clear();
         m_eventFlags.clear();
@@ -243,6 +244,7 @@ namespace ps2x::iop::detail
             }
             const int id = thread.id;
             m_threads.emplace(id, std::move(thread));
+            m_threadOrderStale = true;
             setV0(id);
             return true;
         }
@@ -258,6 +260,7 @@ namespace ps2x::iop::detail
             if (it->second.stackBase != 0u)
                 (void)m_memory.freeAllocation(it->second.stackBase);
             m_threads.erase(it);
+            m_threadOrderStale = true;
             setV0(0);
             return true;
         }
@@ -857,9 +860,17 @@ namespace ps2x::iop::detail
 
     IopThread *IopKernel::beginNextReady(uint64_t currentCycle, uint64_t &nextWake)
     {
-        IopThread *next = nullptr;
-        for (auto &[id, thread] : m_threads)
+        if (m_threadOrderStale)
         {
+            m_threadOrder.clear();
+            for (auto &[id, thread] : m_threads)
+                m_threadOrder.push_back(&thread);
+            m_threadOrderStale = false;
+        }
+        IopThread *next = nullptr;
+        for (IopThread *const node : m_threadOrder)
+        {
+            IopThread &thread = *node;
             if (thread.state == IopThreadState::Delay)
             {
                 if (thread.wakeCycle > currentCycle)
@@ -918,6 +929,7 @@ namespace ps2x::iop::detail
         thread.cpu.gpr[31] = returnAddress;
         thread.state = IopThreadState::Ready;
         const int id = thread.id;
+        m_threadOrderStale = true;
         return &m_threads.emplace(id, std::move(thread)).first->second;
     }
 
@@ -936,6 +948,7 @@ namespace ps2x::iop::detail
             m_currentThread = nullptr;
         if (m_memory.freeAllocation(it->second.stackBase))
             m_freeCallStacks.push_back(it->second.stackBase);
+        m_threadOrderStale = true;
         m_threads.erase(it);
     }
 
@@ -954,6 +967,7 @@ namespace ps2x::iop::detail
             if (thread->second.stackBase != 0u)
                 (void)m_memory.freeAllocation(thread->second.stackBase);
             thread = m_threads.erase(thread);
+            m_threadOrderStale = true;
         }
     }
 
@@ -977,6 +991,7 @@ namespace ps2x::iop::detail
     {
         archive.tag("IKRN");
         archive.podMap(m_threads);
+        m_threadOrderStale = true;
         archive.vector(m_freeCallStacks);
         archive.value(m_deadThreadPending);
         archive.podMap(m_semaphores);
