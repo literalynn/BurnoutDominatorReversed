@@ -63,16 +63,17 @@ void forgetRoutines()
     g_epoch.fetch_add(1u, std::memory_order_relaxed);
 }
 
-Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation, Unit unit)
+namespace
 {
-    // Microcode changes far less often than routines are entered, so each
-    // answer stands until the code generation moves on.
-    thread_local std::array<CacheSlot, 2048> cache{};
-    CacheSlot &slot = cache[(pc / 8u) & 2047u];
-    const uint64_t epoch = g_epoch.load(std::memory_order_relaxed);
-    if (slot.valid && slot.code == code && slot.generation == generation && slot.epoch == epoch)
-        return slot.run;
-
+// find's search, apart so that a cache hit needs no stack frame.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+Routine search(CacheSlot &slot, const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation,
+               uint64_t epoch, Unit unit)
+{
     Routine routine = nullptr;
     const Entry *const begin = std::begin(kEntries);
     const Entry *const end = std::end(kEntries) - 1;
@@ -88,6 +89,19 @@ Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t gener
     }
     slot = {code, generation, epoch, routine, true};
     return routine;
+}
+}
+
+Routine find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation, Unit unit)
+{
+    // Microcode changes far less often than routines are entered, so each
+    // answer stands until the code generation moves on.
+    thread_local std::array<CacheSlot, 2048> cache{};
+    CacheSlot &slot = cache[(pc / 8u) & 2047u];
+    const uint64_t epoch = g_epoch.load(std::memory_order_relaxed);
+    if (slot.valid && slot.code == code && slot.generation == generation && slot.epoch == epoch)
+        return slot.run;
+    return search(slot, code, codeSize, pc, generation, epoch, unit);
 }
 
 namespace
@@ -434,13 +448,20 @@ void Run::commitP(uint32_t cycle)
 static bool anyLater(const std::array<std::array<uint32_t, 4>, 32> &ready, uint32_t cycle)
 {
 #if PS2_VU_PROGRAM_SSE
-    const __m128i bias = _mm_set1_epi32(INT32_MIN); // unsigned order through signed compares
-    const __m128i now = _mm_xor_si128(_mm_set1_epi32(static_cast<int32_t>(cycle)), bias);
-    __m128i later = _mm_setzero_si128();
-    for (const auto &lanes : ready)
-        later = _mm_or_si128(later, _mm_cmpgt_epi32(
-            _mm_xor_si128(_mm_loadu_si128(reinterpret_cast<const __m128i *>(lanes.data())), bias), now));
-    return _mm_movemask_epi8(later) != 0;
+    // The latest cycle, in four registers so that the steps do not wait on each other: all
+    // still hold `cycle` when no lane lands later.
+    const __m128i now = _mm_set1_epi32(static_cast<int32_t>(cycle));
+    const auto lanes = [&ready](size_t reg) { return _mm_loadu_si128(reinterpret_cast<const __m128i *>(ready[reg].data())); };
+    __m128i a = now, b = now, c = now, d = now;
+    for (size_t reg = 0; reg < ready.size(); reg += 4u)
+    {
+        a = _mm_max_epu32(a, lanes(reg));
+        b = _mm_max_epu32(b, lanes(reg + 1u));
+        c = _mm_max_epu32(c, lanes(reg + 2u));
+        d = _mm_max_epu32(d, lanes(reg + 3u));
+    }
+    const __m128i latest = _mm_max_epu32(_mm_max_epu32(a, b), _mm_max_epu32(c, d));
+    return _mm_movemask_epi8(_mm_cmpeq_epi32(latest, now)) != 0xFFFF;
 #elif PS2_VU_PROGRAM_NEON
     uint32x4_t latest = vdupq_n_u32(0u);
     for (const auto &lanes : ready)

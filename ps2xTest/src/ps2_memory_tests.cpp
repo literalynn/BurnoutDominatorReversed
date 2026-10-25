@@ -740,6 +740,32 @@ void register_ps2_memory_tests()
             t.IsTrue(mem.vif1_regs.row[0] == 7u && mem.vif1_regs.row[3] == 10u, "mode 3 should store the data in ROW");
         });
 
+        tc.Run("VIF UNPACK V3-8 in offset mode adds ROW to the sign-extended elements", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+            appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
+            appendU32(packet, 10u);
+            appendU32(packet, 20u);
+            appendU32(packet, 30u);
+            appendU32(packet, 40u);
+            appendU32(packet, makeVifCmd(0x05u, 0u, 1u)); // STMOD offset mode
+            appendU32(packet, makeVifCmd(0x6Au, 2u, 0u)); // UNPACK V3-8 -> addr 0 and 1
+            appendU32(packet, 0x0302FF01u);               // bytes 01 FF 02 03
+            appendU32(packet, 0x00000504u);               // bytes 04 05, then the padding
+
+            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+
+            uint32_t q[2][4] = {};
+            std::memcpy(q, mem.getVU1Data(), sizeof(q));
+            t.IsTrue(q[0][0] == 11u && q[0][1] == 19u && q[0][2] == 32u && q[0][3] == 43u,
+                     "V3 w should be the next element, every lane plus ROW");
+            t.IsTrue(q[1][0] == 13u && q[1][1] == 24u && q[1][2] == 35u && q[1][3] == 40u, "second V3 vector");
+        });
+
         tc.Run("VIF0 UNPACK decodes 16-bit and V4-5 data like VIF1", [](TestCase &t)
         {
             PS2Memory mem;
