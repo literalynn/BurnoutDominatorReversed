@@ -35,7 +35,7 @@ parallel_gs_replace("transfer_state.fifo_readback_128b_size = required_bytes / 1
 # bdr_smooth_ui_sprites (the ubershader snaps attributes along with the raster).
 parallel_gs_replace("void GSInterface::set_hacks(const Hacks &hacks_)" "bool bdr_smooth_ui_sprites = false;\n\nvoid GSInterface::set_hacks(const Hacks &hacks_)")
 parallel_gs_replace("\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_RASTER;\n\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_ATTRIBUTE;\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);"
-    "\t\tif (!(bdr_smooth_ui_sprites && prim.desc.TME && ctx.tex1.desc.MMAG == TEX1Bits::LINEAR &&\n\t\t      (ctx.tex0.desc.PSM == PSMT8 || ctx.tex0.desc.PSM == PSMT4)))\n\t\t\tprim_attr.state |= (1u << STATE_BIT_SNAP_RASTER) | (1u << STATE_BIT_SNAP_ATTRIBUTE);\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);")
+    "\t\textern bool bdr_smooth_ui_sprites; // defined further down; GCC and Clang need it declared before this template body\n\t\tif (!(bdr_smooth_ui_sprites && prim.desc.TME && ctx.tex1.desc.MMAG == TEX1Bits::LINEAR &&\n\t\t      (ctx.tex0.desc.PSM == PSMT8 || ctx.tex0.desc.PSM == PSMT4)))\n\t\t\tprim_attr.state |= (1u << STATE_BIT_SNAP_RASTER) | (1u << STATE_BIT_SNAP_ATTRIBUTE);\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);")
 parallel_gs_use_patched(${patch_file} gs_interface_patched.cpp)
 
 # compute_page_rect: max_block_x/y are taken modulo the blocks of a page, so
