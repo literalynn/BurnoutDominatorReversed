@@ -505,8 +505,8 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeMemory = memory;
 
     // VU rounding, toward zero, and on x86 denormal operands read as zero
-    // (PS2_VU_HOST_DAZ). The game thread already rounds toward zero (EeScheduler::run)
-    // but keeps denormals, so a VU0 call there sets MXCSR as well. With MSVC on x86-64
+    // (PS2_VU_HOST_DAZ). The game thread already runs that way (EeScheduler::run), so a
+    // VU0 call there leaves MXCSR alone. With MSVC on x86-64
     // floating point is SSE only (long double is double): MXCSR is set inline, without
     // the C library's x87 round trip. Elsewhere long double is x87, which the exact paths use.
 #if defined(_MSC_VER) && defined(_M_X64)

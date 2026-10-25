@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The game thread reads denormal operands as zero (October 25, 2026)
+
+- `Kernel/EeScheduler.cpp`: on x86 `EeScheduler::run` sets MXCSR's DAZ bit along with rounding toward zero, and puts both back on return. The EE FPU and VU0 have no denormals (`ps2_float.h`). The float helpers already flushed their operands, so their results are unchanged; comparisons and the other operations without a helper now read a denormal operand as a zero of its sign.
+- `vu/ps2_vu1_core.cpp`: a VU0 call found the game thread without DAZ and switched MXCSR on entry and on return, two reads and two writes of the register for every microprogram. It now finds MXCSR as it needs it (comment updated). With the debug switches read at start-up below, `VU1Interpreter::run` and `execute` took 44 of 2,126 game-thread busy samples over the six-car race, now 13. The GIF stream is identical over the 9.7 million packets of the race run, and so is the RDRAM at VSync 18,000.
+
 ## Generated code writes a register's low half with one store (October 25, 2026)
 
 - `ps2_runtime_macros.h`: `SET_GPR_U32`, `SET_GPR_S32`, `SET_GPR_ZE32` and `SET_GPR_U64`, used by almost every guest instruction, merged their 64-bit result into the 128-bit register: a load of the register, a blend and a 128-bit store, so each write waited for the register's previous one. `Ps2SetGprLow64` now takes the 64-bit value and stores only that, leaving the upper half as before. Game-thread profile over the six-car race: guest code took 812 of 2,390 busy samples, now 679, and the executable shrinks from 94.6 MB to 82.0 MB. With the three changes below, over 1,500 VBlanks of the race, alternating five runs against the executable before them: game thread CPU medians 5.34 s before, 4.95 s after. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000.

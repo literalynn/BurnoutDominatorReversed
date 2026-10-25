@@ -370,13 +370,28 @@ void EeScheduler::run()
     ps2_wait_stats::t_gameThread = true;
     // The EE FPU and VU0 in macro mode round toward zero (as PCSX2 does by default); games
     // rely on it, Burnout's VU0 cosine rounds with 1.5 * 2^23 and jumped at a half turn.
+    // They have no denormals either: on x86 DAZ reads a denormal operand as a zero of its
+    // sign, as the float helpers already do with theirs, and VU0 calls, which need DAZ,
+    // find MXCSR set instead of switching it twice each.
     // Restored on the way out: the thread may run other host code afterwards (the tests do).
     struct RoundingGuard
     {
         int previous = std::fegetround();
+#if defined(_M_X64) || defined(__x86_64__)
+        unsigned previousDaz = _MM_GET_DENORMALS_ZERO_MODE();
+        ~RoundingGuard()
+        {
+            _MM_SET_DENORMALS_ZERO_MODE(previousDaz);
+            std::fesetround(previous);
+        }
+#else
         ~RoundingGuard() { std::fesetround(previous); }
+#endif
     } roundingGuard;
     std::fesetround(FE_TOWARDZERO);
+#if defined(_M_X64) || defined(__x86_64__)
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
     m_running.store(true, std::memory_order_release);
 
     while (!m_stopRequested.load(std::memory_order_acquire))
