@@ -162,6 +162,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_TRACE_GS_VSYNC=N` | every primitive drawn during VSync tick N: primitive type, frame, TEX0 (base, width, format, size, CLUT base, format, mode, offset), FBMSK, ZBUF, TEST, ALPHA, CLAMP, TEX1, XYOFFSET, first two vertices (position, UV, ST) and first vertex colour |
 | `BDR_DUMP_GS_DIR=dir` | with `BDR_TRACE_GS_VSYNC=N`: writes each render target of VSync N to `dir` as a PPM (`target_NNN_fbpP_psmM.ppm`) when the game moves on to another target, to follow multi-pass effects |
 | `BDR_PROFILE_DELAY_S=N` | with `BDR_PROFILE=1`: starts sampling after N seconds, to profile one phase (e.g. the race) |
+| `BDR_PROFILE_CALLERS=N` | with `BDR_PROFILE_DUMP=file`: also records the N return addresses above each sample (at most 16; the run then keeps 262,144 samples instead of 2 million) and writes `file.stacks`, every distinct stack with its count, innermost frame first: who calls a hot function such as `memcpy` |
 | `BDR_PROFILE_DUMP=file` | with `BDR_PROFILE=1`: writes every sampled address with its count, module, symbol and offset, to map the samples onto a compiler listing (`/FAcs`): the PDB has no inlined source lines for the compiled VU1 programs |
 | `PS2X_GS_BACKEND=cpu` | keeps the CPU rasterizer in a build made with paraLLEl-GS (the default when Vulkan works) |
 | `BDR_PGS_RECORD=file` | paraLLEl-GS: records every backend input (initial VRAM, GIF packets with their path, registers, presentations) |

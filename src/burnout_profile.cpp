@@ -182,6 +182,9 @@ struct Sampler::State {
     std::atomic<bool> stop{false};
     std::thread worker;
     std::vector<uint64_t> samples;
+    // BDR_PROFILE_CALLERS=N: the N return addresses above each sample, zero-padded.
+    int callers = 0;
+    std::vector<uint64_t> stacks;
     bool reported = false;
 };
 
@@ -192,6 +195,9 @@ Sampler::Sampler() {
 #ifdef _WIN32
     state_ = std::make_unique<State>();
     state_->samples.reserve(kMaxSamples);
+    if (const char* callers = std::getenv("BDR_PROFILE_CALLERS"))
+        state_->callers = std::clamp(std::atoi(callers), 0, 16);
+    state_->stacks.reserve(kMaxSamples / 8u * static_cast<size_t>(state_->callers));
     State* state = state_.get();
     state->worker = std::thread([this, state] {
         HANDLE target = nullptr;
@@ -212,7 +218,8 @@ Sampler::Sampler() {
         const char* seconds = std::getenv("BDR_PROFILE_SECONDS");
         const auto sampleUntil = seconds ? std::chrono::steady_clock::now() + std::chrono::seconds(std::atoi(seconds))
                                          : std::chrono::steady_clock::time_point::max();
-        while (!state->stop.load(std::memory_order_acquire) && state->samples.size() < kMaxSamples &&
+        const size_t maxSamples = state->callers ? kMaxSamples / 8u : kMaxSamples;
+        while (!state->stop.load(std::memory_order_acquire) && state->samples.size() < maxSamples &&
                std::chrono::steady_clock::now() < sampleUntil) {
             if (timer) {
                 LARGE_INTEGER due;
@@ -226,13 +233,17 @@ Sampler::Sampler() {
             if (SuspendThread(target) == static_cast<DWORD>(-1))
                 break;
             CONTEXT context{};
-            context.ContextFlags = CONTEXT_CONTROL;
-            uint64_t rip = 0;
+            context.ContextFlags = state->callers ? CONTEXT_FULL : CONTEXT_CONTROL;
+            uint64_t pcs[17] = {};
             if (GetThreadContext(target, &context))
-                rip = context.Rip;
+                pcs[0] = context.Rip;
+            if (pcs[0] != 0 && state->callers)
+                unwind(context, pcs, 1 + state->callers);
             ResumeThread(target);
-            if (rip != 0)
-                state->samples.push_back(rip);
+            if (pcs[0] != 0) {
+                state->samples.push_back(pcs[0]);
+                state->stacks.insert(state->stacks.end(), pcs + 1, pcs + 1 + state->callers);
+            }
         }
         if (timer)
             CloseHandle(timer);
@@ -314,6 +325,36 @@ void Sampler::report() {
     }
     if (dump)
         std::fclose(dump);
+    // With BDR_PROFILE_CALLERS: FILE.stacks, every distinct sampled stack with its count,
+    // innermost frame first.
+    if (dumpPath && state_->callers) {
+        const size_t stride = static_cast<size_t>(state_->callers);
+        std::map<std::vector<uint64_t>, uint32_t> perStack;
+        for (size_t i = 0; i < samples.size(); ++i) {
+            std::vector<uint64_t> stack{samples[i]};
+            stack.insert(stack.end(), state_->stacks.begin() + i * stride, state_->stacks.begin() + (i + 1) * stride);
+            ++perStack[stack];
+        }
+        if (FILE* stacks = std::fopen((std::string(dumpPath) + ".stacks").c_str(), "w")) {
+            for (const auto& [stack, count] : perStack) {
+                std::fprintf(stacks, "%u", count);
+                for (const uint64_t address : stack) {
+                    if (address == 0)
+                        break;
+                    auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+                    symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+                    symbol->MaxNameLen = 511;
+                    DWORD64 displacement = 0;
+                    if (symbols && SymFromAddr(process, address, &displacement, symbol))
+                        std::fprintf(stacks, "\t%s+0x%llx", symbol->Name, static_cast<unsigned long long>(displacement));
+                    else
+                        std::fprintf(stacks, "\t0x%llx", static_cast<unsigned long long>(address));
+                }
+                std::fputc('\n', stacks);
+            }
+            std::fclose(stacks);
+        }
+    }
 
     std::vector<std::pair<std::string, uint32_t>> ranked(perFunction.begin(), perFunction.end());
     std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
