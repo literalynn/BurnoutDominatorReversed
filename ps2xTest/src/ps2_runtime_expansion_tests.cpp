@@ -20,7 +20,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfenv>
 #include <cstdint>
+#include <cstdio>
 #include <initializer_list>
 #include <cstring>
 #include <exception>
@@ -50,6 +52,29 @@ namespace
     {
         return static_cast<int32_t>(::getRegU32(&ctx, reg));
     }
+
+    // The game thread's float modes (EeScheduler::run), which the float helpers rely on.
+    struct GameThreadFloatModes
+    {
+        int previousRounding = std::fegetround();
+#if defined(_M_X64) || defined(__x86_64__)
+        unsigned previousDaz = _MM_GET_DENORMALS_ZERO_MODE();
+#endif
+        GameThreadFloatModes()
+        {
+            std::fesetround(FE_TOWARDZERO);
+#if defined(_M_X64) || defined(__x86_64__)
+            _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
+        }
+        ~GameThreadFloatModes()
+        {
+#if defined(_M_X64) || defined(__x86_64__)
+            _MM_SET_DENORMALS_ZERO_MODE(previousDaz);
+#endif
+            std::fesetround(previousRounding);
+        }
+    };
 
     uint32_t makeVifCmd(uint8_t opcode, uint8_t num, uint16_t imm)
     {
@@ -331,7 +356,10 @@ void register_ps2_runtime_expansion_tests()
     {
         tc.Run("EE float semantics: no Inf, NaN or denormals", [](TestCase &t)
         {
-            const float fmax = 3.40282347e38f;
+            const GameThreadFloatModes modes;
+            // Read at run time, so that the compiler cannot fold the overflows in its own rounding mode.
+            volatile float stored = 3.40282347e38f;
+            const float fmax = stored;
             t.IsTrue(FPU_DIV_S(1.0f, 0.0f) == fmax && FPU_DIV_S(-1.0f, 0.0f) == -fmax, "x/0 is +-FLT_MAX");
             t.IsTrue(FPU_DIV_S(0.0f, 0.0f) == fmax, "0/0 is FLT_MAX, not NaN");
             t.IsTrue(FPU_MUL_S(fmax, 2.0f) == fmax && FPU_ADD_S(-fmax, -fmax) == -fmax, "overflow saturates");
@@ -342,6 +370,69 @@ void register_ps2_runtime_expansion_tests()
             alignas(16) float lanes[4];
             _mm_store_ps(lanes, PS2_VMUL(_mm_set_ps(1.0f, INFINITY, 0.0f, 2.0f), _mm_set_ps(1.0f, 0.0f, NAN, fmax)));
             t.IsTrue(lanes[0] == fmax && lanes[1] == 0.0f && lanes[2] == 0.0f && lanes[3] == 1.0f, "VU multiply clamps lanes");
+        });
+
+        tc.Run("EE float add, subtract and multiply give the clamping formulas' bits", [](TestCase &t)
+        {
+            // On x86 the helpers leave out the clamps that the game thread's float modes make redundant.
+            const GameThreadFloatModes modes;
+            std::vector<uint32_t> special = {0x00000000u, 0x00000001u, 0x00400000u, 0x007FFFFFu, 0x00800000u, 0x00800001u,
+                                             0x00FFFFFFu, 0x01000000u, 0x34000000u, 0x3F000000u, 0x3F800000u, 0x3F800001u,
+                                             0x40000000u, 0x7F000000u, 0x7F7FFFFEu, 0x7F7FFFFFu, 0x7F800000u, 0x7F800001u,
+                                             0x7FC00000u, 0x7FFFFFFFu};
+            const size_t positives = special.size();
+            for (size_t i = 0; i < positives; ++i)
+                special.push_back(special[i] | 0x80000000u);
+            std::vector<uint32_t> all = special;
+            uint32_t state = 0x12345678u;
+            for (int i = 0; i < 4000; ++i)
+            {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                all.push_back(state);
+            }
+            const auto f = [](uint32_t bits) { return ps2_bits_float(bits); };
+            uint32_t mismatches = 0;
+            std::string first;
+            const auto check = [&](const char *op, uint32_t a, uint32_t b, float got, float want)
+            {
+                if (ps2_float_bits(got) == ps2_float_bits(want))
+                    return;
+                if (mismatches++ == 0)
+                {
+                    char text[96];
+                    std::snprintf(text, sizeof(text), "%s %08x %08x: %08x, not %08x", op, a, b, ps2_float_bits(got), ps2_float_bits(want));
+                    first = text;
+                }
+            };
+            for (const uint32_t a : special)
+                for (const uint32_t b : all)
+                    for (int swap = 0; swap < 2; ++swap)
+                    {
+                        const uint32_t x = swap ? b : a, y = swap ? a : b;
+                        check("add", x, y, FPU_ADD_S(f(x), f(y)), ps2_clampf(ps2_clampf(f(x)) + ps2_clampf(f(y))));
+                        check("sub", x, y, FPU_SUB_S(f(x), f(y)), ps2_clampf(ps2_clampf(f(x)) - ps2_clampf(f(y))));
+                        check("mul", x, y, FPU_MUL_S(f(x), f(y)), ps2_clampf(ps2_clampf(f(x)) * ps2_clampf(f(y))));
+                    }
+            for (size_t i = 0; i + 8 <= all.size(); i += 4)
+            {
+                const __m128 a = _mm_castsi128_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(&all[i])));
+                const __m128 b = _mm_castsi128_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(&all[all.size() - 4 - i])));
+                const __m128 results[3] = {PS2_VADD(a, b), PS2_VSUB(a, b), PS2_VMUL(a, b)};
+                const __m128 wanted[3] = {ps2_clamp_ps(_mm_add_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))),
+                                          ps2_clamp_ps(_mm_sub_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))),
+                                          ps2_clamp_ps(_mm_mul_ps(ps2_clamp_ps(a), ps2_clamp_ps(b)))};
+                for (int op = 0; op < 3; ++op)
+                {
+                    alignas(16) float got[4], want[4];
+                    _mm_store_ps(got, results[op]);
+                    _mm_store_ps(want, wanted[op]);
+                    for (int lane = 0; lane < 4; ++lane)
+                        check(op == 0 ? "vadd" : op == 1 ? "vsub" : "vmul", all[i + lane], all[all.size() - 4 - i + lane], got[lane], want[lane]);
+                }
+            }
+            t.Equals(mismatches, 0u, "fast helpers differ from the clamping formulas, first " + first);
         });
 
         tc.Run("VU0 macro VMAX and VMINI keep raw bit patterns", [](TestCase &t)

@@ -7,7 +7,8 @@
 // division by zero gives +-FLT_MAX and a square root uses the absolute value.
 // Host IEEE arithmetic otherwise produces Inf and NaN that then spread through
 // game state. Follows PCSX2 (FPU.cpp, VU clamping) and the EE manuals.
-// The game thread rounds toward zero, as the EE does (EeScheduler::run sets it).
+// The game thread rounds toward zero, as the EE does, and reads denormal operands
+// as zeros (EeScheduler::run sets both).
 
 #include <cstdint>
 #include <cstring>
@@ -52,9 +53,60 @@ static inline __m128 ps2_clamp_ps(__m128 value)
     return _mm_castsi128_ps(result);
 }
 
+#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_MSC_VER)
+#define PS2_FLOAT_INLINE __forceinline
+#else
+#define PS2_FLOAT_INLINE inline __attribute__((always_inline))
+#endif
+
+// Add, subtract and multiply for the generated code, which runs on the game thread: MSVC kept
+// the clamping versions (below) out of line, a call and three branchy clamps per operation.
+// There denormal operands read as zeros of their sign, as ps2_clampf makes them, and finite
+// operands cannot overflow into an infinity when results round toward zero. Two things are
+// left, without branches: operands with exponent 255 and denormal results. The bits are those
+// of the clamping versions under the game thread's MXCSR, and only there.
+
+// Exponent 255 -> +-FLT_MAX: as integers, positive patterns above 0x7F7FFFFF and negative
+// ones above 0xFF7FFFFF.
+static PS2_FLOAT_INLINE __m128 ps2_saturate_ps(__m128 value)
+{
+    const __m128i bits = _mm_castps_si128(value);
+    return _mm_castsi128_ps(_mm_min_epu32(_mm_min_epi32(bits, _mm_set1_epi32(0x7F7FFFFF)),
+                                          _mm_set1_epi32(static_cast<int>(0xFF7FFFFFu))));
+}
+
+// Exponent 0 -> a zero of the same sign.
+static PS2_FLOAT_INLINE __m128 ps2_flush_ps(__m128 value)
+{
+    const __m128i bits = _mm_castps_si128(value);
+    const __m128i tiny = _mm_cmpeq_epi32(_mm_and_si128(bits, _mm_set1_epi32(0x7F800000)), _mm_setzero_si128());
+    return _mm_castsi128_ps(_mm_andnot_si128(_mm_srli_epi32(tiny, 1), bits));
+}
+
+static PS2_FLOAT_INLINE float ps2_fadd(float a, float b)
+{
+    return _mm_cvtss_f32(ps2_flush_ps(_mm_add_ss(ps2_saturate_ps(_mm_set_ss(a)), ps2_saturate_ps(_mm_set_ss(b)))));
+}
+static PS2_FLOAT_INLINE float ps2_fsub(float a, float b)
+{
+    return _mm_cvtss_f32(ps2_flush_ps(_mm_sub_ss(ps2_saturate_ps(_mm_set_ss(a)), ps2_saturate_ps(_mm_set_ss(b)))));
+}
+static PS2_FLOAT_INLINE float ps2_fmul(float a, float b)
+{
+    return _mm_cvtss_f32(ps2_flush_ps(_mm_mul_ss(ps2_saturate_ps(_mm_set_ss(a)), ps2_saturate_ps(_mm_set_ss(b)))));
+}
+static PS2_FLOAT_INLINE __m128 ps2_vadd(__m128 a, __m128 b) { return ps2_flush_ps(_mm_add_ps(ps2_saturate_ps(a), ps2_saturate_ps(b))); }
+static PS2_FLOAT_INLINE __m128 ps2_vsub(__m128 a, __m128 b) { return ps2_flush_ps(_mm_sub_ps(ps2_saturate_ps(a), ps2_saturate_ps(b))); }
+static PS2_FLOAT_INLINE __m128 ps2_vmul(__m128 a, __m128 b) { return ps2_flush_ps(_mm_mul_ps(ps2_saturate_ps(a), ps2_saturate_ps(b))); }
+#else
 static inline float ps2_fadd(float a, float b) { return ps2_clampf(ps2_clampf(a) + ps2_clampf(b)); }
 static inline float ps2_fsub(float a, float b) { return ps2_clampf(ps2_clampf(a) - ps2_clampf(b)); }
 static inline float ps2_fmul(float a, float b) { return ps2_clampf(ps2_clampf(a) * ps2_clampf(b)); }
+static inline __m128 ps2_vadd(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_add_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
+static inline __m128 ps2_vsub(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_sub_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
+static inline __m128 ps2_vmul(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_mul_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
+#endif
 
 // a / b; a zero divisor gives +-FLT_MAX with the sign of a xor b (0/0 included).
 static inline float ps2_fdiv(float a, float b)
@@ -84,10 +136,6 @@ static inline float ps2_frsqrt(float a, float b)
         return ps2_bits_float(((ps2_float_bits(a) ^ ps2_float_bits(b)) & 0x80000000u) | 0x7F7FFFFFu);
     return ps2_clampf(a / std::sqrt(std::fabs(b)));
 }
-
-static inline __m128 ps2_vadd(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_add_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
-static inline __m128 ps2_vsub(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_sub_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
-static inline __m128 ps2_vmul(__m128 a, __m128 b) { return ps2_clamp_ps(_mm_mul_ps(ps2_clamp_ps(a), ps2_clamp_ps(b))); }
 
 // VU MAX/MINI compare raw bit patterns as sign-magnitude integers (exact on
 // denormals and exponent 255) and return an operand unchanged (PCSX2 fp_max/fp_min).
