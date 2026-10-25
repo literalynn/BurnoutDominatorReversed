@@ -2989,7 +2989,8 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         }
         else
         {
-        if (serial != drawnSerial)
+        const bool newFrame = serial != drawnSerial;
+        if (newFrame)
         {
             ++framesShown;
             const float gap = std::chrono::duration<float, std::milli>(now - lastFrameTime).count();
@@ -3017,7 +3018,10 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         const Texture2D shown = UploadFrame(frameTex, this, shownWidth, shownHeight);
         const uint32_t presentWidth = shownWidth;
         const uint32_t presentHeight = shownHeight;
-        ps2x::setPictureSize(presentWidth, presentHeight);
+        // Only a new frame shows the picture size: the settings menu pauses the game, so after a
+        // resolution change the frame redrawn is still the old one and would show the old size.
+        if (newFrame)
+            ps2x::setPictureSize(presentWidth, presentHeight);
         if (smoothScaling != ps2x::hostSettings().smoothScaling)
         {
             smoothScaling = ps2x::hostSettings().smoothScaling;
