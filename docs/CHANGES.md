@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## IOP import calls compare library names without the C runtime (October 25, 2026)
+
+- `iop_emulator.cpp`, `imports/iop_imports.cpp`: `dispatchImport` compares the name of a called import's library with up to twenty built-in ones, and `IopImportRegistry::findLibrary` with every export table when a call goes to a guest library such as LIBSD. Both lowered each character with `std::tolower`, a call into the C runtime. They now lower ASCII letters inline, the same mapping as `std::tolower` in the C locale, which the runtime never changes. Game-thread profile over the six-car race: `tolower` took 11 of 2,126 busy samples, now 1, and `dispatchImport` 8, now 3.
+
 ## The game thread reads denormal operands as zero (October 25, 2026)
 
 - `Kernel/EeScheduler.cpp`: on x86 `EeScheduler::run` sets MXCSR's DAZ bit along with rounding toward zero, and puts both back on return. The EE FPU and VU0 have no denormals (`ps2_float.h`). The float helpers already flushed their operands, so their results are unchanged; comparisons and the other operations without a helper now read a denormal operand as a zero of its sign.

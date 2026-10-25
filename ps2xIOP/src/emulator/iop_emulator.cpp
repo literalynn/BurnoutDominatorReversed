@@ -61,14 +61,20 @@ namespace ps2x::iop::detail
             return static_cast<int16_t>(value & 0xFFFFu);
         }
 
+        // ASCII only: std::tolower is a call into the C runtime, and each import call
+        // compares its library's name with up to twenty others.
+        constexpr char lowerAscii(char c)
+        {
+            return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+        }
+
         bool iequals(std::string_view lhs, std::string_view rhs)
         {
             if (lhs.size() != rhs.size())
                 return false;
             for (size_t i = 0; i < lhs.size(); ++i)
             {
-                if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
-                    std::tolower(static_cast<unsigned char>(rhs[i])))
+                if (lowerAscii(lhs[i]) != lowerAscii(rhs[i]))
                     return false;
             }
             return true;

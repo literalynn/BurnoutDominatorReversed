@@ -14,14 +14,20 @@ namespace ps2x::iop::detail
         constexpr uint32_t kImportMagic = 0x41E00000u;
         constexpr uint32_t kExportMagic = 0x41C00000u;
 
+        // ASCII only: std::tolower is a call into the C runtime, made for every library
+        // a guest-to-guest import call is resolved against.
+        constexpr char lowerAscii(char c)
+        {
+            return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+        }
+
         bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs)
         {
             if (lhs.size() != rhs.size())
                 return false;
             for (size_t i = 0; i < lhs.size(); ++i)
             {
-                if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
-                    std::tolower(static_cast<unsigned char>(rhs[i])))
+                if (lowerAscii(lhs[i]) != lowerAscii(rhs[i]))
                     return false;
             }
             return true;
