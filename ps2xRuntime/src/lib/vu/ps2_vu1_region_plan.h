@@ -114,22 +114,6 @@ constexpr RegionPlan<N> planRegion(const std::array<Decoded, N> &decoded, bool a
         if (pair.eBit || pair.mBit || pair.dBit || pair.tBit || pair.upperUsage.reserved ||
             (!pair.iBit && (pair.lowerUsage.reserved || (!terminalBranch && !regionLowerSupported(pair.lower) && !(allowDiv && div)))))
             plan.eligible = false;
-        const uint32_t upperOp = pair.upper & 63u;
-        const uint32_t upperSpecial = (pair.upper & 3u) | ((pair.upper >> 4u) & 0x7cu);
-        const bool upperWritesZero = ((pair.upper >> 21u) & 15u) != 0u &&
-            (upperOp < 0x3cu ? ((pair.upper >> 6u) & 31u) == 0u :
-                (((upperSpecial >= 0x10u && upperSpecial <= 0x17u) || upperSpecial == 0x1du) &&
-                 ((pair.upper >> 16u) & 31u) == 0u));
-        const uint32_t lowerOp = pair.lower >> 25u;
-        const uint32_t lowerSpecial = (pair.lower & 3u) | ((pair.lower >> 4u) & 0x7cu);
-        const bool lowerReadsZero = ((pair.lower >> 11u) & 31u) == 0u &&
-            (lowerOp == 1u || (lowerOp == 0x40u && (pair.lower & 63u) >= 0x3cu &&
-                (lowerSpecial == 0x30u || lowerSpecial == 0x31u || lowerSpecial == 0x35u ||
-                 lowerSpecial == 0x37u || lowerSpecial == 0x3cu)));
-        // The scalar oracle exposes a transient upper VF0 write to lower reads.
-        if (!pair.iBit && upperWritesZero && (lowerReadsZero ||
-            (div && (((pair.lower >> 11u) & 31u) == 0u || ((pair.lower >> 16u) & 31u) == 0u))))
-            plan.eligible = false;
         uint16_t cycle = plan.cycles;
         if (allowDiv && div && plan.pendingQ != 0u)
             cycle = std::max(cycle, plan.qReady[plan.pendingQ - 1u]);

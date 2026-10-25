@@ -1402,6 +1402,9 @@ PS2_VU_FORCE_INLINE bool VU1Interpreter::runDecodedPair(const DecodedInstruction
     else
     {
         upper();
+        // An upper write to VF0 is discarded before the lower half reads it.
+        m_state.vf[0][0] = m_state.vf[0][1] = m_state.vf[0][2] = 0.0f;
+        m_state.vf[0][3] = 1.0f;
         lower();
     }
 

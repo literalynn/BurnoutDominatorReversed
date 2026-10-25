@@ -3161,6 +3161,29 @@ void register_ps2_vu1_tests()
             t.Equals(z, 0x412u, "vf1.z should hold the bits of I");
         });
 
+        tc.Run("A lower instruction reads VF0 as (0, 0, 0, 1) when its upper one writes VF0", [](TestCase &t)
+        {
+            // Burnout Dominator's strip microcode pairs ITOF0.xyzw vf0, vf9 with MR32.z vf12, vf0 to get
+            // Q = 1.0; reading the discarded upper write gave Q = 0 in the ST of clipped strips.
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+            uint8_t *vuCode = mem.getVU1Code();
+            std::memset(vuCode, 0, PS2_VU1_CODE_SIZE);
+            const uint32_t program[] = {
+                0x804C033Du, 0x01E0493Cu, // MR32.z vf12, vf0 | ITOF0.xyzw vf0, vf9
+                0x8000033Cu, 0x400002FFu, // NOP | NOP with E bit
+                0x8000033Cu, 0x000002FFu,
+            };
+            std::memcpy(vuCode, program, sizeof(program));
+            VU1Interpreter vu1;
+            vu1.execute(vuCode, PS2_VU1_CODE_SIZE, mem.getVU1Data(), PS2_VU1_DATA_SIZE, gs, &mem, 0u, 0u, 0u, 64u);
+            t.Equals(vu1.state().vf[12][2], 1.0f, "vf12.z should hold VF0.w");
+            t.Equals(vu1.state().vf[0][3], 1.0f, "VF0.w should still be 1.0");
+        });
+
         tc.Run("XGKICK sends a FLG 3 GIF packet like an IMAGE one", [](TestCase &t)
         {
             // The GS manual defines FLG 3 ("disable") as working like IMAGE;
