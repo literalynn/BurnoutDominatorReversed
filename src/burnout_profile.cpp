@@ -18,6 +18,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <dbghelp.h>
+#include <intrin.h>
 #include <tlhelp32.h>
 #pragma comment(lib, "dbghelp.lib")
 #endif
@@ -154,13 +155,23 @@ double threadCpuSeconds(const char* name) {
     HANDLE thread = openThread(name);
     if (!thread)
         return -1.0;
-    FILETIME created, exited, kernel, user;
-    const bool ok = GetThreadTimes(thread, &created, &exited, &kernel, &user) != FALSE;
+    // GetThreadTimes charges whole 15.6 ms clock ticks to whichever thread they land on,
+    // which misses most of a thread that waits thousands of times a second. The cycle
+    // count is taken at every context switch, in time-stamp counter ticks.
+    ULONG64 cycles = 0;
+    const bool ok = QueryThreadCycleTime(thread, &cycles) != FALSE;
     CloseHandle(thread);
-    const auto ticks = [](const FILETIME& time) {
-        return (static_cast<uint64_t>(time.dwHighDateTime) << 32u) | time.dwLowDateTime;
-    };
-    return ok ? static_cast<double>(ticks(kernel) + ticks(user)) * 1e-7 : -1.0;
+    static const double tscPerSecond = [] {
+        LARGE_INTEGER frequency, start, end;
+        QueryPerformanceFrequency(&frequency);
+        QueryPerformanceCounter(&start);
+        const uint64_t tscStart = __rdtsc();
+        Sleep(50);
+        QueryPerformanceCounter(&end);
+        return static_cast<double>(__rdtsc() - tscStart) * static_cast<double>(frequency.QuadPart) /
+               static_cast<double>(end.QuadPart - start.QuadPart);
+    }();
+    return ok ? static_cast<double>(cycles) / tscPerSecond : -1.0;
 #else
     (void)name;
     return -1.0;
