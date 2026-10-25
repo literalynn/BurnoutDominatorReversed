@@ -857,12 +857,17 @@ public:
 
     // A block runs without cycle checks only while it cannot reach the budget.
     // Counts a block's pairs up front, which is close enough for statistics
-    // and keeps a counter update out of every pair.
-    template <uint32_t Margin, uint32_t Pairs>
+    // and keeps a counter update out of every pair. KickWait is the PATH1 wait
+    // Margin counts for the block's first XGKICK: none when no transfer runs as
+    // the block starts, since only an XGKICK starts one. (A run within 8 Ki
+    // cycles of its budget left at every XGKICK block: the interpreter ran the rest.)
+    template <uint32_t Margin, uint32_t Pairs, uint32_t KickWait = 0u>
     PS2_VU_FORCE_INLINE bool fits()
     {
         static_assert(Pairs <= Run::kMaxBlockPairs, "compile_vu_programs.py should have split this block");
-        if (m_cycle + static_cast<uint64_t>(Margin) >= m_limit)
+        static_assert(KickWait < Margin, "Margin counts the XGKICK wait");
+        const uint32_t margin = KickWait != 0u && !m_kickActive ? Margin - KickWait : Margin;
+        if (m_cycle + static_cast<uint64_t>(margin) >= m_limit)
             return false;
         // An upper instruction and FSSET or FCSET queue at most two results a pair.
         if (m_flagTail + 2u * Pairs > m_run.m_flags.data() + Run::kFlagSlots) [[unlikely]]

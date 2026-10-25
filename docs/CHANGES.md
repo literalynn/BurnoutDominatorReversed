@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Compiled VU blocks count an XGKICK's wait only behind a transfer (October 25, 2026)
+
+- `ps2xRuntime/src/lib/vu/ps2_vu1_program.h`, `tools/compile_vu_programs.py`: a compiled block runs without cycle checks only while it cannot reach the run's budget, so its margin adds up the longest each pair can take. For an XGKICK that includes 8,192 cycles, a whole 64 KiB PATH1 packet sent before it, so a run within 8 Ki cycles of its budget left at every block with an XGKICK and the interpreter ran the rest of it. Only an XGKICK starts a PATH1 transfer: when none runs as the block starts, its first XGKICK cannot wait. `compile_vu_programs.py` passes the wait to `Frame::fits` as a third parameter, which drops it from the margin then; a second XGKICK in the block still counts its wait. In car select, the interpreter ran 10.4 million VU1 pairs over 5,900 VSyncs and runs none now, and the GS worker takes 34.3 s of CPU against 35.1 s. The GIF stream is identical with and without the change over the 7.6 million packets of car select, the 11.5 million of the race run and the 7.1 million of the later race.
+
 ## The VU interpreter's lower half reads VF0 as (0, 0, 0, 1) when the upper half writes it (October 25, 2026)
 
 - `ps2xRuntime/src/lib/vu/ps2_vu1_exec.inl`: VF0 always reads (0, 0, 0, 1). The interpreter put it back only at the end of a pair, so the lower instruction read what the upper one of the same pair had just written to VF0. Burnout's strip routine pairs `ITOF0.xyzw vf0, vf9` with `MR32.z vf12, vf0` to make the Q of the first vertex of a clipped strip 1.0: it got 0 when the interpreter ran that part of the routine, which happens when a compiled run reaches its cycle budget there, and that vertex's texture went wrong. Compiled routines read a pair's inputs before it runs and were right. The constant is now put back between the two halves. PS2Recomp issue 393 reports the same behavior.

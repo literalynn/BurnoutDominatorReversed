@@ -35,6 +35,9 @@ EFU_SPECIAL = set(range(0x70, 0x77)) | set(range(0x78, 0x7F))
 LOWER_SPECIAL = {0x30, 0x31, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D,
                  0x3E, 0x3F, 0x64, 0x68, 0x69, 0x6C} | EFU_SPECIAL
 FDIV_SPECIAL = {0x38, 0x39, 0x3A, 0x3B}
+# The longest an XGKICK waits for the transfer before it: a 64 KiB PATH1 packet, a qword
+# every two cycles.
+KICK_WAIT = 8192
 # VU1 only: MFP, XTOP, XGKICK and the EFU. The runtime decodes VU0 routines as
 # VU1 code, which is only right without these.
 VU1_ONLY_SPECIAL = {0x64, 0x68, 0x6C} | EFU_SPECIAL
@@ -138,8 +141,12 @@ class Pair:
         """Compiled routines keep VU1's 16 KiB PC wrap; VU0 branches across its 4 KiB edge stay interpreted."""
         return not 0 <= index + 1 + self.branch_offset() < self.count
 
+    def kicks(self):
+        return not self.immediate and self.lower >> 25 == 0x40 and (self.lower & 0x3F) >= 0x3C \
+            and lower_special(self.lower) == 0x6C
+
     def stall_bound(self):
-        """Cycles the pair can take, stalls included, ignoring PATH1 waits."""
+        """Cycles the pair can take, stalls included: an XGKICK waits for a whole PATH1 packet."""
         bound = 5
         if self.immediate or self.lower >> 25 != 0x40 or (self.lower & 0x3F) < 0x3C:
             return bound
@@ -149,7 +156,7 @@ class Pair:
         if special in EFU_SPECIAL:
             bound += 54
         if special == 0x6C:
-            bound += 8192
+            bound += KICK_WAIT
         return bound
 
 
@@ -574,9 +581,11 @@ def emit_routine(routine, name, max_pairs, status_unseen=False):
             return f"    if (!{call}) [[unlikely]] return p.leaveStale();" if checked else f"    {call};"
 
         margin = sum(pairs[i].stall_bound() for i in body) + 1
+        # Frame::fits drops the first XGKICK's wait when no transfer runs as the block starts.
+        bounds = f"{margin}u, {len(body)}u" + (f", {KICK_WAIT}u" if any(pairs[i].kicks() for i in body) else "")
         if start in targets:
             lines.append(f"b_{start:04x}:")
-        lines.append(f"    if (!p.fits<{margin}u, {len(body)}u>()) return p.leave({pc(start)});")
+        lines.append(f"    if (!p.fits<{bounds}>()) return p.leave({pc(start)});")
         kind = terminator[0]
         tail = [] if kind in ("fall", "leave") else body[-2:]
         for index in body[:len(body) - len(tail)]:

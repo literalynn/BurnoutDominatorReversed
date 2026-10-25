@@ -1,4 +1,4 @@
-"""FMAC flag hints of compile_vu_programs.py on a synthetic VU1 loop; no game bytes."""
+"""FMAC flag hints and XGKICK bounds of compile_vu_programs.py on synthetic VU1 code; no game bytes."""
 from __future__ import annotations
 
 import importlib.util
@@ -14,6 +14,7 @@ NOP_LOWER, NOP_UPPER, E_BIT = 0x8000033C, 0x000002FF, 0x40000000
 ADD = 0x01E10868        # ADD.xyzw vf1, vf1, vf1
 IBNE_BACK = 0x52000FFC  # IBNE vi0, vi1, -4
 FMAND = 0x34021800      # FMAND vi2, vi3
+XGKICK = 0x80000EFC     # XGKICK vi1
 
 
 def loop(after_loop_lower):
@@ -45,6 +46,15 @@ class FlagHints(unittest.TestCase):
         # FMAND at 6 is 4 pairs after the FMAC at 2, 1 after the one at 5.
         self.assertEqual(cvp.flag_hints(routine, 0, True),
                          {0: cvp.STATUS_UNSEEN | cvp.FLAGS_UNSEEN, 2: cvp.STATUS_UNSEEN})
+
+
+class KickBounds(unittest.TestCase):
+    def test_only_xgkick_counts_a_packet_wait(self):
+        kick = cvp.Pair(XGKICK, NOP_UPPER)
+        self.assertTrue(kick.kicks())
+        self.assertEqual(kick.stall_bound(), 5 + cvp.KICK_WAIT)
+        for lower, upper in ((NOP_LOWER, NOP_UPPER), (FMAND, NOP_UPPER), (XGKICK, NOP_UPPER | 0x80000000)):
+            self.assertFalse(cvp.Pair(lower, upper).kicks())
 
 
 if __name__ == "__main__":
