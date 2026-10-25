@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Offset-mode narrow unpacks add ROW in registers (October 25, 2026)
+
+- `ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp`: in `unpackNarrow`, MSVC added ROW with one vector instruction whose other operand was loaded from the four lanes, just stored apart on the stack. Such a load cannot take its data from several smaller stores and waits until they reach the cache. The lanes and ROW are now added in registers and written with one 16-byte store. Burnout's V3-8 unpacks in offset mode took 104 samples of the GS worker in a 15-second profile of the race, 33 now. The GIF stream and the RDRAM are identical on the race run, the runtime tests pass and GCC 13 builds the file.
+
 ## Silent SPU2 voices skip their interpolation and mixing (October 25, 2026)
 
 - `ps2xIOP/src/emulator/core/iop_spu2.cpp`: in a race 35 voices play on average, and 57% of them are at zero volume on both sides: their sample reached the mix only multiplied by zero. `tickSample` no longer interpolates or mixes them; voices 1 and 3, which also feed the memory output buffers, always are. Their envelope, position, block fetches, ENDX and IRQ tests run as before.

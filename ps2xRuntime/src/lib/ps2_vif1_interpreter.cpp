@@ -86,9 +86,16 @@ namespace
                     lanes[3] = element(srcVec + 3u * elementBytes);
             }
             if constexpr (Offset)
-                for (uint32_t field = 0; field < 4u; ++field)
-                    lanes[field] += row[field];
-            std::memcpy(destination, lanes, sizeof(lanes));
+            {
+                // A vector made in registers: MSVC added ROW to a vector loaded from the four
+                // lanes just stored apart on the stack, a load that waited for those stores.
+                const __m128i sum = _mm_add_epi32(_mm_setr_epi32(static_cast<int>(lanes[0]), static_cast<int>(lanes[1]),
+                                                                 static_cast<int>(lanes[2]), static_cast<int>(lanes[3])),
+                                                  _mm_loadu_si128(reinterpret_cast<const __m128i *>(row)));
+                _mm_storeu_si128(reinterpret_cast<__m128i *>(destination), sum);
+            }
+            else
+                std::memcpy(destination, lanes, sizeof(lanes));
         }
     }
 
