@@ -130,7 +130,9 @@ namespace
         bool wrapped = false;
     };
 
-    thread_local DispatchHistory g_dispatchHistory;
+    // Not thread_local: only the scheduler's executor thread runs guest code, and the TLS
+    // lookup put a chain of four dependent loads on every guest call.
+    DispatchHistory g_dispatchHistory;
 
     bool computeFileCrc32(const std::string &path, uint32_t &crcOut)
     {
@@ -177,9 +179,12 @@ namespace
     void pushDispatchPc(uint32_t pc)
     {
         DispatchHistory &h = g_dispatchHistory;
+        // The index in a local: MSVC reloaded it after the store into pcs, which waited for
+        // that store, on every guest call.
+        const uint32_t next = (h.next + 1u) % static_cast<uint32_t>(h.pcs.size());
         h.pcs[h.next] = pc;
-        h.next = (h.next + 1u) % static_cast<uint32_t>(h.pcs.size());
-        if (h.next == 0u)
+        h.next = next;
+        if (next == 0u)
         {
             h.wrapped = true;
         }
