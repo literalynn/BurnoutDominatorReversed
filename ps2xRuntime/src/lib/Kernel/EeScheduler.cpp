@@ -69,26 +69,24 @@ namespace
         uint32_t next = 0u;
     };
 
-    WordWatch &wordWatch()
+    // Read at start-up, as BDR_DISPATCH_HISTORY below: a function-local static cost a
+    // thread-safe initialization check at every guest dispatch.
+    WordWatch g_wordWatch = []
     {
-        static WordWatch watch = []
+        WordWatch parsed;
+        if (const char *text = std::getenv("BDR_WATCH_WORD"))
         {
-            WordWatch parsed;
-            if (const char *text = std::getenv("BDR_WATCH_WORD"))
+            char *end = nullptr;
+            parsed.address = static_cast<uint32_t>(std::strtoul(text, &end, 0)) & 0x01FFFFFCu;
+            parsed.enabled = end != text;
+            if (end && *end == ':')
             {
-                char *end = nullptr;
-                parsed.address = static_cast<uint32_t>(std::strtoul(text, &end, 0)) & 0x01FFFFFCu;
-                parsed.enabled = end != text;
-                if (end && *end == ':')
-                {
-                    parsed.value = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 0));
-                    parsed.matchValue = true;
-                }
+                parsed.value = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 0));
+                parsed.matchValue = true;
             }
-            return parsed;
-        }();
-        return watch;
-    }
+        }
+        return parsed;
+    }();
 
     // BDR_DETERMINISTIC=1: deadlines (VBlank, alarms, timers) fire on EE cycles
     // alone, without waiting for the host clock. Runs repeat exactly and idle
@@ -116,15 +114,11 @@ namespace
     DispatchRecord g_dispatchRecords[kDispatchHistory] = {};
     uint32_t g_dispatchNext = 0u;
 
-    bool dispatchHistoryEnabled()
+    const bool g_dispatchHistoryEnabled = []
     {
-        static const bool enabled = []
-        {
-            const char *text = std::getenv("BDR_DISPATCH_HISTORY");
-            return text && *text && *text != '0';
-        }();
-        return enabled;
-    }
+        const char *text = std::getenv("BDR_DISPATCH_HISTORY");
+        return text && *text && *text != '0';
+    }();
 
     void printDispatchHistory()
     {
@@ -140,7 +134,7 @@ namespace
 
     void checkWordWatch(const uint8_t *rdram, uint32_t dispatchedPc, const R5900Context &context)
     {
-        WordWatch &watch = wordWatch();
+        WordWatch &watch = g_wordWatch;
         watch.history[watch.next++ % 32u] = dispatchedPc;
         uint32_t word = 0u;
         std::memcpy(&word, rdram + watch.address, sizeof(word));
@@ -528,7 +522,7 @@ void EeScheduler::run()
             }
             else
             {
-                if (dispatchHistoryEnabled())
+                if (g_dispatchHistoryEnabled)
                 {
                     printDispatchHistory();
                 }
@@ -565,7 +559,7 @@ void EeScheduler::run()
             m_guestExecuting.store(true, std::memory_order_release);
             const uint32_t dispatchedPc = context.pc;
             ps2_ee_unwind::g_returningToScheduler = false;
-            if (dispatchHistoryEnabled())
+            if (g_dispatchHistoryEnabled)
             {
                 g_dispatchRecords[g_dispatchNext++ % kDispatchHistory] =
                     DispatchRecord{m_currentThreadId, context.pc, getRegU32(&context, 29), getRegU32(&context, 31)};
@@ -582,7 +576,7 @@ void EeScheduler::run()
             {
                 context.pc = getRegU32(&context, 31);
             }
-            if (wordWatch().enabled)
+            if (g_wordWatch.enabled)
             {
                 checkWordWatch(m_rdram, dispatchedPc, context);
             }

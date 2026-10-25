@@ -30,6 +30,12 @@
 
 namespace
 {
+    // Read at start-up: function-local statics cost a thread-safe initialization check at
+    // every VU0 call.
+    const char *const captureDirectory = std::getenv("PS2_VU_CAPTURE_DIR");
+    const bool profileExecution = std::getenv("PS2_VU_PROFILE_EXECUTION") != nullptr;
+    const char *const blockProfile = std::getenv("PS2_VU_AOT_PROFILE");
+
     void recordUncompiledBlock(const char *path, unsigned unit, const uint8_t *code)
     {
         static std::mutex mutex;
@@ -415,7 +421,6 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
     m_state.vf[0][1] = 0.0f;
     m_state.vf[0][2] = 0.0f;
     m_state.vf[0][3] = 1.0f;
-    static const char *captureDirectory = std::getenv("PS2_VU_CAPTURE_DIR");
     if (captureDirectory && *captureDirectory && memory) {
         // execute() has an empty pipeline; resumed states need a fuller snapshot.
         const uint64_t generation = m_unit == Unit::VU1
@@ -435,7 +440,6 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
     m_state.itop = itop;
     m_state.stoppedByD = false;
     m_state.stoppedByT = false;
-    static const char *captureDirectory = std::getenv("PS2_VU_CAPTURE_DIR");
     // A drained continuation has no hidden writes or branch forwarding to serialize.
     if (captureDirectory && *captureDirectory && memory && !pipelinesPending() &&
         !m_viBranchBackupValid && !m_state.branchPending && !m_stopRequested)
@@ -496,8 +500,6 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                          uint8_t *vuData, uint32_t dataSize,
                          GS &gs, PS2Memory *memory, uint32_t maxCycles)
 {
-    static const bool profileExecution = std::getenv("PS2_VU_PROFILE_EXECUTION") != nullptr;
-    static const char *blockProfile = std::getenv("PS2_VU_AOT_PROFILE");
     const uint64_t pairsBefore = m_compiledPairsExecuted + m_interpretedPairsExecuted;
     m_activeVuData = vuData;
     m_activeVuDataSize = dataSize;

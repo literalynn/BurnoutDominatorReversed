@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Debug switches are read at start-up (October 25, 2026)
+
+- `Kernel/EeScheduler.cpp`: `BDR_WATCH_WORD` and `BDR_DISPATCH_HISTORY` were read into function-local statics, tested at every guest dispatch: each test was a call and a thread-safe initialization check. They are now constants initialized at start-up, as `BDR_EE_CYCLE_SCALE` already was; nothing sets the environment later. Game-thread profile over the six-car race: the two functions took 7 and 7 of 2,126 busy samples, now none.
+- `vu/ps2_vu1_core.cpp`: the same for `PS2_VU_CAPTURE_DIR`, `PS2_VU_PROFILE_EXECUTION` and `PS2_VU_AOT_PROFILE`, read at every VU run. With the three changes above, over 1,500 VBlanks of the race, alternating four runs against the executable before them: game thread CPU medians 4.85 s before, 4.78 s after (runs vary by about 4%).
+
 ## IOP import calls compare library names without the C runtime (October 25, 2026)
 
 - `iop_emulator.cpp`, `imports/iop_imports.cpp`: `dispatchImport` compares the name of a called import's library with up to twenty built-in ones, and `IopImportRegistry::findLibrary` with every export table when a call goes to a guest library such as LIBSD. Both lowered each character with `std::tolower`, a call into the C runtime. They now lower ASCII letters inline, the same mapping as `std::tolower` in the C locale, which the runtime never changes. Game-thread profile over the six-car race: `tolower` took 11 of 2,126 busy samples, now 1, and `dispatchImport` 8, now 3.
