@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Gamepads switched on after the start are found with SDL 3 (October 25, 2026)
+
+- `ps2_pad.cpp`: with SDL 3, which is the SDL2 of Arch and Fedora among others through `sdl2-compat`, a gamepad switched on after the game had started was never opened. SDL 3 reads udev's hotplug events only in `SDL_PumpEvents`, and the thread that reads the pad called `SDL_GameControllerUpdate` alone, since the window is GLFW's and nothing ran SDL's event loop. That thread now pumps SDL's events before the update and empties the queue, which nothing reads. With SDL2 itself, pumping without SDL video runs the same joystick update, which the explicit call then repeats. Checked with SDL 3.4.18 through sdl2-compat 2.32.74: a uinput gamepad created after `SDL_Init` was found within 3.2 s and its removal noticed; in the game, a Steam Controller switched on at the start screen was opened, and found again after being switched off and on.
+
 ## The settings menu no longer shows the old picture size after a resolution change (October 25, 2026)
 
 - `ps2_runtime.cpp`: the window loop passed the shown frame's size to the settings menu at every draw. The menu pauses the game, so after a change of the Resolution row the frame redrawn was still the old one, and the row went straight back to the old size ("4x - 640x448") until the menu was closed and opened again. The size is now passed only with a new frame; the row shows the scale alone until one comes.
