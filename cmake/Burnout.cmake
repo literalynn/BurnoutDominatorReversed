@@ -44,10 +44,6 @@ if(BDR_BUILD_GAME)
         # hundreds of KB on a 1 MB thread stack.
         if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
             target_compile_options(ps2EntryRunner PRIVATE /d2OptimizeHugeFunctions)
-            # Except the function table's initializer, one statement per guest function, run
-            # once at start-up: optimizing it takes longer than the rest of the build.
-            set_source_files_properties("${BDR_GENERATED_DIR}/register_functions.cpp" TARGET_DIRECTORY ps2EntryRunner
-                PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS /Od)
         endif()
         # A PDB lets BDR_PROFILE name the guest functions and runtime code it samples.
         target_link_options(ps2EntryRunner PRIVATE $<$<CONFIG:Release>:/DEBUG>)
@@ -56,6 +52,14 @@ if(BDR_BUILD_GAME)
         if(TARGET ps2_runtime)
             target_compile_options(ps2_runtime PRIVATE $<$<CONFIG:Release>:/Z7>)
         endif()
+    endif()
+    # The function table's initializer, one statement per guest function, runs once at
+    # start-up: MSVC and GCC take longer optimizing it than the rest of the build. GCC
+    # ignores a precompiled header built at other optimization options, so it is skipped.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^(MSVC|GNU)$")
+        set_source_files_properties("${BDR_GENERATED_DIR}/register_functions.cpp" TARGET_DIRECTORY ps2EntryRunner
+            PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON
+            COMPILE_OPTIONS $<IF:$<CXX_COMPILER_ID:MSVC>,/Od,-O0>)
     endif()
 endif()
 
