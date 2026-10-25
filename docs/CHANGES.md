@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The VU scheduler clears its register scoreboard in place (October 25, 2026)
+
+- `ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp`: `VU1Interpreter::resetScheduler` cleared the 1 KiB ready-cycle table of the float registers with `= {}`, which MSVC built as a zeroed copy on the stack and then copied into the member. It is now a `memset` of the member. The scheduler is reset twice for every VU0 microprogram call on the game thread, about 2,200 times per VBlank in a race. Game-thread profile over the six-car race: 11 samples in `resetScheduler` against 19. The GIF stream is identical over the 12.6 million packets of the race run, and so is the RDRAM at VSync 18,000.
+
 ## The IOP interpreter's step is inline in its loop (October 25, 2026)
 
 - `ps2xIOP/src/emulator/core/iop_cpu_execute.h` (new), `iop_cpu.cpp`, `iop_cpu.h`: `IopCpuCore::executeInstruction` and its two helpers move unchanged from `iop_cpu.cpp` into a header, as inline functions, which only `iop_emulator.cpp` includes. Called once per IOP instruction from another source file, the step saved and restored eight registers on every call.

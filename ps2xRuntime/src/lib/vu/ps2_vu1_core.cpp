@@ -96,7 +96,8 @@ void VU1Interpreter::resetScheduler()
     m_xgkick.issueCycle = 0;
     m_xgkick.active = false;
     m_xgkick.currentTagEop = false;
-    m_vfReady = {};
+    // memset: MSVC built `= {}` as a zeroed copy on the stack, then copied its 1 KiB in.
+    std::memset(m_vfReady.data(), 0, sizeof(m_vfReady));
     m_viReady = {};
     m_accReady = {};
     if (!idle)
