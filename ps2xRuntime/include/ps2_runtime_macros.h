@@ -347,8 +347,21 @@ PS2_SLOW_LOAD(Ps2SlowRead8, uint8_t, Load8, Ps2FastRead8)
 PS2_SLOW_LOAD(Ps2SlowRead16, uint16_t, Load16, Ps2FastRead16)
 PS2_SLOW_LOAD(Ps2SlowRead32, uint32_t, Load32, Ps2FastRead32)
 PS2_SLOW_LOAD(Ps2SlowRead64, uint64_t, Load64, Ps2FastRead64)
-PS2_SLOW_LOAD(Ps2SlowRead128, __m128i, Load128, Ps2FastRead128)
 #undef PS2_SLOW_LOAD
+
+// LQ and SQ in the scratchpad, where Burnout moves most of its per-object data, done here:
+// PS2Runtime::Load128 and Store128 do the same, a second call later.
+static inline bool Ps2IsScratchpadQuad(uint32_t addr)
+{
+    return addr - PS2_SCRATCHPAD_BASE < PS2_SCRATCHPAD_SIZE && (addr & 15u) == 0u;
+}
+
+PS2_MEMORY_SLOW inline __m128i Ps2SlowRead128(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t addr)
+{
+    if (Ps2IsScratchpadQuad(addr))
+        return _mm_loadu_si128(reinterpret_cast<const __m128i *>(runtime->memory().getScratchpad() + (addr - PS2_SCRATCHPAD_BASE)));
+    return PS2Runtime::isSpecialAddress(addr) ? runtime->Load128(rdram, ctx, addr) : Ps2FastRead128(rdram, addr);
+}
 
 #define PS2_SLOW_STORE(Name, Type, Store, Fast, Op, Lo, Hi)                                       \
     PS2_MEMORY_SLOW inline void Name(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t addr, Type value) \
@@ -365,9 +378,21 @@ PS2_SLOW_STORE(Ps2SlowWrite8, uint8_t, Store8, Ps2FastWrite8, "WRITE8", value, 0
 PS2_SLOW_STORE(Ps2SlowWrite16, uint16_t, Store16, Ps2FastWrite16, "WRITE16", value, 0u)
 PS2_SLOW_STORE(Ps2SlowWrite32, uint32_t, Store32, Ps2FastWrite32, "WRITE32", value, 0u)
 PS2_SLOW_STORE(Ps2SlowWrite64, uint64_t, Store64, Ps2FastWrite64, "WRITE64", value, 0u)
-PS2_SLOW_STORE(Ps2SlowWrite128, __m128i, Store128, Ps2FastWrite128, "WRITE128",
-               static_cast<uint64_t>(PS2_EXTRACT_EPI64_0(value)), static_cast<uint64_t>(PS2_EXTRACT_EPI64_1(value)))
 #undef PS2_SLOW_STORE
+
+PS2_MEMORY_SLOW inline void Ps2SlowWrite128(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t addr, __m128i value)
+{
+    if (Ps2IsScratchpadQuad(addr))
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(runtime->memory().getScratchpad() + (addr - PS2_SCRATCHPAD_BASE)), value);
+    else if (PS2Runtime::isSpecialAddress(addr))
+        runtime->Store128(rdram, ctx, addr, value);
+    else
+    {
+        ps2TraceGuestWrite(rdram, addr, sizeof(__m128i), static_cast<uint64_t>(PS2_EXTRACT_EPI64_0(value)),
+                           static_cast<uint64_t>(PS2_EXTRACT_EPI64_1(value)), "WRITE128", ctx);
+        Ps2FastWrite128(rdram, addr, value);
+    }
+}
 
 #define PS2_LOAD(Name, Type, Slow)                                                                \
     PS2_MEMORY_INLINE Type Name(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t addr) \

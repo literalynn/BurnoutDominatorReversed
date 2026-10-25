@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## LQ and SQ to the scratchpad take one call (October 25, 2026)
+
+- `ps2_runtime_macros.h`: a guest 128-bit load or store outside plain RAM goes out of line to `Ps2SlowRead128` or `Ps2SlowWrite128`. These called `PS2Runtime::Load128` or `Store128`, which serve aligned scratchpad quadwords in place; Burnout moves most of its per-object data through the scratchpad. The first function now serves the scratchpad itself, with the same test, and sends the rest to the runtime as before. Game-thread profile over the six-car race: `Load128` and `Store128` took 37 of 2,390 busy samples, now 1.
+- `ps2xTest/src/ps2_runtime_kernel_tests.cpp`: a test reads and writes a quadword in the scratchpad and in the uncached RAM mirror through these macros.
+
 ## SPU2 samples are clamped without std::clamp (October 25, 2026)
 
 - `core/iop_spu2.cpp`: `clamp16`, run for every interpolated voice sample, called `std::clamp`, whose reference result made MSVC keep the bounds in memory and select an address. It now compares values, and `decodeAdpcm` uses it instead of its own `std::clamp`. Over a randomized run of 48 voices (3.4 million output frames, rounding toward zero and to nearest), the output, ENDX, IRQ count and sound RAM hash the same as before and the run takes 8% less time. Interpolating all voices in a separate branch-free pass was slower than this change alone.

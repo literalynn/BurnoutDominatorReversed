@@ -637,6 +637,26 @@ void register_ps2_runtime_kernel_tests()
                      "SET_GPR_U32 must preserve the upper 64 bits of the 128-bit GPR");
         });
 
+        tc.Run("LQ and SQ outside plain RAM reach the scratchpad or the RAM mirror", [](TestCase &t)
+        {
+            TestEnv env;
+            t.IsTrue(env.runtime.memory().initialize(), "RDRAM should initialize");
+            const __m128i value = _mm_set_epi64x(0x0123456789ABCDEFll, 0x0FEDCBA987654321ll);
+            const auto same = [](__m128i a, __m128i b) { return _mm_movemask_epi8(_mm_cmpeq_epi8(a, b)) == 0xFFFF; };
+
+            Ps2Write128(env.rdram.data(), &env.ctx, &env.runtime, PS2_SCRATCHPAD_BASE + 0x40u, value);
+            t.IsTrue(std::memcmp(env.runtime.memory().getScratchpad() + 0x40u, &value, sizeof(value)) == 0,
+                     "SQ to the scratchpad stores the quadword there");
+            t.IsTrue(same(Ps2Read128(env.rdram.data(), &env.ctx, &env.runtime, PS2_SCRATCHPAD_BASE + 0x40u), value),
+                     "LQ from the scratchpad reads it back");
+
+            Ps2Write128(env.rdram.data(), &env.ctx, &env.runtime, 0x20000100u, value);
+            t.IsTrue(std::memcmp(env.rdram.data() + 0x100u, &value, sizeof(value)) == 0,
+                     "SQ to the uncached mirror lands in RAM");
+            t.IsTrue(same(Ps2Read128(env.rdram.data(), &env.ctx, &env.runtime, 0x20000100u), value),
+                     "LQ from the uncached mirror reads RAM");
+        });
+
         tc.Run("CreateThread and CreateSema decode the exact PS2SDK EE layouts", [](TestCase &t)
         {
             TestEnv env;
