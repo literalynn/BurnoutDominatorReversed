@@ -18,4 +18,4 @@ Where the game's VU0 and VU1 microprograms sit in `SLES_546.27`, for `tools/comp
 
 Provenance: 29 code images recorded with `project.py run --vu-capture` in the menus and in races (24 once identical ones are merged), then `python tools/vu_program_manifest.py make --output data/vu_programs.manifest --game-root <work>/local/disc --game <work>/local/disc/SLES_546.27 <work>/local/vu-programs`. The C++ compiled from its expansion is byte for byte the C++ compiled from the recordings.
 
-SHA256 (LF line endings, as committed): `ca0ca21471f32b5ca7bd57f39e6f536a93e3cf320459d2f81981f0be4ec9e953`
+SHA256 (LF line endings, as committed): `09f767b91040e67b5bdd005cea870329d5a81bc44e45bd9f7b957c6910a2646d`
