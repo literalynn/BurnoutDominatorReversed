@@ -2189,19 +2189,27 @@ uint32_t PS2Memory::releaseMaskedPath3Packets(uint32_t budgetQwords)
     for (const auto &packet : m_path3MaskedFifo)
         queued += packet.size();
     queued -= m_path3FifoHead;
+    // Tags are read in order: the chunk holding the last one is where the search for the next
+    // starts (`chunkStart` is that chunk's byte offset in the queue). A tag read whole is one
+    // load: a copy of a variable size called memcpy, and the load after it waited for its bytes.
+    size_t chunk = 0u, chunkStart = 0u;
     const auto readTag = [&](size_t q)
     {
-        size_t offset = m_path3FifoHead + q * 16u;
-        uint64_t tag = 0;
-        for (const auto &packet : m_path3MaskedFifo)
+        size_t offset = m_path3FifoHead + q * 16u - chunkStart;
+        while (chunk < m_path3MaskedFifo.size() && offset >= m_path3MaskedFifo[chunk].size())
         {
-            if (offset < packet.size())
-            {
-                std::memcpy(&tag, packet.data() + offset, std::min<size_t>(sizeof(tag), packet.size() - offset));
-                break;
-            }
-            offset -= packet.size();
+            offset -= m_path3MaskedFifo[chunk].size();
+            chunkStart += m_path3MaskedFifo[chunk].size();
+            ++chunk;
         }
+        uint64_t tag = 0;
+        if (chunk == m_path3MaskedFifo.size())
+            return tag;
+        const auto &packet = m_path3MaskedFifo[chunk];
+        if (packet.size() - offset >= sizeof(tag))
+            std::memcpy(&tag, packet.data() + offset, sizeof(tag));
+        else
+            std::memcpy(&tag, packet.data() + offset, packet.size() - offset);
         return tag;
     };
 
