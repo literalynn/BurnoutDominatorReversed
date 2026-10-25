@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Ctrl+C and SIGTERM stop the game again after the first pad read (October 25, 2026)
+
+- `ps2_pad.cpp`: `SDL_Init(SDL_INIT_GAMECONTROLLER)` starts SDL's event subsystem, which replaces default SIGINT and SIGTERM handlers with its own and turns both signals into an `SDL_QUIT` event. Nothing reads SDL's events (the window is GLFW's), so from the first pad read on, which initializes SDL whether or not a gamepad is connected, Ctrl+C in the terminal and `kill` no longer stopped the game, and Steam's "Stop" waited for its SIGKILL timeout. The pad now sets `SDL_HINT_NO_SIGNAL_HANDLERS` before `SDL_Init`, and the signals keep their default action. Checked on Linux: `raise(SIGTERM)` after `SDL_Init` ends the process with the hint and not without it. The same SDL code installs the SIGINT handler on Windows, where Ctrl+C in the console should stop the game again as well; this was not run on Windows.
+
 ## VIF1 reads runs of NOPs at once and unpacks strided streams without block counters (October 25, 2026)
 
 - `ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp`: a race VBlank gives VIF1 about 25,000 codes, 45% of them padding NOPs. Each one went through the PATH3 window test, two trace tests that each loaded the VSync counter, and the command chain. A run of NOPs is now read in one go: it leaves CODE and NUM at zero and gives an open PATH3 unmask window one qword per NOP, as before. With `BDR_TRACE_VIF1` set, NOPs still go one at a time so that each is printed; the trace window is tested once per call.
