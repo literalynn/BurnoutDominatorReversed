@@ -74,6 +74,8 @@ To resume on the machine that has the ISO (the observation variables are describ
 python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run12.log --tail 120
 ```
 
+November 4: native VU1 programs, step 1 ([NATIVE_RENDERER.md](NATIVE_RENDERER.md)). Per-program counters show where a race's VU1 time goes: the world programs 43.9% (images identical to Burnout 3's), the vehicles 19.6%, the sky dome 12.6%, the props 9.5% and the sparks 9.2%. The sky dome comes first: it builds its geometry from two small parameter blocks, so a native version can be checked against the microprogram in shadow mode without decoding any vertex stream.
+
 ## Requests for once the game is playable
 
 These goals assume the game reaches the races; they come after boot. Leads already established:

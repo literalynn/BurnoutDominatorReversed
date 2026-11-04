@@ -4,6 +4,7 @@
 #include "runtime/gs/ps2_gs_psmct32.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_vu1.h"
+#include "runtime/ps2_vu1_stats.h"
 #include "../../ps2xRuntime/src/lib/vu/ps2_vu1_fmac.h"
 #include "../../ps2xRuntime/src/lib/vu/ps2_vu1_fmac_neon.h"
 #include "../../ps2xRuntime/src/lib/vu/ps2_vu1_region.h"
@@ -1936,6 +1937,37 @@ void register_ps2_vu1_tests()
             t.Equals(vu1.state().vf[3][1], -2.0f, "ADD.xz should preserve y");
             t.Equals(vu1.state().vf[3][2], 33.0f, "ADD.xz should write z");
             t.Equals(vu1.state().vf[3][3], -4.0f, "ADD.xz should preserve w");
+        });
+
+        tc.Run("program statistics follow a program over budget splits", [](TestCase &t)
+        {
+            Vu1Fixture fx;
+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+            writeVuInstructionPair(fx.code, 0u, 0x8000033Cu, kVuUpperNop);
+            writeVuInstructionPair(fx.code, 8u, 0x8000033Cu, kVuUpperNop | 0x40000000u);
+            writeVuInstructionPair(fx.code, 16u, 0x8000033Cu, kVuUpperNop);
+            writeVuInstructionPair(fx.code, 0x100u, 0x48000800u, kVuUpperNop); // JR vi1, as Burnout's entries
+            writeVuInstructionPair(fx.code, 0x108u, 0x8000033Cu, kVuUpperNop);
+
+            ps2_vu_stats::setEnabled(true);
+            ps2_vu_stats::reset();
+            VU1Interpreter vu1;
+            vu1.setCompiledExecutionEnabled(false);
+            vu1.execute(fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem, 0u, 0u, 0u, 1u);
+            vu1.resume(fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem, 0u, 0u, 256u);
+            vu1.execute(fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem, 0u, 0u, 0u, 256u);
+            vu1.state().vi[1] = 0;
+            vu1.execute(fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem, 0x100u, 0u, 0u, 256u);
+            const std::string report = ps2_vu_stats::report();
+            ps2_vu_stats::setEnabled(false);
+            ps2_vu_stats::reset();
+
+            t.IsTrue(report.find("[vu1 programs] 2 programs, 3 starts, 11 pairs") != std::string::npos,
+                     "one image, two entries, three starts: " + report);
+            t.IsTrue(report.find(" 0000 0000000000000000 2 3 6 100.0 ") != std::string::npos,
+                     "the split program counts once, over three runs: " + report);
+            t.IsTrue(report.find(" 0100>0000 0000000000000000 1 1 5 100.0 ") != std::string::npos,
+                     "an entry that jumps is named with its target: " + report);
         });
 
         tc.Run("LOI commits the lower immediate after the upper instruction", [](TestCase &t)

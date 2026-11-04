@@ -6,9 +6,12 @@
 #include "runtime/ps2_memory.h"
 #include "ps2_vu1_detail.h"
 #include "ps2_vu1_capture.h"
+#include "runtime/ps2_vu1_stats.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cfenv>
 #include <cmath>
 #include <cstdio>
@@ -57,6 +60,148 @@ namespace
         output.flush();
     }
 
+}
+
+namespace ps2_vu_stats
+{
+namespace
+{
+    struct Totals
+    {
+        uint64_t routine = 0, starts = 0, runs = 0, pairs = 0, interpreted = 0, cycles = 0;
+        uint64_t nanoseconds = 0, kicks = 0, kickBytes = 0;
+        uint64_t firstTag[2]{}; // what the program draws: the GIF tag its first kick starts with
+    };
+    std::atomic<bool> g_enabled{std::getenv("PS2_VU_PROGRAM_STATS") != nullptr};
+    std::mutex g_mutex;
+    std::map<std::pair<uint64_t, uint32_t>, Totals> g_totals;
+
+    // VU1 thread only: the program in progress, over the runs a budget or a stop splits it into.
+    struct Current
+    {
+        uint64_t image = 0;
+        uint32_t entry = 0; // MSCAL address << 16 | where its JR goes (Burnout's entries are JR vi15 stubs)
+        uint64_t routine = 0;
+        bool running = false;
+        bool fresh = false;
+        const uint8_t *hashedCode = nullptr;
+        uint64_t hashedGeneration = 0;
+        uint64_t hashedImage = 0;
+        uint64_t kicks = 0, kickBytes = 0;
+        uint64_t firstTag[2]{};
+    } g_current;
+    std::map<std::pair<uint64_t, uint32_t>, uint64_t> g_routines; // VU1 thread only
+
+    void begin(const uint8_t *code, uint32_t size, PS2Memory *memory, uint32_t pc, uint32_t target)
+    {
+        Current &current = g_current;
+        if (current.running)
+            return;
+        // Hashed once per microcode upload, outside the timed run.
+        const uint64_t generation = memory ? memory->getVU1CodeGeneration() : 0u;
+        if (!memory || code != current.hashedCode || generation != current.hashedGeneration)
+        {
+            uint64_t hash = 14695981039346656037ull;
+            for (uint32_t i = 0; i < size; ++i)
+                hash = (hash ^ code[i]) * 1099511628211ull;
+            current.hashedCode = memory ? code : nullptr;
+            current.hashedGeneration = generation;
+            current.hashedImage = hash;
+        }
+        current.image = current.hashedImage;
+        current.entry = pc << 16 | target;
+        const auto [routine, added] = g_routines.try_emplace({current.image, target}, 0u);
+        if (added)
+            routine->second = routineName(code, size, target);
+        current.routine = routine->second;
+        current.running = current.fresh = true;
+    }
+
+    void end(bool programEnded, uint64_t pairs, uint64_t interpreted, uint64_t cycles, uint64_t nanoseconds)
+    {
+        Current &current = g_current;
+        {
+            const std::lock_guard lock(g_mutex);
+            Totals &totals = g_totals[{current.image, current.entry}];
+            totals.routine = current.routine;
+            totals.starts += current.fresh ? 1u : 0u;
+            ++totals.runs;
+            totals.pairs += pairs;
+            totals.interpreted += interpreted;
+            totals.cycles += cycles;
+            totals.nanoseconds += nanoseconds;
+            totals.kicks += current.kicks;
+            totals.kickBytes += current.kickBytes;
+            if (totals.firstTag[0] == 0u && totals.firstTag[1] == 0u)
+                std::memcpy(totals.firstTag, current.firstTag, sizeof(totals.firstTag));
+        }
+        current.fresh = false;
+        current.kicks = current.kickBytes = 0u;
+        current.firstTag[0] = current.firstTag[1] = 0u;
+        current.running = !programEnded;
+    }
+}
+
+bool enabled()
+{
+    return g_enabled.load(std::memory_order_relaxed);
+}
+
+void setEnabled(bool on)
+{
+    g_enabled.store(on, std::memory_order_relaxed);
+}
+
+void reset()
+{
+    const std::lock_guard lock(g_mutex);
+    g_totals.clear();
+}
+
+std::string report()
+{
+    std::vector<std::pair<std::pair<uint64_t, uint32_t>, Totals>> rows;
+    {
+        const std::lock_guard lock(g_mutex);
+        rows.assign(g_totals.begin(), g_totals.end());
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.second.nanoseconds > b.second.nanoseconds; });
+    Totals sum;
+    for (const auto &row : rows)
+    {
+        sum.starts += row.second.starts;
+        sum.pairs += row.second.pairs;
+        sum.nanoseconds += row.second.nanoseconds;
+        sum.kickBytes += row.second.kickBytes;
+    }
+    char line[320];
+    std::snprintf(line, sizeof(line), "[vu1 programs] %zu programs, %llu starts, %llu pairs, %.1f ms, %llu KiB kicked\n",
+                  rows.size(), static_cast<unsigned long long>(sum.starts), static_cast<unsigned long long>(sum.pairs),
+                  sum.nanoseconds / 1e6, static_cast<unsigned long long>(sum.kickBytes / 1024u));
+    std::string text = line;
+    text += "[vu1 programs] image entry routine starts runs pairs interpreted% cycles ms time% pairs/start ns/pair kicks kicked_KiB first_gif_tag(hi:lo)\n";
+    for (const auto &[key, totals] : rows)
+    {
+        char entry[16];
+        if ((key.second >> 16) == (key.second & 0xFFFFu))
+            std::snprintf(entry, sizeof(entry), "%04x", key.second & 0xFFFFu);
+        else
+            std::snprintf(entry, sizeof(entry), "%04x>%04x", key.second >> 16, key.second & 0xFFFFu);
+        std::snprintf(line, sizeof(line), "[vu1 programs] %016llx %s %016llx %llu %llu %llu %.1f %llu %.1f %.1f %.0f %.2f %llu %llu %016llx:%016llx\n",
+                      static_cast<unsigned long long>(key.first), entry, static_cast<unsigned long long>(totals.routine),
+                      static_cast<unsigned long long>(totals.starts), static_cast<unsigned long long>(totals.runs),
+                      static_cast<unsigned long long>(totals.pairs),
+                      totals.pairs ? 100.0 * totals.interpreted / totals.pairs : 0.0,
+                      static_cast<unsigned long long>(totals.cycles), totals.nanoseconds / 1e6,
+                      sum.nanoseconds ? 100.0 * totals.nanoseconds / sum.nanoseconds : 0.0,
+                      totals.starts ? static_cast<double>(totals.pairs) / totals.starts : 0.0,
+                      totals.pairs ? static_cast<double>(totals.nanoseconds) / totals.pairs : 0.0,
+                      static_cast<unsigned long long>(totals.kicks), static_cast<unsigned long long>(totals.kickBytes / 1024u),
+                      static_cast<unsigned long long>(totals.firstTag[1]), static_cast<unsigned long long>(totals.firstTag[0]));
+        text += line;
+    }
+    return text;
+}
 }
 
 VU1Interpreter::VU1Interpreter(Unit unit)
@@ -286,6 +431,13 @@ void VU1Interpreter::finishXgkick()
     if (!m_xgkick.active)
         return;
 
+    if (ps2_vu_stats::enabled())
+    {
+        auto &current = ps2_vu_stats::g_current;
+        if (current.kicks++ == 0u && m_xgkick.totalBytes >= 16u)
+            std::memcpy(current.firstTag, m_xgkick.packet.data(), sizeof(current.firstTag));
+        current.kickBytes += m_xgkick.totalBytes;
+    }
     if (m_activeMemory)
         m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
     else if (m_activeGs)
@@ -422,6 +574,8 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
     m_state.vf[0][1] = 0.0f;
     m_state.vf[0][2] = 0.0f;
     m_state.vf[0][3] = 1.0f;
+    if (m_unit == Unit::VU1)
+        ps2_vu_stats::g_current.running = false; // MSCAL starts a new program, whatever stopped the last one
     if (captureDirectory && *captureDirectory && memory) {
         // execute() has an empty pipeline; resumed states need a fuller snapshot.
         const uint64_t generation = m_unit == Unit::VU1
@@ -502,6 +656,21 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                          GS &gs, PS2Memory *memory, uint32_t maxCycles)
 {
     const uint64_t pairsBefore = m_compiledPairsExecuted + m_interpretedPairsExecuted;
+    const bool stats = m_unit == Unit::VU1 && ps2_vu_stats::enabled();
+    const uint64_t interpretedBefore = m_interpretedPairsExecuted;
+    const uint64_t cycleBefore = m_cycle;
+    std::chrono::steady_clock::time_point statsStart{};
+    if (stats)
+    {
+        uint32_t target = m_state.pc;
+        uint32_t lower = 0;
+        if (m_state.pc + 8u <= codeSize)
+            std::memcpy(&lower, vuCode + m_state.pc, sizeof(lower));
+        if ((lower >> 25) == 0x24u || (lower >> 25) == 0x25u) // JR, JALR: the program is where it jumps
+            target = (static_cast<uint32_t>(m_state.vi[(lower >> 11) & 15u]) * 8u) & (codeSize - 1u);
+        ps2_vu_stats::begin(vuCode, codeSize, memory, m_state.pc, target);
+        statsStart = std::chrono::steady_clock::now();
+    }
     m_activeVuData = vuData;
     m_activeVuDataSize = dataSize;
     m_activeGs = &gs;
@@ -605,6 +774,10 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
 #endif
 #endif
     const uint64_t pairsAfter = m_compiledPairsExecuted + m_interpretedPairsExecuted;
+    if (stats)
+        ps2_vu_stats::end(programEnded, pairsAfter - pairsBefore, m_interpretedPairsExecuted - interpretedBefore,
+            m_cycle - cycleBefore, static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - statsStart).count()));
     if (ps2_vu_detail::profileRegions)
         ps2_vu_detail::regionCounters.total[m_unit == Unit::VU1 ? 1u : 0u] += pairsAfter - pairsBefore;
     if (profileExecution && (pairsBefore >> 24u) != (pairsAfter >> 24u))

@@ -1,4 +1,5 @@
 #include "ps2_vu1_program.h"
+#include "runtime/ps2_vu1_stats.h"
 
 #include <algorithm>
 #include <array>
@@ -565,4 +566,24 @@ bool run(VU1Interpreter &vu, const uint8_t *code, uint32_t codeSize, uint64_t bu
         }
     }
 }
+}
+
+uint64_t ps2_vu_stats::routineName(const uint8_t *code, uint32_t codeSize, uint32_t pc)
+{
+    using namespace ps2_vu_program;
+    // The entry search() picks, hashed as compile_vu_programs.py names routines.
+    const Entry *const end = std::end(kEntries) - 1;
+    for (const Entry *entry = std::lower_bound(std::begin(kEntries), end, pc,
+             [](const Entry &candidate, uint32_t value) { return candidate.pc < value; });
+         entry != end && entry->pc == pc; ++entry)
+    {
+        if (entry->unit != Unit::VU1 || !matches(*entry, code, codeSize))
+            continue;
+        uint64_t hash = 14695981039346656037ull;
+        for (uint32_t index = 0; index < entry->footprintPairs; ++index)
+            for (unsigned byte = 0; byte < 8u; ++byte)
+                hash = (hash ^ ((entry->words[index] >> (8u * byte)) & 0xFFu)) * 1099511628211ull;
+        return hash;
+    }
+    return 0u;
 }

@@ -10,6 +10,7 @@
 #include "runtime/ee_unwind.h"
 #include "runtime/host_settings.h"
 #include "runtime/vblank_rate.h"
+#include "runtime/ps2_vu1_stats.h"
 
 #include <algorithm>
 #include <atomic>
@@ -185,6 +186,7 @@ private:
         // Read from another thread: close enough for a count.
         const uint64_t compiled = m_runtime.vu1().compiledPairsExecuted();
         const uint64_t interpreted = m_runtime.vu1().interpretedPairsExecuted();
+        ps2_vu_stats::reset();
         const auto begin = std::chrono::steady_clock::now();
         if (!reach(m_to))
             return;
@@ -195,6 +197,9 @@ private:
         std::printf(", VU1 pairs %llu compiled, %llu interpreted\n",
                     static_cast<unsigned long long>(m_runtime.vu1().compiledPairsExecuted() - compiled),
                     static_cast<unsigned long long>(m_runtime.vu1().interpretedPairsExecuted() - interpreted));
+        // PS2_VU_PROGRAM_STATS=1: the same window, VU1 microprogram by microprogram.
+        if (ps2_vu_stats::enabled())
+            std::fputs(ps2_vu_stats::report().c_str(), stdout);
         std::fflush(stdout);
         m_runtime.requestStop();
     }
