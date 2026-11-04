@@ -232,6 +232,25 @@ def foreign_build_tree(build_dir: Path) -> Path | None:
     return source
 
 
+def follow_visual_studio_update(build_dir: Path) -> None:
+    """CMake pins the Visual Studio instance version in the cache and refuses to
+    regenerate the tree once Visual Studio updates itself in place."""
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return
+    data = cache.read_bytes()
+    entry = re.search(rb"^CMAKE_GENERATOR_INSTANCE:\w+=(.+),version=([^\r\n]+)", data, re.M)
+    vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    # An instance that is gone is left for CMake to report.
+    if not entry or not Path(entry[1].decode()).is_dir() or not vswhere.is_file():
+        return
+    current = subprocess.run([str(vswhere), "-path", entry[1].decode(), "-property", "installationVersion"],
+                             capture_output=True, text=True).stdout.strip()
+    if re.fullmatch(r"[0-9.]+", current) and current.encode() != entry[2]:
+        cache.write_bytes(data[:entry.start(2)] + current.encode() + data[entry.end(2):])
+        print(f"Visual Studio was updated ({entry[2].decode()} -> {current}); build tree updated to match")
+
+
 def default_cmake() -> str:
     """cmake on PATH, else the CMake the build tree was configured with (the
     installer uses the copy bundled with Visual Studio, not on PATH)."""
@@ -301,6 +320,7 @@ def configure(args) -> None:
         command += ["-G", args.generator]
     if args.arch:
         command += ["-A", args.arch]
+    follow_visual_studio_update(args.build_dir)
     run(command, "configure.log")
 
 
@@ -322,6 +342,7 @@ def build(args) -> None:
         pwsh = shutil.which("pwsh")
         if not pwsh:
             raise RuntimeError("PowerShell 7 is required for the MSBuild environment wrapper (scripts/Invoke-MSBuild.ps1)")
+        follow_visual_studio_update(args.build_dir)
         targets = ["ps2EntryRunner"] if args.game else [
             "ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests",
             "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests"]

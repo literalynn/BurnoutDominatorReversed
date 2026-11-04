@@ -274,6 +274,32 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(install.foreign_source(build), Path(other))
         self.assertEqual(project.foreign_build_tree(build), Path(other))
 
+    def test_build_tree_follows_a_visual_studio_update(self):
+        build = self.root / "build"
+        build.mkdir()
+        instance = self.root / "VS" / "Community"
+        vswhere = self.root / "x86" / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+        vswhere.parent.mkdir(parents=True)
+        vswhere.write_bytes(b"")
+        cache = build / "CMakeCache.txt"
+        old = ("CMAKE_HOME_DIRECTORY:INTERNAL=x\r\n"
+               f"CMAKE_GENERATOR_INSTANCE:UNINITIALIZED={instance.as_posix()},version=18.10.12306.391\r\n"
+               "CMAKE_X:BOOL=ON\r\n").encode()
+        cache.write_bytes(old)
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"ProgramFiles(x86)": str(self.root / "x86")}), \
+                mock.patch.object(project.subprocess, "run", return_value=mock.Mock(stdout="18.11.12328.437\n")) as ask, \
+                contextlib.redirect_stdout(out):
+            project.follow_visual_studio_update(build)  # instance gone: left for CMake to report
+            self.assertEqual(cache.read_bytes(), old)
+            ask.assert_not_called()
+            instance.mkdir(parents=True)
+            project.follow_visual_studio_update(build)
+            self.assertEqual(cache.read_bytes(), old.replace(b"18.10.12306.391", b"18.11.12328.437"))
+            self.assertEqual(ask.call_args[0][0][1:3], ["-path", instance.as_posix()])
+            project.follow_visual_studio_update(build)  # already current
+        self.assertEqual(out.getvalue().count("Visual Studio was updated"), 1)
+
     def test_shipped_map_matches_its_documented_hash(self):
         shipped = install.SHIPPED_MAP
         self.assertTrue(shipped.is_file())
