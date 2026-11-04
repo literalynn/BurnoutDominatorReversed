@@ -326,7 +326,8 @@ def build(args) -> None:
             "ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests",
             "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests"]
         for target in targets:
-            run([pwsh, "-NoProfile", "-File", str(ROOT / "scripts" / "Invoke-MSBuild.ps1"),
+            # A checkout from GitHub's ZIP marks the scripts as downloaded, and RemoteSigned refuses them unsigned.
+            run([pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts" / "Invoke-MSBuild.ps1"),
                  "-BuildDirectory", str(args.build_dir.resolve()), "-Target", target,
                  "-Jobs", str(args.jobs), "-LogPath", str(LOCAL / "logs" / ("msbuild-" + target + ".log"))], "native-build-" + target + ".log")
         return
