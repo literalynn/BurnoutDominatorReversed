@@ -31,9 +31,9 @@ std::vector<Program> &programs()
 Mode initialMode()
 {
     const char *setting = std::getenv("PS2_VU_NATIVE");
-    if (!setting || !*setting || std::strcmp(setting, "0") == 0)
+    if (setting && std::strcmp(setting, "0") == 0)
         return Mode::Off;
-    return std::strcmp(setting, "shadow") == 0 ? Mode::Shadow : Mode::On;
+    return setting && std::strcmp(setting, "shadow") == 0 ? Mode::Shadow : Mode::On;
 }
 Mode g_mode = initialMode();
 

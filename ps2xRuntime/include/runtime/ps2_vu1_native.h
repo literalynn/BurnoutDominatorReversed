@@ -6,9 +6,9 @@
 // tools/translate_vu_programs.py writes them from the game's own microcode; this header holds
 // what they share: the registry and the VU arithmetic on host SSE registers.
 //
-// PS2_VU_NATIVE selects them at run time: unset or 0, off; "shadow", the microcode still runs
-// and draws while each translation runs on copies of its inputs and the two results are
-// compared (GIF packets, VU1 data memory, registers); 1, the translations draw.
+// PS2_VU_NATIVE selects them at run time: unset or 1, the translations draw; 0, off, the
+// microcode draws; "shadow", the microcode still runs and draws while each translation runs on
+// copies of its inputs and the two results are compared (GIF packets, VU1 data memory, registers).
 
 #include "runtime/ps2_vu1.h"
 

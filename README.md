@@ -173,6 +173,8 @@ Each fix is described in [docs/CHANGES.md](docs/CHANGES.md) and the investigatio
 
 A race went from 1 frame per second (GS on the CPU) to 16 with paraLLEl-GS, then to 60: compiled VU0 and VU1 programs, VU1 and GS work moved to their own threads, a declared idle loop, and a long list of smaller fixes. On October 19 a replay of 1,500 frames of a six-car race went from 12.7 to 8.9 s of wall time, with the same picture bit for bit. `BDR_STOP_AT_VSYNC` measures a build's CPU time on such a replay ([docs/BOOT.md](docs/BOOT.md)).
 
+Since November 5, 2026 the ten heaviest VU1 microprograms (world, cars, props, sky, sparks, trails) run as C++ that the build translates from the game's own microcode, with the same output, compared over 9.5 million starts: at 300 Hz a race went from 171 to 228 frames a second on average. `PS2_VU_NATIVE=0` runs the microcode instead ([docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md)).
+
 ## Documentation
 
 | | |
