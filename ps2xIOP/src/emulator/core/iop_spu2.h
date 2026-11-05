@@ -23,7 +23,8 @@ namespace ps2x::iop::detail
     // key on, as in PCSX2), ENDX, the IRQ raised when a voice fetches (or a transfer or the
     // mixer touches) the address in IRQA, STATX/ATTR/SPDIF IRQ status, the dry mix of each core
     // (MMIX gates), core 0 feeding core 1's external input, the memory output buffers and a
-    // stereo output ring. Not modelled yet: reverb, noise, pitch modulation and ADMA streaming.
+    // stereo output ring, the reverb (wet mix through VMIXEL/VMIXER and MMIX, the work area from
+    // ESA to EEA, EVOL). Not modelled yet: noise, pitch modulation and ADMA streaming.
     class Spu2
     {
     public:
@@ -52,15 +53,22 @@ namespace ps2x::iop::detail
         static constexpr uint32_t RegData = 0x1ACu;
         static constexpr uint32_t RegAdmas = 0x1B0u;
         static constexpr uint32_t RegVoiceAddress = 0x1C0u; // 12 bytes per voice
+        // Reverb work area: ESA (high word, low word at +2) to EEA (high bits only, the low word is
+        // 0xFFFF). The reverb's own addresses follow ESA, in pairs, relative to the buffer position.
+        static constexpr uint32_t RegEsa = 0x2E0u;
+        static constexpr uint32_t RegEea = 0x33Cu;
         static constexpr uint32_t RegEndx = 0x340u;
         static constexpr uint32_t RegStatx = 0x344u;
         // Absolute offsets of the per-core volume block (core 1 is at +0x28).
         static constexpr uint32_t RegMvol = 0x760u;  // MVOLL, MVOLR (volume/sweep format)
+        static constexpr uint32_t RegEvol = 0x764u;  // EVOLL, EVOLR: reverb output volume (plain)
         static constexpr uint32_t RegBvol = 0x76Cu;  // BVOLL, BVOLR: external input (core 0 into core 1)
+        static constexpr uint32_t RegReverbVolumes = 0x774u; // IIR, COMB1-4, WALL, APF1, APF2, IN_L, IN_R
         static constexpr uint32_t RegMvolx = 0x770u; // MVOLXL, MVOLXR: current master volume
         static constexpr uint32_t RegSpdifIrqInfo = 0x7C2u;
 
         static constexpr uint16_t AttrEnable = 0x8000u;
+        static constexpr uint16_t AttrEffectEnable = 0x0080u; // the reverb writes its work area
         static constexpr uint16_t AttrIrqEnable = 0x0040u;
         static constexpr uint16_t AttrTransferMask = 0x0030u; // 1 = PIO write, 2 = DMA write, 3 = DMA read
         // STATX: 0 when idle, StatxBusy while a transfer runs, StatxDone once it finished and
@@ -183,7 +191,22 @@ namespace ps2x::iop::detail
             std::array<Voice, VoiceCount> voices;
         };
 
+        // Reverb of one core, after psx-spx's "SPU Reverb Formula" and PCSX2's SPU2 reverb: the wet
+        // mix goes down to 24 kHz through a 39-tap FIR, left and right on alternate output samples
+        // at the same buffer position, and the result comes back up through the same filter.
+        struct Reverb
+        {
+            // Wet input and reverb output per side, each sample at i and i + 64 so that the last
+            // 39 are always contiguous; the output holds zeros on the other side's samples.
+            std::array<std::array<int16_t, 128>, 2> input{};
+            std::array<std::array<int16_t, 128>, 2> output{};
+            uint32_t slot = 0;     // next slot of the histories, 0..63
+            uint32_t position = 0; // buffer position after ESA, one word every two samples
+            bool right = false;    // this output sample computes the right side
+        };
+
         void tickSample();
+        void reverbSample(int core, const int32_t (&input)[2], int32_t (&output)[2]);
         void keyOn(int core, int voice);
         void keyOff(int core, int voice);
         void stopVoice(int core, int voice);
@@ -200,6 +223,7 @@ namespace ps2x::iop::detail
         std::vector<uint16_t> m_ram;
         std::array<uint16_t, 0x400> m_raw{}; // register backing store, indexed by byte offset / 2
         std::array<Core, CoreCount> m_cores;
+        std::array<Reverb, CoreCount> m_reverb{};
         uint16_t m_spdifIrqInfo = 0;
         uint32_t m_activeVoices = 0;
         uint32_t m_enabledCores = 0; // bit per core whose ATTR enable bit is set

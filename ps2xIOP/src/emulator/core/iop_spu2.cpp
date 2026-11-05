@@ -133,6 +133,7 @@ namespace ps2x::iop::detail
         m_raw.fill(0u);
         for (Core &core : m_cores)
             core = Core{};
+        m_reverb = {};
         m_spdifIrqInfo = 0u;
         m_activeVoices = 0u;
         m_enabledCores = 0u;
@@ -280,6 +281,15 @@ namespace ps2x::iop::detail
         switch (c)
         {
         case RegAttr:
+            if ((value & AttrEffectEnable) != 0u && (state.attr & AttrEffectEnable) == 0u)
+            {
+                static int reported = 0;
+                const uint32_t base = (offset & 0x400u) >> 1;
+                if (reported++ < 4)
+                    std::fprintf(stderr, "[spu2] core %d reverb on, work area 0x%x-0x%xffff\n", core,
+                                 ((m_raw[base + (RegEsa >> 1)] & 0xFu) << 16u) | m_raw[base + ((RegEsa + 2u) >> 1)],
+                                 m_raw[base + (RegEea >> 1)] & 0xFu);
+            }
             state.attr = value;
             if ((value & AttrEnable) != 0u)
                 m_enabledCores |= 1u << core;
@@ -292,6 +302,11 @@ namespace ps2x::iop::detail
             break;
         case RegIrqa:
             state.irqAddress = withHigh(state.irqAddress, value);
+            break;
+        case RegEsa:
+        case RegEsa + 2u:
+            // Writing ESA also moves the buffer position to it (psx-spx).
+            m_reverb[static_cast<size_t>(core)].position = 0u;
             break;
         case RegIrqa + 2u:
             state.irqAddress = withLow(state.irqAddress, value);
@@ -615,7 +630,9 @@ namespace ps2x::iop::detail
         {
             Core &state = m_cores[static_cast<size_t>(core)];
             const uint32_t dryMask[2] = {maskOf(core, RegVmixl), maskOf(core, RegVmixr)};
+            const uint32_t wetMask[2] = {maskOf(core, RegVmixel), maskOf(core, RegVmixer)};
             int32_t voices[2] = {0, 0};
+            int32_t wet[2] = {0, 0};
             int32_t voice1Output = 0;
             int32_t voice3Output = 0;
             for (int index = 0; index < VoiceCount; ++index)
@@ -669,8 +686,13 @@ namespace ps2x::iop::detail
                     else if (index == 3)
                         voice3Output = sample;
                     for (int channel = 0; channel < 2; ++channel)
+                    {
+                        const int32_t value = (sample * voice.volume[static_cast<size_t>(channel)].level) >> 15;
                         if ((dryMask[channel] & (1u << index)) != 0u)
-                            voices[channel] += (sample * voice.volume[static_cast<size_t>(channel)].level) >> 15;
+                            voices[channel] += value;
+                        if ((wetMask[channel] & (1u << index)) != 0u)
+                            wet[channel] += value;
+                    }
                 }
 
                 voice.position += std::min<uint32_t>(voice.pitch, 0x3FFFu);
@@ -689,12 +711,22 @@ namespace ps2x::iop::detail
                 continue;
 
             // MMIX gates (core 0 has no external input): bits 11/10 voices, 3/2 external input
-            // to the dry mix. The sound data input (ADMA) and the reverb are not modelled.
+            // to the dry mix; bits 9/8 voices, 1/0 external input to the reverb. The sound data
+            // input (ADMA) is not modelled.
             const uint32_t mmix = m_raw[(static_cast<uint32_t>(core) * 0x400u + RegMmix) >> 1] & (core == 0 ? 0xFF0u : 0xFFFu);
-            const int32_t dryLeft = clamp16(((mmix & 0x800u) ? voices[0] : 0) + ((mmix & 0x008u) ? external[0] : 0));
-            const int32_t dryRight = clamp16(((mmix & 0x400u) ? voices[1] : 0) + ((mmix & 0x004u) ? external[1] : 0));
-            const int32_t outLeft = (dryLeft * state.master[0].level) >> 15;
-            const int32_t outRight = (dryRight * state.master[1].level) >> 15;
+            const int32_t dry[2] = {((mmix & 0x800u) ? voices[0] : 0) + ((mmix & 0x008u) ? external[0] : 0),
+                                    ((mmix & 0x400u) ? voices[1] : 0) + ((mmix & 0x004u) ? external[1] : 0)};
+            const int32_t wetInput[2] = {((mmix & 0x200u) ? wet[0] : 0) + ((mmix & 0x002u) ? external[0] : 0),
+                                         ((mmix & 0x100u) ? wet[1] : 0) + ((mmix & 0x001u) ? external[1] : 0)};
+            int32_t effect[2] = {0, 0};
+            reverbSample(core, wetInput, effect);
+            const uint32_t evol = (RegEvol + static_cast<uint32_t>(core) * 0x28u) >> 1;
+            const int32_t dryLeft = clamp16(dry[0]);
+            const int32_t dryRight = clamp16(dry[1]);
+            const int32_t mixLeft = clamp16(dry[0] + ((effect[0] * static_cast<int16_t>(m_raw[evol])) >> 15));
+            const int32_t mixRight = clamp16(dry[1] + ((effect[1] * static_cast<int16_t>(m_raw[evol + 1u])) >> 15));
+            const int32_t outLeft = (mixLeft * state.master[0].level) >> 15;
+            const int32_t outRight = (mixRight * state.master[1].level) >> 15;
 
             // The mixer streams its results into sound RAM every sample (the memory output
             // buffers, 0x200 words each). Software uses them as a clock by putting IRQA inside
@@ -706,8 +738,8 @@ namespace ps2x::iop::detail
             memoryOutWrite(voiceBase + 0x200u + position, static_cast<int16_t>(voice3Output));
             memoryOutWrite(mixBase + position, static_cast<int16_t>(dryLeft));
             memoryOutWrite(mixBase + 0x200u + position, static_cast<int16_t>(dryRight));
-            memoryOutWrite(mixBase + 0x400u + position, 0);
-            memoryOutWrite(mixBase + 0x600u + position, 0);
+            memoryOutWrite(mixBase + 0x400u + position, static_cast<int16_t>(clamp16(wet[0])));
+            memoryOutWrite(mixBase + 0x600u + position, static_cast<int16_t>(clamp16(wet[1])));
             if (core == 0)
             {
                 memoryOutWrite(0x800u + position, static_cast<int16_t>(clamp16(outLeft)));
@@ -739,6 +771,124 @@ namespace ps2x::iop::detail
         m_audio[slot * 2u + 1u] = right;
         ++m_audioCount;
         ++m_producedFrames;
+    }
+
+    void Spu2::reverbSample(int core, const int32_t (&input)[2], int32_t (&output)[2])
+    {
+        // The resampling filter (psx-spx): odd taps are zero but the centre one. Its gain is one
+        // going down (>> 15) and two coming up (>> 14), half of each side's output being zeros.
+        static constexpr int32_t kFir[39] = {-1, 0, 2, 0, -10, 0, 35, 0, -103, 0, 266, 0, -616, 0, 1332, 0, -2960, 0, 10246, 16384,
+                                             10246, 0, -2960, 0, 1332, 0, -616, 0, 266, 0, -103, 0, 35, 0, -10, 0, 2, 0, -1};
+        Reverb &reverb = m_reverb[static_cast<size_t>(core)];
+        const uint32_t slot = reverb.slot;
+        const uint32_t first = (slot + 64u - 38u) & 63u; // the 39 samples that end at this one
+        const auto fir = [&](const std::array<int16_t, 128> &history) {
+            const int16_t *samples = history.data() + first;
+            int32_t sum = samples[19] * kFir[19];
+            for (int tap = 0; tap < 39; tap += 2)
+                sum += samples[tap] * kFir[tap];
+            return sum;
+        };
+        const bool right = reverb.right;
+        reverb.slot = (slot + 1u) & 63u;
+        reverb.right = !right;
+
+        const uint32_t base = static_cast<uint32_t>(core) * 0x400u;
+        const auto pair = [&](uint32_t offset) {
+            return ((static_cast<uint32_t>(m_raw[(base + offset) >> 1]) & 0xFu) << 16u) | m_raw[(base + offset + 2u) >> 1];
+        };
+        const uint32_t start = pair(RegEsa);
+        const uint32_t end = ((static_cast<uint32_t>(m_raw[(base + RegEea) >> 1]) & 0xFu) << 16u) | 0xFFFFu;
+        const uint32_t volumes = (RegReverbVolumes + static_cast<uint32_t>(core) * 0x28u) >> 1;
+        const auto volume = [&](uint32_t index) { return static_cast<int32_t>(static_cast<int16_t>(m_raw[volumes + index])); };
+        const uint32_t evol = (RegEvol + static_cast<uint32_t>(core) * 0x28u) >> 1;
+        const bool writes = (m_cores[static_cast<size_t>(core)].attr & AttrEffectEnable) != 0u;
+        if (start >= end || (!writes && m_raw[evol] == 0u && m_raw[evol + 1u] == 0u))
+        {
+            // No work area, or a reverb that neither writes nor is heard: only the clock moves.
+            if (right)
+                ++reverb.position;
+            return;
+        }
+        const uint32_t size = end - start + 1u;
+        if (reverb.position >= size)
+            reverb.position = 0u;
+        const uint32_t position = reverb.position;
+        if (right)
+            reverb.position = position + 1u;
+
+        for (size_t side = 0; side < 2u; ++side)
+        {
+            const int16_t value = static_cast<int16_t>(clamp16(input[side]));
+            reverb.input[side][slot] = value;
+            reverb.input[side][slot + 64u] = value;
+        }
+
+        // A word of the work area, offset words after the buffer position, wrapped in ESA..EEA.
+        // While the reverb writes, its 14 accesses a sample can raise the IRQ (as in PCSX2).
+        const int64_t length = size;
+        const auto at = [&](int64_t offset) {
+            int64_t x = static_cast<int64_t>(position) + offset;
+            if (x >= length)
+                x = x - length < length ? x - length : x % length;
+            else if (x < 0)
+                x = x + length >= 0 ? x + length : (x % length + length) % length;
+            const uint32_t word = (start + static_cast<uint32_t>(x)) & RamMask;
+            if (writes)
+                testIrqAllCores(word);
+            return word;
+        };
+        const auto ram = [&](uint32_t word) { return static_cast<int32_t>(static_cast<int16_t>(m_ram[word])); };
+        const auto mul = [](int32_t a, int32_t b) { return static_cast<int32_t>((static_cast<int64_t>(a) * b) >> 15); };
+
+        const uint32_t side = right ? 4u : 0u; // right-side address registers follow the left ones
+        const int64_t sameDestination = pair(0x2ECu + side);
+        const int64_t diffDestination = pair(0x30Cu + side);
+        const int64_t apf1Destination = pair(0x32Cu + side);
+        const int64_t apf2Destination = pair(0x334u + side);
+        const uint32_t sameSource = at(pair(0x304u + side));
+        const uint32_t samePrevious = at(sameDestination - 1);
+        const uint32_t diffSource = at(pair(0x328u - side)); // the other side's
+        const uint32_t diffPrevious = at(diffDestination - 1);
+        const uint32_t comb[4] = {at(pair(0x2F4u + side)), at(pair(0x2FCu + side)), at(pair(0x314u + side)), at(pair(0x31Cu + side))};
+        const uint32_t apf1Source = at(apf1Destination - pair(0x2E4u));
+        const uint32_t apf2Source = at(apf2Destination - pair(0x2E8u));
+        const uint32_t sameWord = at(sameDestination);
+        const uint32_t diffWord = at(diffDestination);
+        const uint32_t apf1Word = at(apf1Destination);
+        const uint32_t apf2Word = at(apf2Destination);
+
+        const int32_t in = mul(volume(right ? 9u : 8u), clamp16(fir(reverb.input[right ? 1u : 0u]) >> 15));
+        const int32_t iir = volume(0u);
+        const int32_t wall = volume(5u);
+        // Same side, then the other side's reflection.
+        const int32_t same = mul(iir, in + mul(wall, ram(sameSource)) - ram(samePrevious)) + ram(samePrevious);
+        const int32_t diff = mul(iir, in + mul(wall, ram(diffSource)) - ram(diffPrevious)) + ram(diffPrevious);
+        // Early echo: four combs.
+        int32_t out = mul(volume(1u), ram(comb[0])) + mul(volume(2u), ram(comb[1])) + mul(volume(3u), ram(comb[2])) +
+                      mul(volume(4u), ram(comb[3]));
+        // Late reverb: two all-pass filters.
+        const int32_t apf1 = out - mul(volume(6u), ram(apf1Source));
+        out = ram(apf1Source) + mul(volume(6u), apf1);
+        const int32_t apf2 = out - mul(volume(7u), ram(apf2Source));
+        out = ram(apf2Source) + mul(volume(7u), apf2);
+        // ATTR bit 7 clear: the work area is read, never written.
+        if (writes)
+        {
+            m_ram[sameWord] = static_cast<uint16_t>(clamp16(same));
+            m_ram[diffWord] = static_cast<uint16_t>(clamp16(diff));
+            m_ram[apf1Word] = static_cast<uint16_t>(clamp16(apf1));
+            m_ram[apf2Word] = static_cast<uint16_t>(clamp16(apf2));
+        }
+
+        const int16_t result = static_cast<int16_t>(clamp16(out));
+        const size_t heard = right ? 1u : 0u;
+        reverb.output[heard][slot] = result;
+        reverb.output[heard][slot + 64u] = result;
+        reverb.output[1u - heard][slot] = 0;
+        reverb.output[1u - heard][slot + 64u] = 0;
+        output[0] = clamp16(fir(reverb.output[0]) >> 14);
+        output[1] = clamp16(fir(reverb.output[1]) >> 14);
     }
 
     void Spu2::advanceTo(uint64_t cycle)
@@ -846,6 +996,11 @@ namespace ps2x::iop::detail
             loadVersion2(archive);
         else
             archive.value(m_cores);
+        // The reverb's state is saved since format version 5; earlier states start it empty.
+        if (!archive.loading() || archive.version() == 0u || archive.version() >= 5u)
+            archive.value(m_reverb);
+        else
+            m_reverb = {};
         archive.value(m_spdifIrqInfo);
         archive.value(m_activeVoices);
         archive.value(m_enabledCores);

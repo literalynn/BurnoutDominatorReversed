@@ -52,10 +52,9 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 | ✅ Saves | memory card (your profile is saved after every event), save states on F5 / F7 |
 | ✅ Controls | Xbox, PlayStation and SDL pads with vibration, keyboard and mouse |
 | ✅ Graphics | up to 4x resolution, supersampling, FXAA, 16:9 |
-| ✅ Sound | music, engines, crashes, menus |
+| ✅ Sound | music, engines, crashes, menus, the races' reverb |
 | ✅ Speed | 60 frames per second in six-car races; the race keeps its speed when frames come late |
 | ✅ High frame rate | 120, 144, 240... frames per second (`refresh_rate`): the simulation runs that fast, not interpolated (on a Ryzen + RTX 5090, 144 draws every frame in a race and 165 nearly every one, 144 also at 4x resolution with 16 samples a pixel; from 240 the frames come unevenly, and above 300 the race slows down) |
-| 🟡 Missing | SPU2 reverb |
 
 ## Install (Windows)
 
@@ -191,7 +190,7 @@ Contributions are welcome, from code to bug reports:
 
 - **Speed** for smaller PCs: the VU1 programs dominate a race frame ([`tools/compile_vu_programs.py`](tools/compile_vu_programs.py)).
 - **Modding**: [`disc_patches.cpp`](ps2xRuntime/src/lib/disc_patches.cpp) changes disc files as the game reads them, without touching the ISO.
-- **Sound**: the SPU2 ([`iop_spu2.cpp`](ps2xIOP/src/emulator/core/iop_spu2.cpp)) needs reverb and testing by ear.
+- **Sound**: the SPU2 ([`iop_spu2.cpp`](ps2xIOP/src/emulator/core/iop_spu2.cpp)) needs testing by ear, its reverb especially.
 - **Linux and macOS**: builds, controllers, packaging.
 - **Bug reports**: what you saw, when, your hardware, and if you can a save state (F5) taken just before.
 

@@ -82,6 +82,8 @@ November 5, later: the other nine big VU1 programs translate too (the four world
 
 November 5, night: the game thread's VU0 microprograms translate with the same tool ([NATIVE_RENDERER.md](NATIVE_RENDERER.md#vu0-programs)). 25 programs run translated; in shadow mode, about 27 million VU0 starts in two races, at the car select and from a third state were identical. In a race, the game thread's samples in VU0 work fell from about 800 to 426 of 6,150 busy.
 
+November 5, night: SPU2 reverb. Races use core 1's reverb with libsd's Hall preset, which the SPU2 now models (CHANGES.md): the voices sent to it echo in their work area and come back through the effect volume. Not yet checked by ear against a console or PCSX2.
+
 ## Requests for once the game is playable
 
 These goals assume the game reaches the races; they come after boot. Leads already established:

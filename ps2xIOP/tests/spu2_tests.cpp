@@ -1,6 +1,7 @@
 #include "emulator/core/iop_memory.h"
 #include "emulator/core/iop_spu2.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -381,6 +382,76 @@ namespace
     }
 }
 
+namespace
+{
+    // A voice sent only to the reverb (VMIXEL/VMIXER, MMIX wet bits): with ATTR bit 7 the reverb
+    // writes its work area and is heard through EVOL; without it nothing is written.
+    void testReverb()
+    {
+        for (const bool writes : {true, false})
+        {
+            Spu2 spu;
+            constexpr uint32_t Start = 0x4000u;
+            putBlock(spu, Start, 0x08, 0x04, 0x4);
+            putBlock(spu, Start + 8u, 0x08, 0x03, 0x4);
+            routeCore0ToOutput(spu);
+            write(spu, 0, Spu2::RegMmix, 0x0300); // voices to the reverb only, nothing dry
+            write(spu, 0, Spu2::RegVmixel, 0x0001);
+            write(spu, 0, Spu2::RegVmixer, 0x0001);
+            constexpr uint32_t Area = 0x70000u;
+            setAddress(spu, 0, Spu2::RegEsa, Area);
+            write(spu, 0, Spu2::RegEea, 0x7);     // work area 0x70000-0x7FFFF
+            setAddress(spu, 0, 0x2ECu, 0x100u);   // SAME_L_DST
+            setAddress(spu, 0, 0x2F0u, 0x900u);   // SAME_R_DST
+            setAddress(spu, 0, 0x2F4u, 0x0FFu);   // COMB1_L_SRC: the word before SAME_L_DST
+            setAddress(spu, 0, 0x2F8u, 0x8FFu);   // COMB1_R_SRC
+            // With APF volumes at zero the output is the APF2 line, one step behind APF1's, one
+            // step behind the combs.
+            setAddress(spu, 0, 0x2E4u, 1u);       // APF1_SIZE
+            setAddress(spu, 0, 0x2E8u, 1u);       // APF2_SIZE
+            setAddress(spu, 0, 0x32Cu, 0x200u);   // APF1_L_DST
+            setAddress(spu, 0, 0x330u, 0xA00u);   // APF1_R_DST
+            setAddress(spu, 0, 0x334u, 0x300u);   // APF2_L_DST
+            setAddress(spu, 0, 0x338u, 0xB00u);   // APF2_R_DST
+            spu.write16(Base + Spu2::RegReverbVolumes, 0x4000u);           // IIR
+            spu.write16(Base + Spu2::RegReverbVolumes + 2u, 0x7FFFu);      // COMB1
+            spu.write16(Base + Spu2::RegReverbVolumes + 16u, 0x7FFFu);     // IN_L
+            spu.write16(Base + Spu2::RegReverbVolumes + 18u, 0x7FFFu);     // IN_R
+            spu.write16(Base + Spu2::RegEvol, 0x7FFFu);
+            spu.write16(Base + Spu2::RegEvol + 2u, 0x7FFFu);
+            write(spu, 0, Spu2::RegAttr, static_cast<uint16_t>(Spu2::AttrEnable | (writes ? Spu2::AttrEffectEnable : 0u)));
+            setAddress(spu, 0, Spu2::RegVoiceAddress, Start);
+            write(spu, 0, 0x00, 0x3FFF);
+            write(spu, 0, 0x02, 0x3FFF);
+            write(spu, 0, 0x04, 0x1000);
+            setFastEnvelope(spu, 0, 0);
+            write(spu, 0, Spu2::RegKon, 0x0001);
+            spu.advanceTo(400u * Spu2::CyclesPerSample);
+
+            uint32_t written = 0u;
+            for (uint32_t word = Area; word < Area + 0x10000u; ++word)
+                written += spu.soundRam(word) != 0u ? 1u : 0u;
+            std::vector<int16_t> frames(2u * 400u);
+            const size_t count = spu.readAudio(frames.data(), 400u);
+            int32_t loudest[2] = {0, 0};
+            for (size_t frame = 0; frame < count; ++frame)
+                for (size_t side = 0; side < 2u; ++side)
+                    loudest[side] = std::max<int32_t>(loudest[side], frames[2u * frame + side]);
+            require(static_cast<int16_t>(spu.soundRam(0x1400u + 100u)) > 0, "the voice's wet send is written at 0x1400");
+            if (writes)
+            {
+                require(written > 100u, "the reverb writes its work area");
+                require(loudest[0] > 0 && loudest[1] > 0, "the reverb is heard on both sides through EVOL");
+            }
+            else
+            {
+                require(written == 0u, "without ATTR bit 7 the work area is not written");
+                require(loudest[0] == 0 && loudest[1] == 0, "an empty work area adds nothing");
+            }
+        }
+    }
+}
+
 int main()
 {
     try
@@ -395,6 +466,7 @@ int main()
         testWrittenLoopAddressHolds();
         testVolumeSweeps();
         testCoreRouting();
+        testReverb();
         std::cout << "spu2 tests passed\n";
         return 0;
     }

@@ -2,6 +2,12 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## SPU2 reverb (November 5, 2026)
+
+- `ps2xIOP/src/emulator/core/iop_spu2.h`, `iop_spu2.cpp`: each core has its reverb, after psx-spx's reverb formula and PCSX2's SPU2 (`Reverb.cpp`). The voices sent by VMIXEL/VMIXER and the external input reach it through MMIX bits 9/8 and 1/0. Its input goes down to 24 kHz through psx-spx's 39-tap filter, the left and right sides are computed on alternate output samples at the same position of the work area from ESA to EEA (addresses relative to that position in the pairs at 0x2E4 to 0x338, volumes at 0x774 to 0x786), and the result comes back up through the same filter and joins the dry mix through EVOL, before the master volume. ATTR bit 7 lets it write the work area; without it the area is still read and heard. A write to ESA moves the buffer position back to ESA. While it writes, its accesses can raise the address IRQ, as in PCSX2. The voices' wet send is written to the memory output areas at 0x1400 and 0x1600 (core 1: 0x1C00 and 0x1E00), which held zeros. A line on stderr reports the first times a core turns its reverb on.
+- `ps2xRuntime/src/lib/ps2_save_state.cpp`: state format 5 saves the reverb; earlier states load with it empty.
+- Burnout's races run core 1's reverb with libsd's Hall preset (its address and volume registers are psx-spx's Hall values, the addresses times four), EVOL 0x040C to 0x16C2; the menus load the preset that turns it off. In that race the reverb takes about 1% of the game thread's busy time (41 of 3,384 samples). Test: `testReverb` in `ps2xIOP/tests/spu2_tests.cpp`.
+
 ## I/O registers in a table (November 5, 2026)
 
 - `ps2xRuntime/include/runtime/ps2_memory.h`: `m_ioRegisters` keeps the EE's words at 0x10000000 to 0x1000FFFF in a table with a written flag for each, and anything else in the map it used to be; `find` gives a pointer, or none for a register never written. In a race the game thread spent about 3% of its busy time hashing these addresses (208 of 6,150 samples, VSyncs 60,300 to 64,300); none is left.
