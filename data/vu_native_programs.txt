@@ -1,0 +1,4 @@
+# VU1 programs translated to C++ by tools/translate_vu_programs.py (docs/NATIVE_RENDERER.md).
+# <name> <MSCAL address> <first code byte> <end> <FNV-1a 64 of the code from first to end>
+# The checksum names the code; the code itself comes from the local code images.
+sky_dome 0000 0000 15d0 6551840b5d41a054

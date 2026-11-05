@@ -13,8 +13,10 @@ Burnout 3 projects showed that the world and prop programs, which Burnout 3 shar
 ## Steps
 
 1. Measure which programs cost the most in a race, how often they start and how much work each start does (this page, below).
-2. Shadow decoders: for the most expensive programs, read their inputs at each start (vertex count, formats, constants) and check that a decoder understands every start, without drawing anything.
+2. Shadow mode: run a native program beside the microcode on copies of its inputs and compare the results, without drawing anything.
 3. Native programs, one at a time, most expensive first, each through shadow mode before it draws.
+
+Steps 2 and 3 were first planned as hand-written decoders of each program's inputs. A translator of whole microprograms (below) gives native programs that are exact by construction, without decoding any data layout, so it came first; decoders stay the way to go further where a translation is not fast enough.
 
 ## Step 1: cost of each program in a race
 
@@ -52,3 +54,33 @@ How the programs were named (all names are likely, not proven):
 2. The world programs (43.9% together): five variants of one design in images identical to Burnout 3's, whose inputs Burn3 documents (`native_cmd_protocol.hpp`, `slus_21050_strip_geometry`).
 3. The vehicles (19.6%): Burn3 (MIT) ports Burnout 3's vehicle program bit for bit with a verify mode; Dominator's is the Revenge-engine variant, with its own constant layout (it reads quadwords 918 to 926 and 1013 to 1019).
 4. Props (9.5%) and sparks (9.2%).
+
+## Steps 2 and 3: whole programs translated to C++
+
+`tools/translate_vu_programs.py` turns a VU1 microprogram, from the MSCAL address that starts it to its E bit, into one C++ function (`runtime/ps2_vu1_native.h`). It follows `VU1Interpreter` cycle by cycle while it translates: a pair waits until the VF and VI values it reads are written, so the registers take their values in program order and the C++ writes each result at once; what does not wait is modelled where it is visible: MAC and clip flags land 4 cycles after their instruction, Q 7 cycles after its DIV, and a conditional branch right after an integer instruction that wrote its register reads the old value. A block of code is translated once for each pipeline state it can be entered with. The one timing known only when the program runs is how long an XGKICK waits for the previous packet: the C++ counts its cycles and takes the block made for the wait it finds. MAC flags are computed only for the instructions whose flags something reads (7 of the sky dome's 385).
+
+The arithmetic is the interpreter's: fused product sums, rounding toward zero, denormal operands and results as zeros (the MXCSR does the three), operands with exponent 255 read as FLT_MAX. The translator stops on what it does not model rather than guess: the D and T bits, status flag instructions, a branch in a delay slot, a `JR` whose register anything but a `BAL` or `JALR` writes or that may run before the link.
+
+`data/vu_native_programs.txt` names the programs to translate by the checksum of their code, and the build translates them from the code images, recorded or rebuilt from `data/vu_programs.manifest` (both give the same C++), into its own tree; the C++ is made from the game's microcode and is never committed. At each MSCAL, `PS2_VU_NATIVE` decides: unset, the microcode runs; `shadow`, the microcode runs and draws while the translation runs on copies of its inputs, and the GIF packets, VU1 data memory, registers and cycle count of the two are compared when the microcode reaches its E bit (`[vu1 native]` lines at the end of a `BDR_STOP_AT_VSYNC` window, mismatching inputs saved to `PS2_VU_NATIVE_DUMP`); `1`, the translation runs instead of the microcode.
+
+Checks: `vu1_native_tests` runs every recorded start of a translated program (`BDR_VU_NATIVE_CAPTURES`, recorded with `PS2_VU_CAPTURE_DIR`) in shadow mode, once with the interpreter and once with the compiled routines, and with `BDR_VU_NATIVE_BENCH=N` times them; `tests/python/test_translate_vu_programs.py` checks the control flow, the branch backup and the XGKICK waits on synthetic code.
+
+What a translation does not reproduce, none of which happened in the sky dome starts compared below: a store into a GIF packet while PATH1 still sends it (the translation copies the packet at the XGKICK), a DIV of an operand with exponent 255, and a program longer than its MSCAL's cycle budget (shadow mode counts such starts as not compared; with `PS2_VU_NATIVE=1` a warning names the program). The status flags and the P and R registers keep their values.
+
+### The sky dome
+
+698 instruction pairs, 282 blocks, about 8,900 lines of C++ that MSVC compiles in 21 s. Results on November 5, 2026:
+
+- Shadow mode, all starts identical (GIF packets, VU1 memory, registers, cycles), none left unfinished: 33,534 starts in the deterministic race of `cbench.sh` (VSyncs 60,000 to 64,000), 6,771 at the car select (`carsel14300`, cross held into the race) and 10,197 from `cam17740` (VSyncs 17,740 to 19,000). The 13 starts recorded in the race and 20 recorded at the car select are identical under the interpreter and under the compiled routines. Two deliberate errors in the C++, an addition in place of a multiplication and one cycle more in the main loop, were each found in 8 of the 26 runs.
+- Time per start in `vu1_native_tests` (200 rounds of the 13 race starts): 47 to 62 µs with the compiled routines, 12 to 17 µs translated, about 3.8 times less; sending the packets costs nothing in the test.
+- In the race (VSyncs 60,300 to 61,800): the GS worker took 5.43 and 5.51 s with the microcode, 5.00 and 5.04 s translated, 8% less. The wall time stayed at 7.4 to 7.5 s: at 60 frames a second the GS worker is not what this race waits for; it is at high frame rates, where it is busy all the time.
+
+Three things the comparisons found on the way:
+
+- The car select gave 186 mismatches in 7,293 starts: one lane of a vertex the program writes back, a denormal where the microcode stores zero. The program adds VF0's x (0) to a value loaded as an integer bit pattern, which the VU reads as zero; MSVC, knowing VF0, compiled `x + 0` as `x`, even with `/fp:strict`. The translation now hides VF0, the I immediates and MFIR results from the compiler (`ops::opaque`), and the file is compiled with exact floating point.
+- The first build took 37 µs a start: the exact fallback ran for every product sum whose result was zero. With flushing to zero done by the MXCSR, a fused result is what the interpreter keeps in every case, and only results with exponent 255 go another way.
+- `find` first hashed the program's code at each microcode upload, 1.6% of the GS worker; it now compares the bytes, once per upload.
+
+### Next
+
+The world, vehicle and prop programs start at a `JR vi15` stub that resumes where the previous MSCAL stopped: the target comes from the registers at the start, not from a `BAL` of the same run (`G3_BFC_ADC` sets vi15 to 4, address 0x0020, before its E bit). They also jump through registers set to constants on several paths or loaded from VU1 memory (`G3_BFC_ADC`'s `JR vi12`, with vi12 from five `IADDIU` or from quadword 1013), and read the double buffer with `XTOP` and `XITOP`. Their translation needs the set of addresses each register jump can take, with the values that come from the registers or memory at the start checked before the translation is chosen, the microcode running otherwise.

@@ -86,4 +86,17 @@ if(TARGET ps2_runtime AND TARGET ps2_test_function_table)
     if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
         EnableFastReleaseMode(burnout_overrides_tests)
     endif()
+
+    # Native VU1 programs against the microcode, on recorded program starts (BDR_VU_NATIVE_CAPTURES).
+    add_executable(vu1_native_tests
+        "${PROJECT_SOURCE_DIR}/tests/native/vu1_native_tests.cpp"
+        $<TARGET_OBJECTS:ps2_test_function_table>)
+    target_include_directories(vu1_native_tests PRIVATE "${PROJECT_SOURCE_DIR}/ps2xRuntime/include")
+    target_link_libraries(vu1_native_tests PRIVATE ps2_runtime)
+    if(COMMAND ps2x_stage_ffmpeg_runtime_dlls)
+        ps2x_stage_ffmpeg_runtime_dlls(vu1_native_tests)
+    endif()
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        EnableFastReleaseMode(vu1_native_tests)
+    endif()
 endif()

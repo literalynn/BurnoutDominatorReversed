@@ -345,7 +345,7 @@ def build(args) -> None:
         follow_visual_studio_update(args.build_dir)
         targets = ["ps2EntryRunner"] if args.game else [
             "ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests",
-            "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests"]
+            "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests", "vu1_native_tests"]
         for target in targets:
             # A checkout from GitHub's ZIP marks the scripts as downloaded, and RemoteSigned refuses them unsigned.
             run([pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts" / "Invoke-MSBuild.ps1"),
@@ -353,7 +353,7 @@ def build(args) -> None:
                  "-Jobs", str(args.jobs), "-LogPath", str(LOCAL / "logs" / ("msbuild-" + target + ".log"))], "native-build-" + target + ".log")
         return
     command = [args.cmake, "--build", str(args.build_dir.resolve()), "--config", "Release", "--parallel", str(args.jobs), "--target"]
-    command += ["ps2EntryRunner"] if args.game else ["ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests", "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests"]
+    command += ["ps2EntryRunner"] if args.game else ["ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests", "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests", "vu1_native_tests"]
     run(command, "native-build.log")
 
 

@@ -10,6 +10,7 @@
 #include "runtime/ee_unwind.h"
 #include "runtime/host_settings.h"
 #include "runtime/vblank_rate.h"
+#include "runtime/ps2_vu1_native.h"
 #include "runtime/ps2_vu1_stats.h"
 
 #include <algorithm>
@@ -200,6 +201,8 @@ private:
         // PS2_VU_PROGRAM_STATS=1: the same window, VU1 microprogram by microprogram.
         if (ps2_vu_stats::enabled())
             std::fputs(ps2_vu_stats::report().c_str(), stdout);
+        // PS2_VU_NATIVE=shadow: native VU1 programs against the microcode since the start.
+        std::fputs(ps2_vu_native::report().c_str(), stdout);
         std::fflush(stdout);
         m_runtime.requestStop();
     }

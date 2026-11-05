@@ -74,7 +74,7 @@ The VU0 and VU1 microprograms the game uploads are game code too. A run with `--
 python -m unittest discover -s tests/python
 ```
 
-Native test programs are built by `project.py build`: `ps2x_tests` (run it from the repository root), `ps2_iop_emulator_tests`, `ps2_iop_import_tests`, `ps2_iop_compatibility_tests`, `ps2_iop_import_version_tests`, `ps2_iso9660_tests`, `ps2_spu2_tests` and `burnout_overrides_tests`. CI ([`.github/workflows/build.yml`](../.github/workflows/build.yml)) runs them with GCC, Clang and MSVC.
+Native test programs are built by `project.py build`: `ps2x_tests` (run it from the repository root), `ps2_iop_emulator_tests`, `ps2_iop_import_tests`, `ps2_iop_compatibility_tests`, `ps2_iop_import_version_tests`, `ps2_iso9660_tests`, `ps2_spu2_tests`, `burnout_overrides_tests` and `vu1_native_tests` (native VU1 programs against recorded starts, `BDR_VU_NATIVE_CAPTURES`; without it, nothing to compare). CI ([`.github/workflows/build.yml`](../.github/workflows/build.yml)) runs them with GCC, Clang and MSVC.
 
 ## Working without the disc on the build machine
 

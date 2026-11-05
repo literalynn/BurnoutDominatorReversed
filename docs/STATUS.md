@@ -76,6 +76,8 @@ python tools/project.py run --headless --seconds 60 --status-ms 2000 --log run12
 
 November 4: native VU1 programs, step 1 ([NATIVE_RENDERER.md](NATIVE_RENDERER.md)). Per-program counters show where a race's VU1 time goes: the world programs 43.9% (images identical to Burnout 3's), the vehicles 19.6%, the sky dome 12.6%, the props 9.5% and the sparks 9.2%. The sky dome comes first: it builds its geometry from two small parameter blocks, so a native version can be checked against the microprogram in shadow mode without decoding any vertex stream.
 
+November 5: native VU1 programs, steps 2 and 3 ([NATIVE_RENDERER.md](NATIVE_RENDERER.md)). `tools/translate_vu_programs.py` translates a whole VU1 microprogram to C++ that follows the interpreter's pipeline at translation time; the build makes it from the code images and never commits it. The sky dome is the first: in shadow mode its 50,502 starts in a race, at the car select and in a second race state give the microprogram's GIF packets, memory, registers and cycle count, and with `PS2_VU_NATIVE=1` it runs about 3.8 times faster than the compiled microprogram, 8% of the GS worker's time in a race, which counts at high frame rates where that thread is the limit. Off by default for now.
+
 ## Requests for once the game is playable
 
 These goals assume the game reaches the races; they come after boot. Leads already established:

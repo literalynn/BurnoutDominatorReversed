@@ -20,7 +20,7 @@ python tools/project.py run --headless --seconds 30 --status-ms 1000 --log runN.
 python -m unittest discover -s tests/python
 ```
 
-Without `--game`, `build` compiles the tools, the runtime and every test (no game files needed). Run `ps2x_tests` from the repository root (one test reads `ps2xRecomp` headers by relative path). Other test programs: `ps2_iop_{emulator,import,compatibility,import_version}_tests`, `ps2_iso9660_tests`, `burnout_overrides_tests`. CI (`.github/workflows/build.yml`) runs them on GCC, Clang and MSVC.
+Without `--game`, `build` compiles the tools, the runtime and every test (no game files needed). Run `ps2x_tests` from the repository root (one test reads `ps2xRecomp` headers by relative path). Other test programs: `ps2_iop_{emulator,import,compatibility,import_version}_tests`, `ps2_iso9660_tests`, `burnout_overrides_tests`, `vu1_native_tests` (`BDR_VU_NATIVE_CAPTURES=<recorded starts>`). CI (`.github/workflows/build.yml`) runs them on GCC, Clang and MSVC.
 
 `run` exit codes: 124 = time limit reached (an observation, not a pass), 3 = missing guest function, 1 = failure.
 

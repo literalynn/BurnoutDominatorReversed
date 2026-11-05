@@ -42,6 +42,7 @@ jobs:
           ./build/ps2xIOP/ps2_iso9660_tests
           ./build/ps2xIOP/ps2_spu2_tests
           ./build/burnout_overrides_tests
+          ./build/vu1_native_tests
 
   windows-msvc:
     strategy:
@@ -79,6 +80,7 @@ jobs:
           .\build\ps2xIOP\Release\ps2_iso9660_tests.exe || exit /b 1
           .\build\ps2xIOP\Release\ps2_spu2_tests.exe || exit /b 1
           .\build\Release\burnout_overrides_tests.exe || exit /b 1
+          .\build\Release\vu1_native_tests.exe || exit /b 1
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:

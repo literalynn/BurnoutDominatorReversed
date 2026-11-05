@@ -7,6 +7,7 @@
 #include "ps2_vu1_detail.h"
 #include "ps2_vu1_capture.h"
 #include "runtime/ps2_vu1_stats.h"
+#include "runtime/ps2_vu1_native.h"
 
 #include <algorithm>
 #include <atomic>
@@ -203,6 +204,16 @@ std::string report()
     return text;
 }
 }
+
+#if PS2_VU_NATIVE_AVAILABLE
+namespace
+{
+void submitPath1(void *memory, const uint8_t *packet, uint32_t bytes)
+{
+    static_cast<PS2Memory *>(memory)->submitGifPacket(GifPathId::Path1, packet, bytes);
+}
+}
+#endif
 
 VU1Interpreter::VU1Interpreter(Unit unit)
     : m_unit(unit)
@@ -438,6 +449,10 @@ void VU1Interpreter::finishXgkick()
             std::memcpy(current.firstTag, m_xgkick.packet.data(), sizeof(current.firstTag));
         current.kickBytes += m_xgkick.totalBytes;
     }
+#if PS2_VU_NATIVE_AVAILABLE
+    if (ps2_vu_native::shadowActive())
+        ps2_vu_native::shadowKick(m_xgkick.packet.data(), m_xgkick.totalBytes);
+#endif
     if (m_activeMemory)
         m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
     else if (m_activeGs)
@@ -583,6 +598,33 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
         ps2_vu_detail::captureProgramStart(captureDirectory, m_unit == Unit::VU1 ? 1u : 0u,
                             vuCode, codeSize, generation, vuData, dataSize, m_state);
     }
+#if PS2_VU_NATIVE_AVAILABLE
+    // PS2_VU_NATIVE: a C++ translation of the program runs instead of the microcode, or
+    // beside it on copies to be compared (ps2_vu1_native.h).
+    if (m_unit == Unit::VU1 && memory && dataSize == PS2_VU1_DATA_SIZE && ps2_vu_native::mode() != ps2_vu_native::Mode::Off)
+        if (const ps2_vu_native::Program *program =
+                ps2_vu_native::find(vuCode, codeSize, m_state.pc, memory->getVU1CodeGeneration()))
+        {
+            if (ps2_vu_native::mode() == ps2_vu_native::Mode::Shadow)
+                ps2_vu_native::shadowStart(*program, vuData, m_state);
+            else
+            {
+                ps2_vu_native::Context context{vuData, &m_state, &submitPath1, memory, 0};
+                ps2_vu_native::run(*program, context);
+                if (context.cycles > maxCycles)
+                {
+                    static bool warned = false;
+                    if (!warned)
+                        std::fprintf(stderr, "[vu1 native] %s took %llu cycles, past the %u the microcode would have had\n",
+                                     program->name, static_cast<unsigned long long>(context.cycles), maxCycles);
+                    warned = true;
+                }
+                m_cycle += context.cycles;
+                m_state.cycles = m_cycle;
+                return;
+            }
+        }
+#endif
     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
 }
 
@@ -763,6 +805,15 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         m_pendingHaltT = false;
     }
     m_state.cycles = m_cycle;
+#if PS2_VU_NATIVE_AVAILABLE
+    if (m_unit == Unit::VU1 && ps2_vu_native::shadowActive())
+    {
+        if (programEnded)
+            ps2_vu_native::shadowFinish(vuData, m_state, m_cycle - cycleBefore);
+        else
+            ps2_vu_native::shadowCancel();
+    }
+#endif
 #if defined(_MSC_VER) && defined(_M_X64)
     if (useVuRounding) // the exception flags raised meanwhile stay, as with fesetround
         _mm_setcsr((_mm_getcsr() & ~vuCsrMask) | (previousCsr & vuCsrMask));

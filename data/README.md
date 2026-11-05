@@ -19,3 +19,11 @@ Where the game's VU0 and VU1 microprograms sit in `SLES_546.27`, for `tools/comp
 Provenance: 29 code images recorded with `project.py run --vu-capture` in the menus and in races (24 once identical ones are merged), then `python tools/vu_program_manifest.py make --output data/vu_programs.manifest --game-root <work>/local/disc --game <work>/local/disc/SLES_546.27 <work>/local/vu-programs`. The C++ compiled from its expansion is byte for byte the C++ compiled from the recordings.
 
 SHA256 (LF line endings, as committed): `09f767b91040e67b5bdd005cea870329d5a81bc44e45bd9f7b957c6910a2646d`
+
+## vu_native_programs.txt
+
+The VU1 microprograms that `tools/translate_vu_programs.py` translates to C++ (`docs/NATIVE_RENDERER.md`). Each line gives a name, the MSCAL address that starts the program, the range of code bytes the translation is made from and their FNV-1a 64-bit checksum. It contains no game bytes: the build takes the code from the recorded or shipped code images whose bytes in that range have the checksum, and the C++ it writes stays in the build tree.
+
+Provenance: `python tools/translate_vu_programs.py --describe sky_dome <work>/local/vu-programs/vu1-d1f5b3863340b9ec.code 0` prints the line of the sky dome program; the image rebuilt from `vu_programs.manifest` gives the same translation.
+
+SHA256 (LF line endings, as committed): `c0dc25dc8776bbda22608cef278417cd8674e42f15d4757dd065d0c9c233fa30`
