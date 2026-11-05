@@ -598,33 +598,6 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
         ps2_vu_detail::captureProgramStart(captureDirectory, m_unit == Unit::VU1 ? 1u : 0u,
                             vuCode, codeSize, generation, vuData, dataSize, m_state);
     }
-#if PS2_VU_NATIVE_AVAILABLE
-    // PS2_VU_NATIVE: a C++ translation of the program runs instead of the microcode, or
-    // beside it on copies to be compared (ps2_vu1_native.h).
-    if (m_unit == Unit::VU1 && memory && dataSize == PS2_VU1_DATA_SIZE && ps2_vu_native::mode() != ps2_vu_native::Mode::Off)
-        if (const ps2_vu_native::Program *program =
-                ps2_vu_native::find(vuCode, codeSize, m_state.pc, memory->getVU1CodeGeneration()))
-        {
-            if (ps2_vu_native::mode() == ps2_vu_native::Mode::Shadow)
-                ps2_vu_native::shadowStart(*program, vuData, m_state);
-            else
-            {
-                ps2_vu_native::Context context{vuData, &m_state, &submitPath1, memory, 0};
-                ps2_vu_native::run(*program, context);
-                if (context.cycles > maxCycles)
-                {
-                    static bool warned = false;
-                    if (!warned)
-                        std::fprintf(stderr, "[vu1 native] %s took %llu cycles, past the %u the microcode would have had\n",
-                                     program->name, static_cast<unsigned long long>(context.cycles), maxCycles);
-                    warned = true;
-                }
-                m_cycle += context.cycles;
-                m_state.cycles = m_cycle;
-                return;
-            }
-        }
-#endif
     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
 }
 
@@ -748,8 +721,36 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         rebuildDecodedCodeCache(vuCode, codeSize, memory,
             m_unit == Unit::VU1 ? memory->getVU1CodeGeneration() : memory->getVU0CodeGeneration());
     commitReadyPipelines();
+#if PS2_VU_NATIVE_AVAILABLE
+    // PS2_VU_NATIVE: a C++ translation of the program runs instead of the microcode, or beside
+    // it on copies to be compared (ps2_vu1_native.h), from an MSCAL or an MSCNT that finds the
+    // VU idle: nothing in flight, no branch pending or branch backup, no stop requested.
+    if (m_unit == Unit::VU1 && trackedCode && dataSize == PS2_VU1_DATA_SIZE && ps2_vu_native::mode() != ps2_vu_native::Mode::Off &&
+        !pipelinesPending() && !m_state.branchPending && !m_state.ebit && !m_state.haltAfterDelaySlot && !m_stopRequested &&
+        !m_pendingHaltD && !m_pendingHaltT && !m_viBranchBackupValid)
+        if (const ps2_vu_native::Program *program =
+                ps2_vu_native::find(vuCode, codeSize, m_state.pc, memory->getVU1CodeGeneration()))
+        {
+            ps2_vu_native::Context context{vuData, &m_state, &submitPath1, memory, 0};
+            if (ps2_vu_native::mode() == ps2_vu_native::Mode::Shadow)
+                ps2_vu_native::shadowStart(*program, vuData, m_state);
+            else if (ps2_vu_native::run(*program, context)) // false: the microcode runs this start
+            {
+                if (context.cycles > maxCycles)
+                {
+                    static bool warned = false;
+                    if (!warned)
+                        std::fprintf(stderr, "[vu1 native] %s took %llu cycles, past the %u the microcode would have had\n",
+                                     program->name, static_cast<unsigned long long>(context.cycles), maxCycles);
+                    warned = true;
+                }
+                m_cycle += context.cycles;
+                programEnded = true;
+            }
+        }
+#endif
     // A drained VU at the entry of a compiled program runs it whole.
-    if (trackedCode && m_useCompiledExecution &&
+    if (!programEnded && trackedCode && m_useCompiledExecution &&
         budgetEnd - m_cycle >= ps2_vu_program::kMinimumBudget && ps2_vu_program::Access::drained(*this))
     {
         const uint64_t generation = m_unit == Unit::VU1 ? memory->getVU1CodeGeneration()

@@ -39,7 +39,7 @@ Mode g_mode = initialMode();
 
 struct Totals
 {
-    uint64_t compared = 0, matched = 0, cancelled = 0;
+    uint64_t compared = 0, matched = 0, cancelled = 0, declined = 0;
 };
 std::mutex g_mutex;
 std::map<std::string, Totals> g_totals;
@@ -160,18 +160,20 @@ const Program *find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_
     return nullptr;
 }
 
-void run(const Program &program, Context &context)
+bool run(const Program &program, Context &context)
 {
 #if PS2_VU_NATIVE_AVAILABLE
     constexpr unsigned mask = _MM_ROUND_MASK | _MM_DENORMALS_ZERO_MASK | _MM_FLUSH_ZERO_MASK;
     constexpr unsigned vu = _MM_ROUND_TOWARD_ZERO | _MM_DENORMALS_ZERO_ON | _MM_FLUSH_ZERO_ON;
     const unsigned previous = _mm_getcsr();
     _mm_setcsr((previous & ~mask) | vu);
-    program.run(context);
+    const bool ran = program.run(context);
     _mm_setcsr((_mm_getcsr() & ~mask) | (previous & mask));
+    return ran;
 #else
     (void)program;
     (void)context;
+    return false;
 #endif
 }
 
@@ -182,9 +184,10 @@ std::string report()
     for (const auto &[name, totals] : g_totals)
     {
         char line[240];
-        std::snprintf(line, sizeof(line), "[vu1 native] %s: %llu starts compared, %llu identical, %llu not compared (unfinished)\n",
+        std::snprintf(line, sizeof(line),
+                      "[vu1 native] %s: %llu starts compared, %llu identical, %llu not compared (unfinished), %llu left to the microcode\n",
                       name.c_str(), static_cast<unsigned long long>(totals.compared), static_cast<unsigned long long>(totals.matched),
-                      static_cast<unsigned long long>(totals.cancelled));
+                      static_cast<unsigned long long>(totals.cancelled), static_cast<unsigned long long>(totals.declined));
         text += line;
     }
     return text;
@@ -214,7 +217,13 @@ void shadowStart(const Program &program, const uint8_t *data, const VU1State &st
     shadow.microcodeKicks.clear();
     shadow.microcodeSizes.clear();
     Context context{shadow.data.data(), &shadow.state, &collect, &shadow, 0};
-    run(program, context);
+    if (!run(program, context))
+    {
+        const std::lock_guard lock(g_mutex);
+        ++g_totals[program.name].declined;
+        shadow.program = nullptr;
+        return;
+    }
     shadow.cycles = context.cycles;
 }
 

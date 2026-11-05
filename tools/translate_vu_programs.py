@@ -15,7 +15,7 @@ Inputs are the code images of compile_vu_programs.py (vu1-<hash>.code in profile
 and data/vu_native_programs.txt, which names the programs to translate by the checksum of their
 code. The output is generated from game microcode and must stay local.
 
-  translate_vu_programs.py --programs <list> --output <cpp> <profile dir>...
+  translate_vu_programs.py --programs <list> --output <cpp> [--shards N] <profile dir>...
   translate_vu_programs.py --describe <name> <image> <entry pc, hex>   (prints a list line)
 """
 import argparse
@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 
 FMAC_LATENCY = 4
-DIV_LATENCY = 7
 
 
 class TranslationError(Exception):
@@ -195,8 +194,10 @@ class Lower:
         self.vi_write = None  # (register, latency)
         self.delays_branch = False
         self.branch = None  # ("b"|"bal"|"cond", target) or ("jr"|"jalr", register)
-        self.fdiv = False
+        self.fdiv = 0  # FDIV latency of DIV, SQRT, RSQRT
         self.waitq = False
+        self.efu = 0  # EFU latency
+        self.waitp = False
         if word in (0, 0x8000033C):
             return
         hi = word >> 25
@@ -285,7 +286,13 @@ class Lower:
                     self.op = "sqi" if special == 0x35 else "sqd"
                     rvi(self.vit); wvi(self.vit, 1); rvf(is_, d); self.delays_branch = True
                 elif special == 0x38:
-                    self.op = "div"; self.fdiv = True
+                    self.op = "div"; self.fdiv = 7
+                    rvf(is_, lane_bit(self.fsf)); rvf(it, lane_bit(self.ftf))
+                elif special == 0x39:
+                    self.op = "sqrt"; self.fdiv = 7
+                    rvf(it, lane_bit(self.ftf))
+                elif special == 0x3A:
+                    self.op = "rsqrt"; self.fdiv = 13
                     rvf(is_, lane_bit(self.fsf)); rvf(it, lane_bit(self.ftf))
                 elif special == 0x3B:
                     self.op = "waitq"; self.waitq = True
@@ -293,6 +300,16 @@ class Lower:
                     self.op = "mtir"; rvf(is_, lane_bit(self.fsf)); wvi(self.vit, 1); self.delays_branch = True
                 elif special == 0x3D:
                     self.op = "mfir"; rvi(self.vis); wvf(it, d)
+                elif special == 0x64:
+                    self.op = "mfp"; wvf(it, d)
+                elif special in (0x78, 0x79, 0x7A):
+                    self.op = {0x78: "esqrt", 0x79: "ersqrt", 0x7A: "ercpr"}[special]
+                    self.efu = {0x78: 12, 0x79: 18, 0x7A: 12}[special]
+                    rvf(is_, lane_bit(self.fsf))
+                elif special == 0x7B:
+                    self.op = "waitp"; self.waitp = True
+                elif special in (0x68, 0x69):
+                    self.op = "xtop" if special == 0x68 else "xitop"; wvi(self.vit, 1)
                 elif special == 0x6C:
                     self.op = "xgkick"; rvi(self.vis)
                 else:
@@ -334,19 +351,162 @@ class State:
     def __init__(self):
         self.vf = {}  # (register, lane) -> time its value is written
         self.vi = {}  # register -> time
-        self.pending = ()  # (time, "mac"|"clip"|"q", producer pc), in issue order
+        self.pending = ()  # (time, "mac"|"clip"|"q"|"p", producer pc), in issue order
         self.backup = 0  # VI register the last pair wrote, read old by a branch right after it
+        self.efu = 0  # time until the EFU takes another instruction
 
     def key(self):
-        return (tuple(sorted(self.vf.items())), tuple(sorted(self.vi.items())), self.pending, self.backup)
+        return (tuple(sorted(self.vf.items())), tuple(sorted(self.vi.items())), self.pending, self.backup, self.efu)
 
     def copy(self):
         other = State()
         other.vf, other.vi, other.pending, other.backup = dict(self.vf), dict(self.vi), self.pending, self.backup
+        other.efu = self.efu
         return other
 
-    def latest(self):
-        return max([0] + list(self.vf.values()) + list(self.vi.values()) + [t for t, _, _ in self.pending])
+    def latest(self, efu=True):
+        """When everything in flight has landed; flushPipelines does not wait for the EFU itself."""
+        return max([0, self.efu if efu else 0] + list(self.vf.values()) + list(self.vi.values()) +
+                   [t for t, _, _ in self.pending])
+
+
+class Values:
+    """Sets of values for the VI registers and the integer words at fixed VU1 addresses,
+    for register_jumps. A set holds int16 values and start values: (token, facts), where the
+    token is ("vi", reg) or ("mem", qword, lane), what the start finds there, and the facts
+    are what the path to the pair has found about start values, (token, "eq0"|"ne0") from an
+    IBEQ or IBNE against vi0. None is any value. A state is (registers, words, lanes stored at
+    unknown addresses, facts of every path to the pair)."""
+
+    LIMIT = 64
+
+    def start(self):
+        regs = [frozenset({0})] + [frozenset({(("vi", reg), frozenset())}) for reg in range(1, 16)]
+        return tuple(regs), (), frozenset(), frozenset()
+
+    @staticmethod
+    def reg(state, reg):
+        return state[0][reg]
+
+    @staticmethod
+    def read(state, token, words=None):
+        if token[0] == "vi":
+            return state[0][token[1]]
+        words = dict(state[1]) if words is None else words
+        key = (token[1], token[2])
+        if key in words:
+            return words[key]
+        return None if token[2] in state[2] else frozenset({(token, state[3])})
+
+    def merge(self, a, b):
+        regs = tuple(None if x is None or y is None else self.limit(x | y) for x, y in zip(a[0], b[0]))
+        wa, wb = dict(a[1]), dict(b[1])
+        words = []
+        for key in sorted(wa.keys() | wb.keys()):
+            x, y = self.read(a, ("mem",) + key, wa), self.read(b, ("mem",) + key, wb)
+            words.append((key, None if x is None or y is None else self.limit(x | y)))
+        return regs, tuple(words), a[2] | b[2], a[3] & b[3]
+
+    @staticmethod
+    def assume(state, fact):
+        """The state on a branch edge that tells fact about a start value."""
+        opposite = (fact[0], "ne0" if fact[1] == "eq0" else "eq0")
+
+        def tag(values):
+            if values is None:
+                return None
+            return frozenset(v if isinstance(v, int) else (v[0], v[1] | {fact})
+                             for v in values if isinstance(v, int) or opposite not in v[1])
+        return (tuple(tag(r) for r in state[0]), tuple((k, tag(v)) for k, v in state[1]), state[2],
+                state[3] | {fact})
+
+    def limit(self, values):
+        return None if len(values) > self.LIMIT else frozenset(values)
+
+    def arith(self, a, b, operation):
+        if a is None or b is None or not all(isinstance(v, int) for v in a | b):
+            return None
+        return self.limit({s16(operation(x, y)) for x in a for y in b})
+
+    def transfer(self, p, state):
+        l = p.lower
+        regs, words, clobbered = list(state[0]), dict(state[1]), set(state[2])
+
+        def get(reg):
+            return regs[reg]
+
+        def put(reg, value):
+            if reg:
+                regs[reg] = value
+
+        def address(reg, offset):
+            held = get(reg)
+            if held is not None and len(held) == 1:
+                (value,) = held
+                if isinstance(value, int):
+                    return (value + offset) & 0x3FF
+            return None
+
+        def store(qword, lanes, value):
+            for lane in lanes:
+                if qword is None:
+                    clobbered.add(lane)
+                    for key in list(words):
+                        if key[1] == lane:
+                            words[key] = None
+                else:
+                    words[(qword, lane)] = value
+
+        op = l.op
+        lanes = lanes_of(l.dest) if op in ("sq", "isw", "sqi", "sqd") else []
+        if op == "ilw":
+            qword = address(l.vis, l.imm)
+            lane = lanes_of(l.dest)[0] if l.dest else 0
+            put(l.vit, None if qword is None else self.read((regs, (), clobbered, state[3]), ("mem", qword, lane), words))
+        elif op == "isw":
+            store(address(l.vis, l.imm), lanes, get(l.vit))
+        elif op == "sq":
+            store(address(l.vit, l.imm), lanes, None)
+        elif op in ("sqi", "sqd"):
+            if op == "sqd":
+                put(l.vit, self.arith(get(l.vit), frozenset({1}), lambda x, y: x - y))
+            store(address(l.vit, 0), lanes, None)
+            if op == "sqi":
+                put(l.vit, self.arith(get(l.vit), frozenset({1}), lambda x, y: x + y))
+        elif op in ("lqi", "lqd"):
+            put(l.vis, self.arith(get(l.vis), frozenset({1}), (lambda x, y: x + y) if op == "lqi" else (lambda x, y: x - y)))
+        elif op in ("iaddiu", "isubiu"):
+            if l.imm15 == 0:
+                put(l.vit, get(l.vis))
+            else:
+                sign = 1 if op == "iaddiu" else -1
+                put(l.vit, self.arith(get(l.vis), frozenset({sign * l.imm15}), lambda x, y: x + y))
+        elif op == "iaddi":
+            put(l.vit, get(l.vis) if l.imm5 == 0 else self.arith(get(l.vis), frozenset({l.imm5}), lambda x, y: x + y))
+        elif op in ("iadd", "isub", "iand", "ior"):
+            a, b = get(l.vis), get(l.vit)
+            if op in ("iadd", "ior") and l.vis == 0:
+                put(l.vid, b)
+            elif op in ("iadd", "isub", "ior") and l.vit == 0:
+                put(l.vid, a)
+            else:
+                operation = {"iadd": lambda x, y: x + y, "isub": lambda x, y: x - y,
+                             "iand": lambda x, y: x & y, "ior": lambda x, y: x | y}[op]
+                put(l.vid, self.arith(a, b, operation))
+        elif op in ("fceq", "fcand", "fcor"):
+            put(1, frozenset({0, 1}))
+        elif op == "fmeq":
+            put(l.vit, frozenset({0, 1}))
+        elif op in ("bal", "jalr"):
+            put(l.vit, frozenset({(p.pc + 16) // 8}))
+        elif l.vi_write:
+            put(l.vi_write[0], None)
+        return tuple(regs), tuple(sorted(words.items())), frozenset(clobbered), state[3]
+
+
+def s16(value):
+    value &= 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value
 
 
 class Block:
@@ -367,11 +527,13 @@ class Translator:
         self.work = []
         self.blocks = []
         self.leaders = {entry}
-        self.links = {}  # register -> link addresses BAL or JALR write
+        self.jr_targets = {}  # JR or JALR address -> the addresses it can jump to
+        self.entry_checks = {}  # (start token, facts) -> values the start must hold when the facts are true
         self.delay_slot_of = {}
         self.ends = set()
         self.clip_producers = set()
         self.mac_producers = set()
+        self.efu_producers = set()
         self.wait_blocks = 0
 
     def pair(self, pc):
@@ -380,13 +542,23 @@ class Translator:
         return self.pairs[pc]
 
     def discover(self):
-        seen = set()
+        """The pairs the program can run, with the targets of its register jumps: walk the
+        code with the targets known so far, bound the registers, again until nothing new."""
+        while True:
+            self.walk()
+            targets, checks = self.register_jumps()
+            if targets == self.jr_targets:
+                self.entry_checks = checks
+                return
+            self.jr_targets = targets
+
+    def walk(self):
+        self.seen = set()
         stack = [self.entry]
-        jr_regs = set()
         while stack:
             pc = stack.pop()
-            while pc not in seen:
-                seen.add(pc)
+            while pc not in self.seen:
+                self.seen.add(pc)
                 p = self.pair(pc)
                 if p.lower.branch:
                     if p.ebit:
@@ -396,38 +568,25 @@ class Translator:
                     if delay.lower.branch or delay.ebit:
                         raise TranslationError(f"branch or E bit in the delay slot at {pc + 8:04x}")
                     self.delay_slot_of[pc + 8] = pc
-                    seen.add(pc + 8)
+                    self.seen.add(pc + 8)
                     if kind in ("b", "bal", "cond"):
                         self.leaders.add(arg)
                         stack.append(arg)
-                    if kind in ("bal", "jalr"):
-                        self.links.setdefault(p.lower.vi_write[0], set()).add(pc + 16)
                     if kind in ("cond", "bal", "jalr"):
                         self.leaders.add(pc + 16)
                         stack.append(pc + 16)
                     if kind in ("jr", "jalr"):
-                        jr_regs.add(arg)
+                        self.leaders |= self.jr_targets.get(pc, set())
+                        stack += sorted(self.jr_targets.get(pc, ()))
                     break
                 if p.ebit:
                     delay = self.pair(pc + 8)
                     if delay.lower.branch or delay.ebit:
                         raise TranslationError(f"branch or E bit after the E bit at {pc + 8:04x}")
-                    seen.add(pc + 8)
+                    self.seen.add(pc + 8)
                     self.ends.add(pc)
                     break
                 pc += 8
-        # A register jump goes back to where a BAL or JALR linked: nothing else may write the
-        # register, and every path to the jump links it first.
-        for reg in jr_regs:
-            if reg not in self.links:
-                raise TranslationError(f"JR vi{reg} without a link")
-            for p in self.pairs.values():
-                w = p.lower.vi_write
-                if w and w[0] == reg and p.lower.op not in ("bal", "jalr"):
-                    raise TranslationError(f"vi{reg} written at {p.pc:04x} and used by JR")
-            self.check_linked(reg)
-        for targets in self.links.values():
-            self.leaders |= targets
 
     def successors(self, pc):
         """Static successors of the pair at pc."""
@@ -443,27 +602,97 @@ class Translator:
                 return [arg]
             if kind == "cond":
                 return [arg, pc + 8]
-            return sorted(self.links[arg])
+            return sorted(self.jr_targets.get(branch_pc, ()))
         return [pc + 8]
 
-    def check_linked(self, reg):
-        linked = {self.entry: False}
-        stack = [self.entry]
-        while stack:
-            pc = stack.pop()
-            state = linked[pc]
-            p = self.pair(pc)
-            if p.lower.op in ("jr", "jalr") and p.lower.branch[1] == reg and not state:
-                raise TranslationError(f"JR vi{reg} at {pc:04x} may run before a link")
-            if p.lower.op in ("bal", "jalr") and p.lower.vi_write[0] == reg:
-                state = True
+    def register_jumps(self):
+        """Where each JR and JALR can go. The VI registers and the integer words at fixed
+        VU1 addresses get the sets of values they can hold, in program order (a pair waits
+        for the VI values it reads); a value the program finds at its start is a token,
+        which the C++ checks before it runs against the values the program leaves at its
+        end, so that the next start resumes at an address the translation has."""
+        if not any(self.pair(pc).lower.op in ("jr", "jalr") for pc in self.seen):
+            return {}, {}
+        values = Values()
+        entering = {self.entry: values.start()}
+        work = [self.entry]
+        while work:
+            pc = work.pop()
+            after = values.transfer(self.pair(pc), entering[pc])
             for succ in self.successors(pc):
-                if succ not in linked:
-                    linked[succ] = state
-                    stack.append(succ)
-                elif linked[succ] and not state:
-                    linked[succ] = False
-                    stack.append(succ)
+                fact = self.branch_fact(pc, succ, entering, values)
+                out = values.assume(after, fact) if fact else after
+                merged = out if succ not in entering else values.merge(entering[succ], out)
+                if succ not in entering or merged != entering[succ]:
+                    entering[succ] = merged
+                    work.append(succ)
+        # What the next start finds: the registers at the ends, and at the E bit right before
+        # the entry, where the previous run stopped when the game continues with MSCNT; the
+        # words the program stores at fixed addresses. The checks make any guess safe.
+        ends = [values.transfer(self.pair(end + 8), entering[end + 8]) for end in self.ends if end + 8 in entering]
+        if self.entry >= 16 and Pair(self.code, self.entry - 16).ebit:  # a guess: not part of the translation
+            before = values.transfer(Pair(self.code, self.entry - 16), values.start())
+            ends.append(values.transfer(Pair(self.code, self.entry - 8), before))
+        stored = {}
+        for pc, state in entering.items():
+            l = self.pair(pc).lower
+            held = values.reg(state, l.vit) if l.op == "isw" else None
+            base = values.reg(state, l.vis) if l.op == "isw" else None
+            if held is not None and base is not None and len(base) == 1 and isinstance(next(iter(base)), int):
+                qword = (next(iter(base)) + l.imm) & 0x3FF
+                for lane in lanes_of(l.dest):
+                    stored.setdefault((qword, lane), set()).update(v for v in held if isinstance(v, int))
+
+        def allowed(token):
+            if token[0] == "vi":
+                final = set().union(*(state[0][token[1]] or () for state in ends)) if ends else set()
+            else:
+                final = stored.get(token[1:], set())
+            numbers = {v for v in final if isinstance(v, int)}
+            if not numbers:
+                raise TranslationError(f"the program leaves no known value in {token} for its next start")
+            return numbers
+
+        targets, facts = {}, {}
+        for pc in sorted(self.seen):
+            p = self.pair(pc)
+            if p.lower.op not in ("jr", "jalr") or pc not in entering:
+                continue
+            reg = p.lower.branch[1]
+            held = values.reg(entering[pc], reg)
+            if held is None:
+                raise TranslationError(f"JR vi{reg} at {pc:04x} to an address the translator cannot bound")
+            numbers = set()
+            for value in held:
+                if isinstance(value, int):
+                    numbers.add(value)
+                else:
+                    token = value[0]
+                    # One check a start value, under what every path that jumps through it found.
+                    facts[token] = facts[token] & value[1] if token in facts else value[1]
+                    numbers |= allowed(token)
+            targets[pc] = {(value & 0xFFFF) * 8 & 0x3FFF for value in numbers}
+        return targets, {(token, found): allowed(token) for token, found in facts.items()}
+
+    def branch_fact(self, pc, succ, entering, values):
+        """What the edge from the delay slot at pc to succ tells about a start value: an IBEQ or
+        IBNE of a start value against vi0, reached only from the pair before it (a branch right
+        after an integer write of its register reads the old value: no fact then)."""
+        branch_pc = self.delay_slot_of.get(pc)
+        if branch_pc is None or branch_pc in self.leaders or branch_pc < 8 or branch_pc not in entering:
+            return None
+        l = self.pair(branch_pc).lower
+        if l.op not in ("ibeq", "ibne") or (l.vis and l.vit) or l.branch[1] == branch_pc + 16:
+            return None
+        reg = l.vis or l.vit
+        before = self.pair(branch_pc - 8).lower
+        if not reg or (before.delays_branch and before.vi_write and before.vi_write[0] == reg):
+            return None
+        held = values.reg(entering[branch_pc], reg)
+        if held is None or len(held) != 1 or isinstance(next(iter(held)), int):
+            return None
+        equal = (succ == l.branch[1]) == (l.op == "ibeq")
+        return next(iter(held))[0], "eq0" if equal else "ne0"
 
     def label(self, pc, state, pend=None, resolved=False):
         key = (pc, state.key(), pend, resolved)
@@ -485,6 +714,8 @@ class Translator:
                     lines.append(("maccommit", producer))
                 elif kind == "clip":
                     lines.append(f"    clip = clip_{producer:04x};")
+                elif kind == "p":
+                    lines.append(f"    p = p_{producer:04x};")
                 else:
                     lines.append("    q = qp;")
             else:
@@ -492,6 +723,7 @@ class Translator:
         state.pending = tuple(keep)
         state.vf = {key: t - cycles for key, t in state.vf.items() if t > cycles}
         state.vi = {reg: t - cycles for reg, t in state.vi.items() if t > cycles}
+        state.efu = max(0, state.efu - cycles)
 
     def stall(self, p, state):
         ready = 0
@@ -503,6 +735,12 @@ class Translator:
         if p.lower.fdiv or p.lower.waitq:
             for t, kind, _ in state.pending:
                 if kind == "q":
+                    ready = max(ready, t)
+        if p.lower.efu or p.lower.waitp:
+            ready = max(ready, state.efu)
+        if p.lower.waitp:
+            for t, kind, _ in state.pending:
+                if kind == "p":
                     ready = max(ready, t)
         return ready
 
@@ -530,7 +768,13 @@ class Translator:
             pending.append((FMAC_LATENCY, "clip", p.pc))
             self.clip_producers.add(p.pc)
         if l.fdiv:
-            pending.append((DIV_LATENCY, "q", p.pc))
+            pending.append((l.fdiv, "q", p.pc))
+        if l.efu:
+            if sum(1 for _, kind, _ in pending if kind == "p") >= 2:
+                raise TranslationError(f"a third EFU result in flight at {p.pc:04x}")
+            pending.append((l.efu, "p", p.pc))
+            self.efu_producers.add(p.pc)
+            state.efu = l.efu - 1
         state.pending = tuple(pending)
         state.backup = l.vi_write[0] if l.delays_branch and l.vi_write else 0
 
@@ -561,7 +805,7 @@ class Translator:
         l = p.lower
         out = []
         op = l.op
-        if op in ("nop", "waitq", "b"):
+        if op in ("nop", "waitq", "waitp", "b"):
             return out
         # A conditional branch right after this pair reads the register's old value.
         if l.delays_branch and l.vi_write:
@@ -656,11 +900,22 @@ class Translator:
             out.append(f"    sq<{l.dest}>(mem, {vi(l.vit)}, {vf(l.is_)});")
         elif op == "div":
             out.append(f"    qp = div(lane<{l.fsf}>({vf(l.is_)}), lane<{l.ftf}>({vf(l.it)}));")
+        elif op == "sqrt":
+            out.append(f"    qp = sqrtQ(lane<{l.ftf}>({vf(l.it)}));")
+        elif op == "rsqrt":
+            out.append(f"    qp = rsqrtQ(lane<{l.fsf}>({vf(l.is_)}), lane<{l.ftf}>({vf(l.it)}));")
+        elif op in ("esqrt", "ersqrt", "ercpr"):
+            out.append(f"    p_{p.pc:04x} = {op}(lane<{l.fsf}>({vf(l.is_)}));")
+        elif op == "mfp":
+            out.append("    const V lv = splat(p);")
         elif op == "mtir":
             if l.vit:
                 out.append(f"    {vi(l.vit)} = static_cast<int16_t>(laneBits<{l.fsf}>({vf(l.is_)}) & 0xFFFFu);")
         elif op == "mfir":
             out.append(f"    const V lv = opaque(bits(static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>({vi(l.vis)})))));")
+        elif op in ("xtop", "xitop"):
+            if l.vit:
+                out.append(f"    {vi(l.vit)} = static_cast<int32_t>(s.{op[1:]} & 0x3FFu);")
         elif op == "xgkick":
             out.append(f"    kickEnd = xgkick(c, {vi(l.vis)}, cycle);")
         else:
@@ -675,7 +930,7 @@ class Translator:
         if kind == "cond":
             return [pend[1], pend[2]]
         if kind in ("jr", "jalr"):
-            return sorted(self.links[pend[1]])
+            return sorted(self.jr_targets[pend[2]])
         return []
 
     def translate_block(self, label, pc, state, pend, resolved):
@@ -735,7 +990,7 @@ class Translator:
             cycles += 1
             if pend and pend[0] == "end":
                 # flushPipelines: the cycles until everything lands, or PATH1 is done.
-                latest = state.latest()
+                latest = state.latest(efu=False)
                 lines.append(f"    cycle += {cycles + latest};")
                 lines.append("    if (kickEnd > cycle) cycle = kickEnd;")
                 self.advance(state, latest, lines)
@@ -757,16 +1012,16 @@ class Translator:
                     block.successors += [taken, fallthrough]
                 else:
                     lines.append("    switch (jump) {")
-                    for target_pc in sorted(self.links[pend[1]]):
+                    for target_pc in sorted(self.jr_targets[pend[2]]):
                         target = self.label(target_pc, state)
                         lines.append(f"    case 0x{target_pc:04x}u: goto {target};")
                         block.successors.append(target)
-                    lines.append("    default: unexpectedJump(c, jump); return;")
+                    lines.append("    default: unexpectedJump(c, jump); return true;")
                     lines.append("    }")
                 break
             if p.lower.branch:
                 kind, arg = p.lower.branch
-                pend = ("cond", arg, pc + 16) if kind == "cond" else (kind, arg)
+                pend = ("cond", arg, pc + 16) if kind == "cond" else (kind, arg, pc)
                 pc += 8
                 continue
             if p.ebit:
@@ -815,13 +1070,13 @@ class Translator:
 
     def function(self):
         """The C++ function, run_<name>."""
-        out = [f"void run_{self.name}(Context &c)", "{",
+        out = [f"bool run_{self.name}(Context &c)", "{",
                "    uint8_t *const mem = c.data;", "    VU1State &s = *c.state;",
                "    const V f0 = opaque(_mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));"]
         out += [f"    V f{reg} = load(s.vf[{reg}]);" for reg in range(1, 32)]
         out += [f"    int32_t vi{reg} = static_cast<int16_t>(s.vi[{reg}]);" for reg in range(1, 16)]
         out += ["    V acc = load(s.acc);",
-                "    float q = s.q, qp = 0.0f;",
+                "    float q = s.q, qp = 0.0f, p = s.p;",
                 "    uint32_t iBits;",
                 "    std::memcpy(&iBits, &s.i, sizeof(iBits));",
                 "    V iR = bits(iBits), iN = normalize(iR);",
@@ -832,8 +1087,17 @@ class Translator:
                 "    uint32_t jump = 0, endPc = 0;"]
         out += [f"    uint32_t mac_{producer:04x} = 0;" for producer in sorted(self.needed)]
         out += [f"    uint32_t clip_{producer:04x} = 0;" for producer in sorted(self.clip_producers)]
-        out += ["    (void)wait; (void)viOld; (void)taken; (void)jump; (void)qp; (void)clipW; (void)iR; (void)iN;",
-                f"    goto {self.entry_label};"]
+        out += [f"    float p_{producer:04x} = 0.0f;" for producer in sorted(self.efu_producers)]
+        out += ["    (void)wait; (void)viOld; (void)taken; (void)jump; (void)qp; (void)clipW; (void)iR; (void)iN; (void)p;"]
+        # What the program finds at its start and jumps through: other values, the microcode runs.
+        def start_value(token):
+            return vi(token[1]) if token[0] == "vi" else f"ilw(mem, {token[1]}, {token[2]})"
+        for (token, facts), numbers in sorted(self.entry_checks.items(), key=lambda item: (item[0][0], sorted(item[0][1]))):
+            test = [f"{start_value(t)} {'==' if kind == 'eq0' else '!='} 0" for t, kind in sorted(facts)]
+            test += [f"{start_value(token)} != {number}" for number in sorted(numbers)]
+            out.append(f"    if ({' && '.join(test)})")
+            out.append("        return false;")
+        out.append(f"    goto {self.entry_label};")
         for block in sorted(self.blocks, key=lambda b: b.label):
             for line in block.lines:
                 if isinstance(line, tuple):
@@ -847,7 +1111,7 @@ class Translator:
         out += [f"    store(s.vf[{reg}], f{reg});" for reg in range(1, 32)]
         out += [f"    s.vi[{reg}] = vi{reg};" for reg in range(1, 16)]
         out += ["    store(s.acc, acc);", "    s.q = q;", "    std::memcpy(&s.i, &iBits, sizeof(iBits));",
-                "    s.mac = mac;", "    s.clip = clip;", "    s.pc = endPc;", "    c.cycles = cycle;", "}"]
+                "    s.p = p;", "    s.mac = mac;", "    s.clip = clip;", "    s.pc = endPc;", "    c.cycles = cycle;", "    return true;", "}"]
         return out
 
     def footprint(self):
@@ -880,18 +1144,19 @@ def images(profiles):
                 yield path, data
 
 
-def generate(programs, profiles):
+def generate(programs, profiles, shards=1):
+    """The C++ files: the table, then the translations spread over shards files, the longest
+    programs first, each into the file with the fewest pairs so far, compiled in parallel."""
     found = {}
     for path, data in images(profiles):
         for name, entry, begin, end, checksum in programs:
             if name not in found and fnv(data[begin:end]) == checksum:
                 found[name] = data
-    out = ["// Native VU1 programs, generated by tools/translate_vu_programs.py from the game's microcode.",
-           "// Built locally and never distributed.",
-           '#include "runtime/ps2_vu1_native.h"', "", "#include <cstring>", "",
-           "namespace ps2_vu_native", "{"]
-    table = []
-    out += ["#if PS2_VU_NATIVE_AVAILABLE", "namespace", "{", "using namespace ops;", ""]
+    head = ["// Native VU1 programs, generated by tools/translate_vu_programs.py from the game's microcode.",
+            "// Built locally and never distributed.",
+            '#include "runtime/ps2_vu1_native.h"', "", "#include <cstring>", "",
+            "namespace ps2_vu_native", "{", "#if PS2_VU_NATIVE_AVAILABLE", "namespace generated", "{"]
+    table, declarations, translated = [], [], []
     for name, entry, begin, end, checksum in programs:
         if name not in found:
             print(f"translate_vu_programs: {name}: no code image has it", file=sys.stderr)
@@ -900,30 +1165,43 @@ def generate(programs, profiles):
         translator.translate()
         if translator.footprint() != (begin, end):
             raise TranslationError(f"{name} spans {translator.footprint()}, the list says {(begin, end)}")
-        out += translator.function() + [""]
+        lines = translator.function() + [""]
         # find() compares the uploaded microcode with these bytes.
         code = found[name][begin:end]
-        out.append(f"const uint8_t code_{name}[] = {{")
-        out += ["    " + ", ".join(f"0x{byte:02x}" for byte in code[i:i + 16]) + "," for i in range(0, len(code), 16)]
-        out += ["};", ""]
-        table.append(f'    {{"{name}", 0x{entry:04x}u, 0x{begin:04x}u, 0x{end:04x}u, 0x{checksum:016x}ull, code_{name}, &run_{name}}},')
+        lines.append(f"extern const uint8_t code_{name}[] = {{")
+        lines += ["    " + ", ".join(f"0x{byte:02x}" for byte in code[i:i + 16]) + "," for i in range(0, len(code), 16)]
+        lines += ["};", ""]
+        translated.append((len(translator.pairs), name, lines))
+        declarations += [f"bool run_{name}(Context &c);", f"extern const uint8_t code_{name}[];"]
+        table.append(f'    {{"{name}", 0x{entry:04x}u, 0x{begin:04x}u, 0x{end:04x}u, 0x{checksum:016x}ull, '
+                     f'generated::code_{name}, &generated::run_{name}}},')
         print(f"translate_vu_programs: {name}: {len(translator.pairs)} pairs, {len(translator.blocks)} blocks, "
               f"MAC flags of {len(translator.needed)} of {len(translator.mac_producers)} instructions read",
               file=sys.stderr)
-    out += ["} // namespace", ""]
-    out += ["extern const Program kGeneratedPrograms[];", "extern const uint32_t kGeneratedProgramCount;"]
-    out += ["const Program kGeneratedPrograms[] = {"] + (table or ['    {"", 0u, 0u, 0u, 0ull, nullptr, nullptr},']) + ["};"]
-    out += [f"const uint32_t kGeneratedProgramCount = {len(table)}u;", "#else",
-            "extern const Program kGeneratedPrograms[];", "extern const uint32_t kGeneratedProgramCount;",
-            'const Program kGeneratedPrograms[] = {{"", 0u, 0u, 0u, 0ull, nullptr, nullptr}};',
-            "const uint32_t kGeneratedProgramCount = 0u;", "#endif", "} // namespace ps2_vu_native", ""]
-    return "\n".join(out)
+    bodies, load = [[] for _ in range(shards)], [0] * shards
+    for size, name, lines in sorted(translated, key=lambda item: (-item[0], item[1])):
+        index = min(range(shards), key=lambda k: (load[k], k))
+        load[index] += size
+        bodies[index] += lines
+    tail = ["} // namespace generated", "#endif", "} // namespace ps2_vu_native", ""]
+    files = ["\n".join(head + declarations + ["} // namespace generated", "",
+                                               "extern const Program kGeneratedPrograms[];",
+                                               "extern const uint32_t kGeneratedProgramCount;",
+                                               "const Program kGeneratedPrograms[] = {"] +
+                       (table or ['    {"", 0u, 0u, 0u, 0ull, nullptr, nullptr},']) + ["};",
+                       f"const uint32_t kGeneratedProgramCount = {len(table)}u;", "#else",
+                       "extern const Program kGeneratedPrograms[];", "extern const uint32_t kGeneratedProgramCount;",
+                       'const Program kGeneratedPrograms[] = {{"", 0u, 0u, 0u, 0ull, nullptr, nullptr}};',
+                       "const uint32_t kGeneratedProgramCount = 0u;", "#endif", "} // namespace ps2_vu_native", ""])]
+    files += ["\n".join(head + ["using namespace ops;", ""] + body + tail) for body in bodies]
+    return files
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--programs", type=Path, help="data/vu_native_programs.txt")
-    parser.add_argument("--output", type=Path)
+    parser.add_argument("--output", type=Path, help="the table; the translations go to <output stem>_<n>.cpp")
+    parser.add_argument("--shards", type=int, default=1, help="files the translations are spread over")
     parser.add_argument("--describe", nargs=3, metavar=("NAME", "IMAGE", "ENTRY"))
     parser.add_argument("profiles", type=Path, nargs="*")
     args = parser.parse_args()
@@ -937,10 +1215,13 @@ def main():
         return
     if not args.programs or not args.output:
         parser.error("--programs and --output are required")
-    text = generate(read_programs(args.programs), args.profiles)
-    if not args.output.is_file() or args.output.read_text() != text:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(text, newline="\n")
+    files = generate(read_programs(args.programs), args.profiles, max(1, args.shards))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    for index, text in enumerate(files):
+        path = args.output if index == 0 else args.output.with_name(f"{args.output.stem}_{index - 1}{args.output.suffix}")
+        # Unchanged files keep their date and are not compiled again.
+        if not path.is_file() or path.read_text() != text:
+            path.write_text(text, newline="\n")
 
 
 if __name__ == "__main__":

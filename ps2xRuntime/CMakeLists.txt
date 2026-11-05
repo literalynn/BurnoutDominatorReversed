@@ -542,28 +542,35 @@ if(PS2X_VU_PROGRAM_PROFILES)
     set(PS2X_VU_NATIVE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/../data/vu_native_programs.txt" CACHE FILEPATH
         "VU1 programs to translate to C++ (tools/translate_vu_programs.py); empty: none")
     if(PS2X_VU_NATIVE_LIST)
+        # The table, then the translations in PS2X_VU_PROGRAM_SHARDS files compiled in parallel.
         set(PS2X_VU_NATIVE_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/vu_native_programs.cpp")
+        set(PS2X_VU_NATIVE_SOURCES "${PS2X_VU_NATIVE_SOURCE}")
+        foreach(SHARD RANGE ${PS2X_VU_PROGRAM_LAST_SHARD})
+            list(APPEND PS2X_VU_NATIVE_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/generated/vu_native_programs_${SHARD}.cpp")
+        endforeach()
         add_custom_command(
-            OUTPUT "${PS2X_VU_NATIVE_SOURCE}"
+            OUTPUT ${PS2X_VU_NATIVE_SOURCES}
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/translate_vu_programs.py"
-                    --programs "${PS2X_VU_NATIVE_LIST}" --output "${PS2X_VU_NATIVE_SOURCE}" ${PS2X_VU_PROGRAM_PROFILES}
+                    --programs "${PS2X_VU_NATIVE_LIST}" --output "${PS2X_VU_NATIVE_SOURCE}"
+                    --shards ${PS2X_VU_PROGRAM_SHARDS} ${PS2X_VU_PROGRAM_PROFILES}
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/translate_vu_programs.py" "${PS2X_VU_NATIVE_LIST}"
                     ${PS2X_VU_PROGRAM_LISTS}
             VERBATIM)
         set_source_files_properties(src/lib/vu/ps2_vu1_native.cpp PROPERTIES COMPILE_DEFINITIONS PS2X_VU_NATIVE_PROGRAMS=1)
         # Exact VU arithmetic: no fast-math rewrites (x + 0 is not x when x is a denormal the
-        # VU reads as zero) and the rounding mode ps2_vu_native::run sets.
+        # VU reads as zero) and the rounding mode ps2_vu_native::run sets. MSVC leaves a function
+        # past its size limit unoptimized (C4883), one stack slot per value: GtIm3d's took 3 MiB.
         if(MSVC)
-            set(PS2X_VU_NATIVE_FP_OPTIONS /fp:strict)
+            set(PS2X_VU_NATIVE_FP_OPTIONS /fp:strict /d2OptimizeHugeFunctions)
         else()
             set(PS2X_VU_NATIVE_FP_OPTIONS -fno-fast-math -frounding-math -ffp-contract=off)
         endif()
-        target_sources(ps2_runtime PRIVATE "${PS2X_VU_NATIVE_SOURCE}")
-        set_source_files_properties("${PS2X_VU_NATIVE_SOURCE}" PROPERTIES
+        target_sources(ps2_runtime PRIVATE ${PS2X_VU_NATIVE_SOURCES})
+        set_source_files_properties(${PS2X_VU_NATIVE_SOURCES} PROPERTIES
             SKIP_UNITY_BUILD_INCLUSION ON COMPILE_OPTIONS "${PS2X_VU_NATIVE_FP_OPTIONS}")
     endif()
     add_custom_target(ps2_vu_programs DEPENDS "${PS2X_VU_PROGRAM_INCLUDE}"
-                      "${PS2X_VU_PROGRAM_EXTERN_INCLUDE}" ${PS2X_VU_PROGRAM_SOURCES} ${PS2X_VU_NATIVE_SOURCE})
+                      "${PS2X_VU_PROGRAM_EXTERN_INCLUDE}" ${PS2X_VU_PROGRAM_SOURCES} ${PS2X_VU_NATIVE_SOURCES})
     add_dependencies(ps2_runtime ps2_vu_programs)
     # Visual Studio's clang-cl (component "C++ Clang Compiler for Windows") makes code of the
     # routines that runs about 5% faster than MSVC's: GS worker time in a race, same GIF output.

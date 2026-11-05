@@ -2,3 +2,12 @@
 # <name> <MSCAL address> <first code byte> <end> <FNV-1a 64 of the code from first to end>
 # The checksum names the code; the code itself comes from the local code images.
 sky_dome 0000 0000 15d0 6551840b5d41a054
+g3_bfc_adc 1548 0020 1558 71c51b3ec695dd9e
+g3_gen_adc 1318 0020 1328 f5858c05967174f0
+trail_render 1070 0150 1090 d9013bd6b162a9fc
+gt_im3d 2650 0098 2660 0296869855f31bdb
+g3_instanced 0ee8 0020 0ef8 92f38253f060af5d
+g3_bfc_adc_s 1910 0020 1920 061eb81abeb175df
+g3_gen_adc_s 16e0 0020 16f0 af9e59204ac56289
+vehicles 14e0 0020 14f0 0b7aa3b300319749
+sparks 06a0 0048 06b0 a43b9424ff9e3c24

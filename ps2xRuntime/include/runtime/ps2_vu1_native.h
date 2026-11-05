@@ -50,7 +50,7 @@ struct Program
     uint32_t begin, end; // microcode bytes the translation was made from
     uint64_t hash;       // their FNV-1a 64
     const uint8_t *code; // the bytes themselves, compared at each new microcode generation
-    void (*run)(Context &);
+    bool (*run)(Context &);
 };
 
 // Called by the translations' static initializers.
@@ -70,8 +70,10 @@ void setMode(Mode mode);
 const Program *find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation);
 
 // Runs a translation as VU1Interpreter::run runs microcode: rounding toward zero, denormal
-// operands read as zero, results below FLT_MIN flushed to zeros of their sign.
-void run(const Program &program, Context &context);
+// operands read as zero, results below FLT_MIN flushed to zeros of their sign. false: the start
+// holds a value the program jumps through that the translation does not have (an address it
+// left in a register or in VU1 memory), nothing has changed and the microcode must run.
+bool run(const Program &program, Context &context);
 
 // Counts of shadow comparisons, one line per program; empty when nothing was compared.
 std::string report();
@@ -242,11 +244,50 @@ PS2_VU_NATIVE_INLINE uint32_t clip(V fs, V ft)
 }
 
 // DIV: Q = fs / ft, both finite; a zero divisor gives FLT_MAX with the quotient's sign.
+// Q and P as the interpreter computes them (ps2_vu1_lower.inl): operands with exponent 255 read
+// as FLT_MAX, a zero divisor gives FLT_MAX with the quotient's sign.
+PS2_VU_NATIVE_INLINE float operand(float value) { return _mm_cvtss_f32(normalize(_mm_set_ss(value))); }
+PS2_VU_NATIVE_INLINE float root(float value) { return _mm_cvtss_f32(_mm_sqrt_ss(_mm_set_ss(value))); }
+
 PS2_VU_NATIVE_INLINE float div(float numerator, float denominator)
 {
+    numerator = operand(numerator);
+    denominator = operand(denominator);
     if (denominator == 0.0f)
         return (std::signbit(numerator) != std::signbit(denominator)) ? -3.40282347e+38f : 3.40282347e+38f;
     return numerator / denominator;
+}
+
+PS2_VU_NATIVE_INLINE float sqrtQ(float value) { return root(std::fabs(operand(value))); }
+
+PS2_VU_NATIVE_INLINE float rsqrtQ(float numerator, float radicand)
+{
+    numerator = operand(numerator);
+    const float denominator = root(std::fabs(operand(radicand)));
+    if (denominator == 0.0f)
+        return std::signbit(numerator) ? -3.40282347e+38f : 3.40282347e+38f;
+    return numerator / denominator;
+}
+
+PS2_VU_NATIVE_INLINE float esqrt(float value)
+{
+    value = operand(value);
+    return value >= 0.0f ? root(value) : value;
+}
+
+PS2_VU_NATIVE_INLINE float ersqrt(float value)
+{
+    value = operand(value);
+    if (value < 0.0f)
+        return value;
+    const float r = root(value);
+    return r != 0.0f ? 1.0f / r : r;
+}
+
+PS2_VU_NATIVE_INLINE float ercpr(float value)
+{
+    value = operand(value);
+    return value != 0.0f ? 1.0f / value : value;
 }
 
 // MAC flags, for the lanes in Dest: zero in bits 0-3, sign in 4-7, underflow in 8-11, overflow
