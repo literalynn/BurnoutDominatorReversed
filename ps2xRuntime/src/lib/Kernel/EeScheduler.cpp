@@ -654,17 +654,28 @@ bool EeScheduler::hasGeneratedFunction(uint32_t address) noexcept
 namespace
 {
     // BDR_EE_CYCLE_SCALE=P charges P% of the cycles the generated code reports
-    // at its checkpoints (default 100). The recompiler charges a fixed 32
-    // cycles per backward branch whatever the loop length, so this is an
-    // experiment knob for EE timing, like an emulator's EE cycle rate.
-    // Read at start-up: a function-local static cost a thread-safe
-    // initialization check at every checkpoint.
-    const uint32_t g_eeCycleScalePercent = []
+    // at its checkpoints. The recompiler charges a fixed 32 cycles per backward
+    // branch whatever the loop length, so this is an experiment knob for EE
+    // timing, like an emulator's EE cycle rate. 0 when unset. Read at start-up:
+    // a function-local static cost a thread-safe initialization check at every
+    // checkpoint.
+    const uint32_t g_eeCycleScaleOverride = []
     {
         const char *value = std::getenv("BDR_EE_CYCLE_SCALE");
-        const long parsed = value ? std::strtol(value, nullptr, 10) : 100;
-        return static_cast<uint32_t>(std::clamp<long>(parsed, 1, 1000));
+        return value ? static_cast<uint32_t>(std::clamp<long>(std::strtol(value, nullptr, 10), 1, 1000)) : 0u;
     }();
+
+    // The percentage charged: the override, else 100 at the console's VBlank rate and 60 / rate
+    // percent above it (setVBlankRate), so that each VBlank holds as much EE work as a console
+    // frame. At R VBlanks a second a frame had 60 / R of it: Burnout's race at 360 drew 221
+    // frames for 361 VBlanks a second, its game thread waiting about half the time (E023).
+    std::atomic<uint32_t> g_eeCycleScalePercent{g_eeCycleScaleOverride ? g_eeCycleScaleOverride : 100u};
+
+    uint64_t scaledCycles(uint32_t cycles, uint32_t percent) noexcept
+    {
+        return percent == 100u ? std::max<uint64_t>(1u, cycles)
+                               : std::max<uint64_t>(1u, (static_cast<uint64_t>(cycles) * percent) / 100u);
+    }
 }
 
 #if defined(_MSC_VER)
@@ -707,9 +718,8 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     // Nearly always nothing is due and the whole path below only charges the cycles. That
     // case is tested first and done here without a call, so this function needs no stack
     // frame; anything else goes through the whole path, from its start.
-    if (g_eeCycleScalePercent == 100u)
     {
-        const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
+        const uint64_t elapsed = scaledCycles(cycles, g_eeCycleScalePercent.load(std::memory_order_relaxed));
         const uint64_t cycle = m_eeCycle + elapsed;
         const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
         if (m_deviceCycleDebt + elapsed < kDeviceBatchCycles && m_pendingEeTimerInterrupts == 0u &&
@@ -734,8 +744,7 @@ __attribute__((noinline))
 #endif
 bool EeScheduler::checkpointDueSlow(uint32_t cycles) noexcept
 {
-    const uint32_t percent = g_eeCycleScalePercent;
-    chargeCycles(percent == 100u ? cycles : std::max<uint32_t>(1u, static_cast<uint32_t>((static_cast<uint64_t>(cycles) * percent) / 100u)));
+    chargeCycles(static_cast<uint32_t>(scaledCycles(cycles, g_eeCycleScalePercent.load(std::memory_order_relaxed))));
 
     if (m_checkpointPending.load(std::memory_order_acquire) ||
         m_stopRequested.load(std::memory_order_acquire))
@@ -781,6 +790,8 @@ namespace ps2x
     void setVBlankRate(uint32_t perSecond)
     {
         g_vblankRate.store(perSecond, std::memory_order_relaxed);
+        if (g_eeCycleScaleOverride == 0u)
+            g_eeCycleScalePercent.store(perSecond > 60u ? std::max(1u, 6000u / perSecond) : 100u, std::memory_order_relaxed);
     }
 
     uint32_t vblankRate()

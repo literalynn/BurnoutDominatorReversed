@@ -54,7 +54,7 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 | ✅ Graphics | up to 4x resolution, supersampling, FXAA, 16:9 |
 | ✅ Sound | music, engines, crashes, menus, the races' reverb |
 | ✅ Speed | 60 frames per second in six-car races; the race keeps its speed when frames come late |
-| ✅ High frame rate | 120, 144, 240... frames per second (`refresh_rate`): the simulation runs that fast, not interpolated (on a Ryzen + RTX 5090, 144 draws every frame in a race and 165 nearly every one, 144 also at 4x resolution with 16 samples a pixel; from 240 the frames come unevenly, and above 300 the race slows down) |
+| ✅ High frame rate | 120, 144, 240... frames per second (`refresh_rate`): the simulation runs that fast, not interpolated (on a Ryzen + RTX 5090 a race draws every frame up to 240 and 297 to 331 frames a second at 300 to 500, at full speed; 144 also at 4x resolution with 16 samples a pixel) |
 
 ## Install (Windows)
 
@@ -131,7 +131,7 @@ Every key can be changed in **F1** → *Keyboard and mouse controls*: up to thre
 | `volume` | 100 | percent |
 | `show_fps` | false | frames per second in the corner |
 | `key_cross`, `key_l1`... | see Controls | up to three keys, mouse buttons or wheel directions (`MOUSE_LEFT`, `MOUSE_WHEEL_UP`...) per button, or `NONE` |
-| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `120`, `144`, `240`... up to `500` runs the whole game that many frames a second at the same speed (more CPU work: a PC that cannot keep up slows the race down), from the next menu page |
+| `refresh_rate` | 60 | the game runs at `60` or `50` Hz without asking; `120`, `144`, `240`... up to `500` runs the whole game that many frames a second at the same speed (more CPU work: a PC that cannot keep up draws fewer frames, then slows the race down), from the next menu page |
 
 </details>
 
@@ -172,7 +172,7 @@ Each fix is described in [docs/CHANGES.md](docs/CHANGES.md) and the investigatio
 
 A race went from 1 frame per second (GS on the CPU) to 16 with paraLLEl-GS, then to 60: compiled VU0 and VU1 programs, VU1 and GS work moved to their own threads, a declared idle loop, and a long list of smaller fixes. On October 19 a replay of 1,500 frames of a six-car race went from 12.7 to 8.9 s of wall time, with the same picture bit for bit. `BDR_STOP_AT_VSYNC` measures a build's CPU time on such a replay ([docs/BOOT.md](docs/BOOT.md)).
 
-Since November 5, 2026 the ten heaviest VU1 microprograms (world, cars, props, sky, sparks, trails) run as C++ that the build translates from the game's own microcode, with the same output, compared over 9.5 million starts: at 300 Hz a race went from 171 to 228 frames a second on average. The game thread's VU0 microprograms followed the same night. `PS2_VU_NATIVE=0` runs the microcode instead ([docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md)). They run on Windows and Linux with an x86-64 processor that has FMA3 (Intel since 2013, AMD since 2012); elsewhere the microcode runs.
+Since November 5, 2026 the ten heaviest VU1 microprograms (world, cars, props, sky, sparks, trails) run as C++ that the build translates from the game's own microcode, with the same output, compared over 9.5 million starts: at 300 Hz a race went from 171 to 228 frames a second on average, and to 297 once each VBlank got a console frame's EE cycles. The game thread's VU0 microprograms followed the same night. `PS2_VU_NATIVE=0` runs the microcode instead ([docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md)). They run on Windows and Linux with an x86-64 processor that has FMA3 (Intel since 2013, AMD since 2012); elsewhere the microcode runs.
 
 ## Documentation
 
