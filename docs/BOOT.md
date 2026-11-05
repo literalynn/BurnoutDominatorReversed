@@ -118,7 +118,7 @@ During runs 1 and 2, the VBlank counter advances by 60 per second: the game has 
 - ATTR: 0x8000 enables the core, 0x40 the IRQs, bits 5:4 select the transfer (1 PIO write, 2 DMA write, 3 DMA read). STATX is 0 when idle, 0x400 during a transfer and 0x80 once finished as long as the transfer mode stays active. libsd (run physically) waits for `(STATX & 0x7FF) == 0`: a STATX forced to 0x80 when idle blocked `sceSdInit`.
 - SPU DMA: channel 4 (core 0, CHCR 0x1F8010C8, IRQ 0x24) and channel 8 (core 1, CHCR 0x1F801508, IRQ 0x28); CHCR 0x01000201 = start RAM → SPU, BCR = (blocks << 16) | 16 words. An address IRQ (IRQA reached by a voice or a transfer) raises IOP IRQ 9 and SPDIF_IRQINFO.
 - Clock: at every sample (48 kHz), an enabled core writes the mixer output buffers to SPU2 RAM (voice 1, voice 3, left and right mix, 0x200 halfwords each; for core 0, halfwords 0x400 to 0x5FF receive voice 1) and tests IRQA on both cores. RWA places IRQA in one of these buffers (halfwords 0x400 then 0x500) to receive an IRQ every 256 samples: that is its engine's clock, without which opening a stream never finishes.
-- Limits: no reverb, noise, pitch modulation, ADMA or volume sweeps; linear interpolation; no output to the host's sound card.
+- Limits: no noise, pitch modulation or ADMA streaming, which Burnout does not use. Reverb, volume sweeps, the hardware's Gaussian interpolation and the host output are modelled (CHANGES.md).
 
 **RWA protocol** (SIF commands, see also SDK_FUNCTIONS.md).
 

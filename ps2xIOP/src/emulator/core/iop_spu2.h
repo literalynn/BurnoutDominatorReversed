@@ -18,7 +18,7 @@ namespace ps2x::iop::detail
     // file at 0x1F900000 and the transfer paths (TSA + PIO data port, DMA). Time is driven by the
     // IOP cycle count: one output sample every CyclesPerSample cycles (48 kHz).
     //
-    // Modelled: ADPCM decode with 4-point interpolation across blocks, ADSR envelopes, volume
+    // Modelled: ADPCM decode with Gaussian interpolation across blocks, ADSR envelopes, volume
     // sweeps, pitch, key on/off, loop addresses (a written loop address holds until the next
     // key on, as in PCSX2), ENDX, the IRQ raised when a voice fetches (or a transfer or the
     // mixer touches) the address in IRQA, STATX/ATTR/SPDIF IRQ status, the dry mix of each core

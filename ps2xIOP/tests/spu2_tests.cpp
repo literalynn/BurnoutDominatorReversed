@@ -277,6 +277,25 @@ namespace
         require(spu.activeVoices() == 0u, "KOFF releases the voice to silence and stops it");
     }
 
+    // A constant sample through the Gaussian interpolation at index 0: the weights 0x12C7, 0x59B3,
+    // 0x1307 and -1 sum to 0x7F80, so 16384 comes out as 16318, and 16317 after the full envelope
+    // in the voice 1 output buffer.
+    void testGaussianInterpolation()
+    {
+        Spu2 spu;
+        constexpr uint32_t Start = 0x4000u;
+        putBlock(spu, Start, 0x00, 0x04, 0x4); // shift 0: every sample is 0x4000
+        putBlock(spu, Start + 8u, 0x00, 0x03, 0x4);
+        write(spu, 0, Spu2::RegAttr, Spu2::AttrEnable);
+        setAddress(spu, 0, Spu2::RegVoiceAddress + 12u, Start);
+        write(spu, 0, 0x10u + 0x4u, 0x1000); // one sample per output sample: index 0
+        setFastEnvelope(spu, 0, 1);
+        write(spu, 0, Spu2::RegKon, 0x0002);
+        spu.advanceTo(100u * Spu2::CyclesPerSample);
+        for (uint32_t position = 50u; position < 90u; ++position)
+            require(spu.soundRam(0x400u + position) == 16317u, "Gaussian weights scale a constant voice by 0x7F80 / 0x8000");
+    }
+
     // A one-shot sample whose loop address the driver points at a silent block: at the
     // sample's end the voice jumps there instead of repeating the sample.
     void testWrittenLoopAddressHolds()
@@ -463,6 +482,7 @@ int main()
         testMixerOutputClock();
         testVoiceStopsAtLoopEnd();
         testAudioOutputAndRelease();
+        testGaussianInterpolation();
         testWrittenLoopAddressHolds();
         testVolumeSweeps();
         testCoreRouting();
