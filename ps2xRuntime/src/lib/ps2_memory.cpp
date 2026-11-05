@@ -476,9 +476,8 @@ uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
 
     constexpr uint32_t kGifStat = 0x10003020u;
     constexpr uint32_t kGifFqcMask = 0x1F000000u;
-    auto gifStatIt = m_ioRegisters.find(kGifStat);
-    if (gifStatIt != m_ioRegisters.end())
-        gifStatIt->second &= ~kGifFqcMask;
+    if (uint32_t *gifStat = m_ioRegisters.find(kGifStat))
+        *gifStat &= ~kGifFqcMask;
 
     uint32_t interruptMask = 0u;
     for (size_t index = 0; index < m_eeTimers.size(); ++index)
@@ -1311,8 +1310,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
     {
         if ((address & 0xFF) == 0x00 && (value & 0x100))
         {
-            const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
-            const bool dmacEnabled = (dctrlIt == m_ioRegisters.end()) || ((dctrlIt->second & 0x1u) != 0u);
+            const uint32_t *dctrl = m_ioRegisters.find(0x1000E000u);
+            const bool dmacEnabled = !dctrl || ((*dctrl & 0x1u) != 0u);
             if (!dmacEnabled)
             {
                 return true;
@@ -2378,8 +2377,8 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
     if ((chcr & (1u << 7u)) != 0u || ((chcr >> 4u) & 0x3u) != 0u)
         return false;
 
-    const auto dctrlIt = m_ioRegisters.find(D_CTRL);
-    if (dctrlIt != m_ioRegisters.end() && ((dctrlIt->second & 0x1u) == 0u))
+    const uint32_t *dctrl = m_ioRegisters.find(D_CTRL);
+    if (dctrl && ((*dctrl & 0x1u) == 0u))
         return false;
 
     auto resolveContiguous = [&](uint32_t guestAddr, uint32_t bytes, const uint8_t *&out) -> bool
@@ -2571,8 +2570,8 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
     if ((chcr & (1u << 7u)) != 0u || ((chcr >> 4u) & 0x3u) != 0u)
         return false;
 
-    const auto dctrlIt = m_ioRegisters.find(D_CTRL);
-    if (dctrlIt != m_ioRegisters.end() && ((dctrlIt->second & 0x1u) == 0u))
+    const uint32_t *dctrl = m_ioRegisters.find(D_CTRL);
+    if (dctrl && ((*dctrl & 0x1u) == 0u))
         return false;
 
     auto resolveContiguous = [&](uint32_t guestAddr, uint32_t bytes, const uint8_t *&out) -> bool
@@ -2733,10 +2732,9 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
         }
     }
 
-    auto it = m_ioRegisters.find(address);
-    if (it != m_ioRegisters.end())
+    if (const uint32_t *value = m_ioRegisters.find(address))
     {
-        return it->second;
+        return *value;
     }
 
     return 0;

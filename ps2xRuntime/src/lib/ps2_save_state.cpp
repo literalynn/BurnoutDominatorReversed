@@ -85,7 +85,15 @@ void PS2Memory::serialize(ps2x::StateArchive &archive)
     archive.raw(m_vu1Code, PS2_VU1_CODE_SIZE);
     archive.raw(m_vu1Data, PS2_VU1_DATA_SIZE);
     archive.value(m_seenGifCopy);
-    archive.podMap(m_ioRegisters);
+    {
+        // Stored as the map the registers used to be, so earlier states load.
+        std::unordered_map<uint32_t, uint32_t> registers;
+        if (!archive.loading())
+            registers = m_ioRegisters.toMap();
+        archive.podMap(registers);
+        if (archive.loading())
+            m_ioRegisters.assign(registers);
+    }
     // GSRegisters holds two lock-free atomics; their bytes are their values.
     archive.raw(&gs_regs, sizeof(gs_regs));
     archive.value(vif0_regs);

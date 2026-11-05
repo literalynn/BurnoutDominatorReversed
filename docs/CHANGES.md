@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## I/O registers in a table (November 5, 2026)
+
+- `ps2xRuntime/include/runtime/ps2_memory.h`: `m_ioRegisters` keeps the EE's words at 0x10000000 to 0x1000FFFF in a table with a written flag for each, and anything else in the map it used to be; `find` gives a pointer, or none for a register never written. In a race the game thread spent about 3% of its busy time hashing these addresses (208 of 6,150 samples, VSyncs 60,300 to 64,300); none is left.
+- `src/lib/ps2_memory.cpp`: the lookups use `find`. `src/lib/ps2_save_state.cpp`: states still store the registers as a map, so earlier states load. RAM at VSync 18,000 from the `full16300` state is identical to the build before.
+
 ## Native VU0 programs (November 5, 2026)
 
 - `ps2xRuntime/include/runtime/ps2_vu1_native.h`, `ps2_vu1_native_ops.h`, `src/lib/vu/ps2_vu1_native.cpp`: a translation names its unit (`Program::unit`), `find` takes the unit and keeps what it has compared per unit (VU0 runs on the game thread, VU1 on the GS worker), and shadow mode keeps one comparison in progress per unit. In `ps2_vu1_native_ops.h`, the memory helpers take the data memory's size as a template argument, 16 KiB by default, 4 KiB in VU0 translations.

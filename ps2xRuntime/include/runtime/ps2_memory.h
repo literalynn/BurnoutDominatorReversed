@@ -398,8 +398,62 @@ public:
     std::atomic<uint64_t> m_vifWriteCount{0};
     std::atomic<uint64_t> m_vu0CodeGeneration{0};
     std::atomic<uint64_t> m_vu1CodeGeneration{0};
-    // I/O registers
-    std::unordered_map<uint32_t, uint32_t> m_ioRegisters;
+    // I/O registers: the EE's words at 0x10000000-0x1000FFFF, read and written at every
+    // hardware access, in a table; anything else in a map. A register reads as never written
+    // until something stores it.
+    class IoRegisters
+    {
+    public:
+        IoRegisters() : m_words(kWords), m_written(kWords) {}
+        uint32_t &operator[](uint32_t address)
+        {
+            if (const uint32_t index = slot(address); index < kWords)
+            {
+                m_written[index] = 1u;
+                return m_words[index];
+            }
+            return m_other[address];
+        }
+        // nullptr for a register never written.
+        uint32_t *find(uint32_t address)
+        {
+            if (const uint32_t index = slot(address); index < kWords)
+                return m_written[index] ? &m_words[index] : nullptr;
+            const auto it = m_other.find(address);
+            return it == m_other.end() ? nullptr : &it->second;
+        }
+        size_t count(uint32_t address) { return find(address) ? 1u : 0u; }
+        void clear()
+        {
+            m_words.assign(kWords, 0u);
+            m_written.assign(kWords, uint8_t{0});
+            m_other.clear();
+        }
+        // As the map the registers used to be, which save states store.
+        std::unordered_map<uint32_t, uint32_t> toMap() const
+        {
+            std::unordered_map<uint32_t, uint32_t> map(m_other);
+            for (uint32_t index = 0; index < kWords; ++index)
+                if (m_written[index])
+                    map[0x10000000u + index * 4u] = m_words[index];
+            return map;
+        }
+        void assign(const std::unordered_map<uint32_t, uint32_t> &map)
+        {
+            clear();
+            for (const auto &[address, value] : map)
+                (*this)[address] = value;
+        }
+
+    private:
+        static constexpr uint32_t kWords = 0x10000u / 4u;
+        // The table index of an aligned word in range, kWords for anything else.
+        static uint32_t slot(uint32_t address) { return (address & 3u) == 0u ? (address - 0x10000000u) / 4u : kWords; }
+        std::vector<uint32_t> m_words;
+        std::vector<uint8_t> m_written;
+        std::unordered_map<uint32_t, uint32_t> m_other;
+    };
+    IoRegisters m_ioRegisters;
 
     // Registers
     GSRegisters gs_regs;
