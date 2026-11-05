@@ -732,13 +732,14 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeMemory = memory;
 
     // VU rounding, toward zero, and on x86 denormal operands read as zero
-    // (PS2_VU_HOST_DAZ). The game thread already runs that way (EeScheduler::run), so a
-    // VU0 call there leaves MXCSR alone. With MSVC on x86-64
+    // (PS2_VU_HOST_DAZ) but denormal results kept: the flags take underflow from them. The
+    // game thread also flushes results (EeScheduler::run), so a VU0 microcode call there turns
+    // FTZ off for its run. With MSVC on x86-64
     // floating point is SSE only (long double is double): MXCSR is set inline, without
     // the C library's x87 round trip. Elsewhere long double is x87, which the exact paths use.
 #if defined(_MSC_VER) && defined(_M_X64)
-    constexpr unsigned vuCsrMask = _MM_ROUND_MASK | (PS2_VU_HOST_DAZ ? _MM_DENORMALS_ZERO_MASK : 0u);
-    constexpr unsigned vuCsr = _MM_ROUND_TOWARD_ZERO | (PS2_VU_HOST_DAZ ? _MM_DENORMALS_ZERO_ON : 0u);
+    constexpr unsigned vuCsrMask = _MM_ROUND_MASK | _MM_FLUSH_ZERO_MASK | (PS2_VU_HOST_DAZ ? _MM_DENORMALS_ZERO_MASK : 0u);
+    constexpr unsigned vuCsr = _MM_ROUND_TOWARD_ZERO | _MM_FLUSH_ZERO_OFF | (PS2_VU_HOST_DAZ ? _MM_DENORMALS_ZERO_ON : 0u);
     const unsigned previousCsr = _mm_getcsr();
     const bool useVuRounding = (previousCsr & vuCsrMask) != vuCsr;
     if (useVuRounding)
@@ -750,6 +751,8 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
 #if PS2_VU_HOST_DAZ
     const unsigned previousDaz = _MM_GET_DENORMALS_ZERO_MODE();
     _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+    const unsigned previousFtz = _MM_GET_FLUSH_ZERO_MODE();
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_OFF);
 #endif
 #endif
     const uint64_t budgetEnd = m_cycle + maxCycles;
@@ -865,6 +868,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
 #if PS2_VU_HOST_DAZ
+    _MM_SET_FLUSH_ZERO_MODE(previousFtz);
     _MM_SET_DENORMALS_ZERO_MODE(previousDaz);
 #endif
 #endif

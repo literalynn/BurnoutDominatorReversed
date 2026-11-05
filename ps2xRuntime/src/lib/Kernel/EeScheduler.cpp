@@ -365,16 +365,20 @@ void EeScheduler::run()
     // The EE FPU and VU0 in macro mode round toward zero (as PCSX2 does by default); games
     // rely on it, Burnout's VU0 cosine rounds with 1.5 * 2^23 and jumped at a half turn.
     // They have no denormals either: on x86 DAZ reads a denormal operand as a zero of its
-    // sign, as the float helpers already do with theirs, and VU0 calls, which need DAZ,
-    // find MXCSR set instead of switching it twice each.
+    // sign and FTZ makes a denormal result one, as the float helpers already do with theirs
+    // (the EE's results are the same bits), and the translated VU0 programs, which need both,
+    // find MXCSR set instead of switching it twice each. The VU0 microcode turns FTZ off for
+    // its own run: it takes the underflow flag from denormal results.
     // Restored on the way out: the thread may run other host code afterwards (the tests do).
     struct RoundingGuard
     {
         int previous = std::fegetround();
 #if defined(_M_X64) || defined(__x86_64__)
         unsigned previousDaz = _MM_GET_DENORMALS_ZERO_MODE();
+        unsigned previousFtz = _MM_GET_FLUSH_ZERO_MODE();
         ~RoundingGuard()
         {
+            _MM_SET_FLUSH_ZERO_MODE(previousFtz);
             _MM_SET_DENORMALS_ZERO_MODE(previousDaz);
             std::fesetround(previous);
         }
@@ -385,6 +389,7 @@ void EeScheduler::run()
     std::fesetround(FE_TOWARDZERO);
 #if defined(_M_X64) || defined(__x86_64__)
     _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
 #endif
     m_running.store(true, std::memory_order_release);
 

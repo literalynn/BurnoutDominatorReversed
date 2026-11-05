@@ -210,6 +210,8 @@ bool run(const Program &program, Context &context)
     constexpr unsigned mask = _MM_ROUND_MASK | _MM_DENORMALS_ZERO_MASK | _MM_FLUSH_ZERO_MASK;
     constexpr unsigned vu = _MM_ROUND_TOWARD_ZERO | _MM_DENORMALS_ZERO_ON | _MM_FLUSH_ZERO_ON;
     const unsigned previous = _mm_getcsr();
+    if ((previous & mask) == vu) // the game thread's VU0 calls: switching cost ~1% of it
+        return program.run(context);
     _mm_setcsr((previous & ~mask) | vu);
     const bool ran = program.run(context);
     _mm_setcsr((_mm_getcsr() & ~mask) | (previous & mask));
