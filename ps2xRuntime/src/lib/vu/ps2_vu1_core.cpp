@@ -574,6 +574,46 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
                              uint32_t startPC, uint32_t top, uint32_t itop,
                              uint32_t maxCycles)
 {
+#if PS2_VU_NATIVE_AVAILABLE
+    // A VCALLMS of a translated VU0 program runs the translation here, without the scheduler
+    // reset and run()'s set-up (about 1.5% of the game thread in a race): VU0 starts idle at
+    // every call, so run() would take its native path with the same state, and the next
+    // microcode start resets the scheduler itself. A translation declines before it changes
+    // anything, and the microcode then starts as usual below.
+    if (m_unit == Unit::VU0 && memory != nullptr && vuCode == memory->getVU0Code() &&
+        codeSize <= kMaxDecodedPairs * 8u && dataSize == PS2_VU0_DATA_SIZE &&
+        ps2_vu_native::mode() == ps2_vu_native::Mode::On && !(captureDirectory && *captureDirectory))
+        if (const ps2_vu_native::Program *program = ps2_vu_native::find(
+                vuCode, codeSize, startPC & microAddressMask(), memory->getVU0CodeGeneration(), 0u))
+        {
+            m_state.pc = startPC & microAddressMask();
+            m_state.ebit = false;
+            m_state.haltAfterDelaySlot = false;
+            m_state.stoppedByD = false;
+            m_state.stoppedByT = false;
+            m_state.top = top;
+            m_state.itop = itop;
+            m_state.branchPending = false;
+            m_state.branchTarget = 0;
+            m_state.branchDelay = 0;
+            m_state.vf[0][0] = 0.0f;
+            m_state.vf[0][1] = 0.0f;
+            m_state.vf[0][2] = 0.0f;
+            m_state.vf[0][3] = 1.0f;
+            ps2_vu_native::Context context{vuData, &m_state, &submitPath1, memory, 0};
+            if (ps2_vu_native::run(*program, context))
+            {
+                m_cycle += context.cycles;
+                m_state.cycles = m_cycle;
+                // As run() leaves an ended program.
+                m_state.ebit = false;
+                m_state.haltAfterDelaySlot = false;
+                m_pendingHaltD = false;
+                m_pendingHaltT = false;
+                return;
+            }
+        }
+#endif
     resetScheduler();
     m_state.pc = startPC & microAddressMask();
     m_state.ebit = false;

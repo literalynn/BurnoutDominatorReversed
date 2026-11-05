@@ -17,6 +17,7 @@ Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json
 
 - `ps2xRuntime/include/runtime/ps2_vu1_native.h`, `ps2_vu1_native_ops.h`, `src/lib/vu/ps2_vu1_native.cpp`: a translation names its unit (`Program::unit`), `find` takes the unit and keeps what it has compared per unit (VU0 runs on the game thread, VU1 on the GS worker), and shadow mode keeps one comparison in progress per unit. In `ps2_vu1_native_ops.h`, the memory helpers take the data memory's size as a template argument, 16 KiB by default, 4 KiB in VU0 translations.
 - `vu/ps2_vu1_core.cpp`: the start of a translation in `VU1Interpreter::run` applies to VU0 too, so a VCALLMS runs the translation of the VU0 program at its address instead of the microcode, under the same conditions and the same `PS2_VU_NATIVE` setting as VU1.
+- `vu/ps2_vu1_core.cpp`: `VU1Interpreter::execute` starts a translated VU0 program itself, without the scheduler reset and `run`'s set-up: VU0 is idle at every VCALLMS, so `run` took its native path with the same state, and the next microcode start still resets the scheduler. In a race the game thread's samples around the VU0 calls fell from 151 to 99 of about 3,400 busy; RAM and GIF packets from `full16300` are identical.
 
 ## Native VU1 programs on Linux x86-64 (November 5, 2026)
 
