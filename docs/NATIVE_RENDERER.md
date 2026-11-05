@@ -98,6 +98,10 @@ What the comparisons found on the way:
 - 739 of 63,545 `GtIm3d` starts ended with another vf9: its last loop iteration divides by a word read past the end of its input, with exponent 255, which the interpreter reads as FLT_MAX. The translated DIV now reads its operands as the interpreter does.
 - With the first start checks, a fifth of the world program starts went to the microcode: the game had set the new-variant flag in 1013.w and left 0 in 1013.y. The checks now apply only on the paths that read 1013.y.
 
+### Starts at 0x0020
+
+With the ten programs translated, 0.24 billion pairs a race still ran as microcode, 8.5% of the VU1 time before translation, and nearly all of it was the same programs started at 0x0020 instead of their stub: the game runs a four-pair setup at 0x0000 with an MSCAL, which ends with an E bit at 0x0010, then continues at 0x0020 with an MSCNT. `data/vu_native_programs.txt` translates the four world programs, the props and the vehicles a second time from 0x0020 (`g3_bfc_adc_0020` and so on): their code from 0x0020 to the stub has its own checksum, and `find` already chooses among programs sharing a start address by comparing their code. In shadow mode, 0.80 million of these starts were identical in the deterministic race and from `user_quick`, and 0.25 million at the car select and from `cam17740`. In the race the pairs left to the microcode fell to 71 million and the GS worker took 3.0 s instead of 4.2 s on a quiet machine (5.3 s against 9.5 s with the microcode on a loaded one).
+
 ### Next
 
-`G3_Gen_Line` (0.5%) and the small programs left (2.6%) can follow the same way. Translated, the VU1 programs leave the GS worker less to do than the game thread at 60 frames a second; at high frame rates the question becomes what the guest waits for.
+`GtIm3d` started at 0x0098 (0.6%), `G3_Gen_Line` (0.5%, its image was not among the recordings) and the small programs left can follow the same way. Translated, the VU1 programs leave the GS worker less to do than the game thread at 60 frames a second; at high frame rates the game thread is the limit, and its VU0 microprograms (about 9% of its busy time in a race, plus 4% calling them) are the next candidates for the same translator.

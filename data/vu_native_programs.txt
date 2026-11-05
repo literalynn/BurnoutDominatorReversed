@@ -1,5 +1,5 @@
 # VU1 programs translated to C++ by tools/translate_vu_programs.py (docs/NATIVE_RENDERER.md).
-# <name> <MSCAL address> <first code byte> <end> <FNV-1a 64 of the code from first to end>
+# <name> <start address, MSCAL or MSCNT> <first code byte> <end> <FNV-1a 64 of the code from first to end>
 # The checksum names the code; the code itself comes from the local code images.
 sky_dome 0000 0000 15d0 6551840b5d41a054
 g3_bfc_adc 1548 0020 1558 71c51b3ec695dd9e
@@ -11,3 +11,9 @@ g3_bfc_adc_s 1910 0020 1920 061eb81abeb175df
 g3_gen_adc_s 16e0 0020 16f0 af9e59204ac56289
 vehicles 14e0 0020 14f0 0b7aa3b300319749
 sparks 06a0 0048 06b0 a43b9424ff9e3c24
+g3_bfc_adc_0020 0020 0020 1548 80e55ab39639cde7
+g3_gen_adc_0020 0020 0020 1318 a730e4f70d0f2bb5
+g3_gen_adc_s_0020 0020 0020 16e0 25cbeadcc97eb624
+g3_bfc_adc_s_0020 0020 0020 1910 42ef276932d52226
+g3_instanced_0020 0020 0020 0ee8 67e363ab8de8adfe
+vehicles_0020 0020 0020 14e0 9a47b4771a3c09e4

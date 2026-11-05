@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Translate whole VU1 microprograms into C++ for runtime/ps2_vu1_native.h.
 
-A program runs from the MSCAL address that starts it to its E bit. The translation follows
-VU1Interpreter (ps2_vu1_exec.inl, ps2_vu1_core.cpp) cycle by cycle at translation time. A pair
-waits until the VF and VI values it reads are written, so register values follow program order
-and the C++ writes them at once; what does not wait is modelled: MAC and clip flags land 4
-cycles after their instruction, Q 7 cycles after its DIV, and a conditional branch right after
-an integer instruction that wrote its register reads the old value. A block of code is
+A program runs from the MSCAL or MSCNT address that starts it to its E bit. The translation
+follows VU1Interpreter (ps2_vu1_exec.inl, ps2_vu1_core.cpp) cycle by cycle at translation time.
+A pair waits until the VF and VI values it reads are written, so register values follow program
+order and the C++ writes them at once; what does not wait is modelled: MAC and clip flags land
+4 cycles after their instruction, Q 7 or 13 cycles after its DIV, SQRT or RSQRT, P 12 or 18
+cycles after its EFU instruction, and a conditional branch right after an integer instruction
+that wrote its register reads the old value. A register jump goes to the targets the start
+values and the program's own stores allow; the C++ checks those start values first. A block of code is
 translated once per pipeline state it can be entered with. The one timing the translation
 cannot know is how long an XGKICK waits for the previous packet: the C++ counts cycles and
 picks the block for the wait it finds.
