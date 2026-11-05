@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Native VU0 programs (November 5, 2026)
+
+- `ps2xRuntime/include/runtime/ps2_vu1_native.h`, `ps2_vu1_native_ops.h`, `src/lib/vu/ps2_vu1_native.cpp`: a translation names its unit (`Program::unit`), `find` takes the unit and keeps what it has compared per unit (VU0 runs on the game thread, VU1 on the GS worker), and shadow mode keeps one comparison in progress per unit. In `ps2_vu1_native_ops.h`, the memory helpers take the data memory's size as a template argument, 16 KiB by default, 4 KiB in VU0 translations.
+- `vu/ps2_vu1_core.cpp`: the start of a translation in `VU1Interpreter::run` applies to VU0 too, so a VCALLMS runs the translation of the VU0 program at its address instead of the microcode, under the same conditions and the same `PS2_VU_NATIVE` setting as VU1.
+
 ## Native VU1 programs on Linux x86-64 (November 5, 2026)
 
 - `ps2xRuntime/include/runtime/ps2_vu1_native_ops.h` (new), `ps2_vu1_native.h`: the VU arithmetic of the translations moves to its own header, which only the translations and `vu/ps2_vu1_native.cpp` (for the out-of-line ops) include, so that `vu/ps2_vu1_core.cpp` sees only the declarations. In it, `std::signbit` and `std::fabs` become SSE bit operations: a translation instantiates no inline function that other files share, whose copy compiled for FMA3 the linker could keep for all of them. The blend mask is a `constexpr` variable, an immediate for GCC's `-O0` `_mm_blend_ps` macro too. `PS2_VU_NATIVE_AVAILABLE` comes from `PS2X_VU_NATIVE_X86_64` instead of `__AVX2__`.

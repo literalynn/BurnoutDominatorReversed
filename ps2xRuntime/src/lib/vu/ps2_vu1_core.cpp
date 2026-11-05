@@ -450,7 +450,7 @@ void VU1Interpreter::finishXgkick()
         current.kickBytes += m_xgkick.totalBytes;
     }
 #if PS2_VU_NATIVE_AVAILABLE
-    if (ps2_vu_native::shadowActive())
+    if (ps2_vu_native::shadowActive(1u))
         ps2_vu_native::shadowKick(m_xgkick.packet.data(), m_xgkick.totalBytes);
 #endif
     if (m_activeMemory)
@@ -723,13 +723,16 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     commitReadyPipelines();
 #if PS2_VU_NATIVE_AVAILABLE
     // PS2_VU_NATIVE: a C++ translation of the program runs instead of the microcode, or beside
-    // it on copies to be compared (ps2_vu1_native.h), from an MSCAL or an MSCNT that finds the
-    // VU idle: nothing in flight, no branch pending or branch backup, no stop requested.
-    if (m_unit == Unit::VU1 && trackedCode && dataSize == PS2_VU1_DATA_SIZE && ps2_vu_native::mode() != ps2_vu_native::Mode::Off &&
+    // it on copies to be compared (ps2_vu1_native.h), from an MSCAL, MSCNT or VCALLMS that finds
+    // the VU idle: nothing in flight, no branch pending or branch backup, no stop requested.
+    if (trackedCode && dataSize == (m_unit == Unit::VU1 ? PS2_VU1_DATA_SIZE : PS2_VU0_DATA_SIZE) &&
+        ps2_vu_native::mode() != ps2_vu_native::Mode::Off &&
         !pipelinesPending() && !m_state.branchPending && !m_state.ebit && !m_state.haltAfterDelaySlot && !m_stopRequested &&
         !m_pendingHaltD && !m_pendingHaltT && !m_viBranchBackupValid)
-        if (const ps2_vu_native::Program *program =
-                ps2_vu_native::find(vuCode, codeSize, m_state.pc, memory->getVU1CodeGeneration()))
+        if (const ps2_vu_native::Program *program = ps2_vu_native::find(
+                vuCode, codeSize, m_state.pc,
+                m_unit == Unit::VU1 ? memory->getVU1CodeGeneration() : memory->getVU0CodeGeneration(),
+                m_unit == Unit::VU1 ? 1u : 0u))
         {
             ps2_vu_native::Context context{vuData, &m_state, &submitPath1, memory, 0};
             if (ps2_vu_native::mode() == ps2_vu_native::Mode::Shadow)
@@ -807,12 +810,12 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     }
     m_state.cycles = m_cycle;
 #if PS2_VU_NATIVE_AVAILABLE
-    if (m_unit == Unit::VU1 && ps2_vu_native::shadowActive())
+    if (const uint32_t unit = m_unit == Unit::VU1 ? 1u : 0u; ps2_vu_native::shadowActive(unit))
     {
         if (programEnded)
-            ps2_vu_native::shadowFinish(vuData, m_state, m_cycle - cycleBefore);
+            ps2_vu_native::shadowFinish(unit, vuData, m_state, m_cycle - cycleBefore);
         else
-            ps2_vu_native::shadowCancel();
+            ps2_vu_native::shadowCancel(unit);
     }
 #endif
 #if defined(_MSC_VER) && defined(_M_X64)

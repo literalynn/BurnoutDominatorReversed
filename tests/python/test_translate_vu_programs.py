@@ -1,4 +1,4 @@
-"""Control flow, branch backup and XGKICK waits of translate_vu_programs.py on synthetic VU1 code; no game bytes.
+"""Control flow, branch backup and XGKICK waits of translate_vu_programs.py on synthetic VU code; no game bytes.
 
 The C++ it writes is checked against the microcode on recorded starts by vu1_native_tests."""
 from __future__ import annotations
@@ -37,6 +37,8 @@ WAITQ = 0x800003BF
 ESQRT_VF1X = 0x80000FBC  # ESQRT P, vf1x
 WAITP = 0x800007BF
 MFP_VF2 = 0x81E2067C     # MFP.xyzw vf2, P
+LQ_VF1_5 = 0x01E10005    # LQ.xyzw vf1, 5(vi0)
+SQ_VF1_6 = 0x03E00806    # SQ.xyzw vf1, 6(vi0)
 
 
 def program(*pairs):
@@ -131,6 +133,23 @@ class Translate(unittest.TestCase):
         self.assertIn("s.p = p;", text)
         # WAITP issues at 12, MFP at 13; the end waits for MFP's vf2 at 17, not for the EFU.
         self.assertIn("cycle += 17;", text)
+
+
+    def test_vu0_programs_address_4_kib(self):
+        code = program((LQ_VF1_5, NOP_UPPER), (SQ_VF1_6, NOP_UPPER), END, NOP)[:4096]
+        translator = tvp.Translator(code, 0, "test", unit=0)
+        translator.translate()
+        text = "\n".join(translator.function())
+        self.assertIn("lq<0xFF>(mem, ", text)
+        self.assertIn("sq<15, 0xFF>(mem, ", text)
+        _, vu1 = translate(program((LQ_VF1_5, NOP_UPPER), (SQ_VF1_6, NOP_UPPER), END, NOP))
+        self.assertIn("lq(mem, ", vu1)
+        self.assertIn("sq<15>(mem, ", vu1)
+
+    def test_vu1_instructions_are_refused_in_vu0_programs(self):
+        for lower in (XGKICK, MFP_VF2, ESQRT_VF1X, WAITP):
+            with self.assertRaisesRegex(tvp.TranslationError, "VU1 instruction"):
+                tvp.Translator(program((lower, NOP_UPPER), END, NOP)[:4096], 0, "test", unit=0).translate()
 
 
 if __name__ == "__main__":

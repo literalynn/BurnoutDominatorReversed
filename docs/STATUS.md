@@ -80,6 +80,8 @@ November 5: native VU1 programs, steps 2 and 3 ([NATIVE_RENDERER.md](NATIVE_REND
 
 November 5, later: the other nine big VU1 programs translate too (the four world programs, the vehicles, the props, the sparks, the trails and `GtIm3d`), 97% of a race's VU1 time with the sky. In shadow mode, about 9.5 million starts in two races, at the car select and from a third state were all identical. In the race, the VU1 instruction pairs run as microcode fall from 2.47 billion to 0.24 billion and the GS worker's time nearly halves; at 300 Hz the race runs at 228 frames a second on average instead of 171, and the game thread no longer waits for the GS worker. On by default; `PS2_VU_NATIVE=0` runs the microcode instead. The same programs started at 0x0020 by an MSCNT, 8.5% of the VU1 time, translate as well: the VU1 pairs left to the microcode in a race fell to 71 million.
 
+November 5, night: the game thread's VU0 microprograms translate with the same tool ([NATIVE_RENDERER.md](NATIVE_RENDERER.md#vu0-programs)). 25 programs run translated; in shadow mode, about 27 million VU0 starts in two races, at the car select and from a third state were identical. In a race, the game thread's samples in VU0 work fell from about 800 to 426 of 6,150 busy.
+
 ## Requests for once the game is playable
 
 These goals assume the game reaches the races; they come after boot. Leads already established:

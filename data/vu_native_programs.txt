@@ -1,6 +1,7 @@
-# VU1 programs translated to C++ by tools/translate_vu_programs.py (docs/NATIVE_RENDERER.md).
-# <name> <start address, MSCAL or MSCNT> <first code byte> <end> <FNV-1a 64 of the code from first to end>
-# The checksum names the code; the code itself comes from the local code images.
+# VU programs translated to C++ by tools/translate_vu_programs.py (docs/NATIVE_RENDERER.md).
+# <name> <start address: MSCAL, MSCNT or VCALLMS> <first code byte> <end> <FNV-1a 64 of the code from first to end>
+# The checksum names the code; the code itself comes from the local code images. A line that
+# ends with vu0 is a VU0 program (its start: VCALLMS), the others VU1's.
 sky_dome 0000 0000 15d0 6551840b5d41a054
 g3_bfc_adc 1548 0020 1558 71c51b3ec695dd9e
 g3_gen_adc 1318 0020 1328 f5858c05967174f0
@@ -17,3 +18,28 @@ g3_gen_adc_s_0020 0020 0020 16e0 25cbeadcc97eb624
 g3_bfc_adc_s_0020 0020 0020 1910 42ef276932d52226
 g3_instanced_0020 0020 0020 0ee8 67e363ab8de8adfe
 vehicles_0020 0020 0020 14e0 9a47b4771a3c09e4
+vu0_0000_9926 0000 0000 0388 992690081df064f9 vu0
+vu0_0000_fb65 0000 0000 00c0 fb653aa069fa7af9 vu0
+vu0_0000_fdc7 0000 0000 04b0 fdc7397687d1cedb vu0
+vu0_0028_15c8 0028 0028 0388 15c85dce579a1d41 vu0
+vu0_0060_bb93 0060 0060 0388 bb93ee290d216301 vu0
+vu0_00c0_0dcd 00c0 00c0 0138 0dcd4961378f8b72 vu0
+vu0_0138_2c8e 0138 0138 0920 2c8e30e0ac0615f6 vu0
+vu0_0388_33cc 0388 0388 0550 33ccf9d6a9a74831 vu0
+vu0_0390_84be 0390 0390 0550 84bea51a3006746a vu0
+vu0_03d8_7faf 03d8 03d8 0550 7faf1bebe9aae9ee vu0
+vu0_0550_eba8 0550 0550 0708 eba86159395fd897 vu0
+vu0_07d8_5ac8 07d8 0000 0b50 5ac8878039bfe153 vu0
+vu0_0920_8fca 0920 0920 0968 8fca0343d3b986f4 vu0
+vu0_0968_ab86 0968 0968 09d8 ab86af0a7148ef96 vu0
+vu0_0998_672c 0998 0998 09d8 672c02b7e3346a05 vu0
+vu0_09d8_8b88 09d8 09d8 0a18 8b88b6b34798085e vu0
+vu0_0a18_adc2 0a18 0880 0a50 adc22226404283fa vu0
+vu0_0a18_b147 0a18 0a18 0a38 b1472f5e38200091 vu0
+vu0_0a50_07b2 0a50 0880 0a90 07b2e7d946dc1029 vu0
+vu0_0a90_65d0 0a90 0a90 0ad8 65d0613f5575ae8e vu0
+vu0_0ad8_49d2 0ad8 0ad8 0da8 49d2da906c452c86 vu0
+vu0_0b50_90f2 0b50 0b50 0d08 90f20f3ff70b7900 vu0
+vu0_0da8_149a 0da8 0da8 0dd0 149ac90b93396c2e vu0
+vu0_0dd0_ca36 0dd0 0dd0 0df8 ca36a442e44ffe98 vu0
+vu0_0df8_3c65 0df8 0df8 0e20 3c65af45f73350ec vu0

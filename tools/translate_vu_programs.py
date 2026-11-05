@@ -13,12 +13,16 @@ translated once per pipeline state it can be entered with. The one timing the tr
 cannot know is how long an XGKICK waits for the previous packet: the C++ counts cycles and
 picks the block for the wait it finds.
 
-Inputs are the code images of compile_vu_programs.py (vu1-<hash>.code in profile directories)
-and data/vu_native_programs.txt, which names the programs to translate by the checksum of their
-code. The output is generated from game microcode and must stay local.
+VU0 programs translate the same way: their data memory is 4 KiB, their code addresses wrap at
+4 KiB, and the VU1-only instructions (XGKICK, MFP, the EFU) are reserved there.
+
+Inputs are the code images of compile_vu_programs.py (vu1-<hash>.code and vu0-<hash>.code in
+profile directories) and data/vu_native_programs.txt, which names the programs to translate by
+the checksum of their code. The output is generated from game microcode and must stay local.
 
   translate_vu_programs.py --programs <list> --output <cpp> [--shards N] <profile dir>...
-  translate_vu_programs.py --describe <name> <image> <entry pc, hex>   (prints a list line)
+  translate_vu_programs.py --describe <name> <image> <entry pc, hex>   (prints a list line;
+                                                                      a 4 KiB image is VU0's)
 """
 import argparse
 import struct
@@ -187,7 +191,7 @@ class Upper:
 class Lower:
     """A lower instruction, decoded as decodeLowerUsage and execLower do."""
 
-    def __init__(self, word, pc):
+    def __init__(self, word, pc, unit=1):
         self.word = word
         self.op = "nop"
         self.vf_reads = []  # (vf register, lanes)
@@ -225,7 +229,7 @@ class Lower:
             if reg and lanes:
                 self.vf_write = (reg, lanes)
 
-        target = (pc + 8 + self.imm * 8) & 0x3FFF
+        target = (pc + 8 + self.imm * 8) & (0x3FFF if unit else 0x0FFF)
         if hi == 0x00:
             self.op = "lq"; rvi(self.vis); wvf(it, self.dest)
         elif hi == 0x01:
@@ -316,6 +320,8 @@ class Lower:
                     self.op = "xgkick"; rvi(self.vis)
                 else:
                     raise TranslationError(f"unsupported lower {word:08x} at {pc:04x}")
+                if not unit and (self.op in ("mfp", "waitp", "xgkick") or self.efu):
+                    raise TranslationError(f"VU1 instruction {word:08x} at {pc:04x} in a VU0 program")
             else:
                 raise TranslationError(f"unsupported lower {word:08x} at {pc:04x}")
         else:
@@ -323,7 +329,7 @@ class Lower:
 
 
 class Pair:
-    def __init__(self, code, pc):
+    def __init__(self, code, pc, unit=1):
         lower, upper = struct.unpack_from("<II", code, pc)
         self.pc = pc
         self.ibit = bool(upper >> 31 & 1)
@@ -332,7 +338,7 @@ class Pair:
             raise TranslationError(f"D or T bit at {pc:04x}")
         self.upper = Upper(upper)
         self.imm = lower if self.ibit else None
-        self.lower = Lower(0 if self.ibit else lower, pc)
+        self.lower = Lower(0 if self.ibit else lower, pc, unit)
         u, l = self.upper, self.lower
         if u.kind == "clip" and l.op == "fcset":
             raise TranslationError(f"CLIP with FCSET at {pc:04x}")
@@ -381,6 +387,9 @@ class Values:
     unknown addresses, facts of every path to the pair)."""
 
     LIMIT = 64
+
+    def __init__(self, words=0x3FF):
+        self.words = words  # qword address mask of the data memory
 
     def start(self):
         regs = [frozenset({0})] + [frozenset({(("vi", reg), frozenset())}) for reg in range(1, 16)]
@@ -446,7 +455,7 @@ class Values:
             if held is not None and len(held) == 1:
                 (value,) = held
                 if isinstance(value, int):
-                    return (value + offset) & 0x3FF
+                    return (value + offset) & self.words
             return None
 
         def store(qword, lanes, value):
@@ -520,10 +529,16 @@ class Block:
 
 
 class Translator:
-    def __init__(self, code, entry, name):
+    def __init__(self, code, entry, name, unit=1):
         self.code = code
         self.entry = entry
         self.name = name
+        self.unit = unit
+        self.code_mask = 0x3FFF if unit else 0x0FFF  # byte addresses
+        self.words = 0x3FF if unit else 0xFF  # qword addresses of the data memory
+        # Memory helpers' template arguments: VU1's are the defaults.
+        self.lq_args = "" if unit else "<0xFF>"
+        self.sq_args = "" if unit else ", 0xFF"
         self.pairs = {}
         self.labels = {}
         self.work = []
@@ -540,7 +555,7 @@ class Translator:
 
     def pair(self, pc):
         if pc not in self.pairs:
-            self.pairs[pc] = Pair(self.code, pc)
+            self.pairs[pc] = Pair(self.code, pc, self.unit)
         return self.pairs[pc]
 
     def discover(self):
@@ -615,7 +630,7 @@ class Translator:
         end, so that the next start resumes at an address the translation has."""
         if not any(self.pair(pc).lower.op in ("jr", "jalr") for pc in self.seen):
             return {}, {}
-        values = Values()
+        values = Values(self.words)
         entering = {self.entry: values.start()}
         work = [self.entry]
         while work:
@@ -632,16 +647,16 @@ class Translator:
         # the entry, where the previous run stopped when the game continues with MSCNT; the
         # words the program stores at fixed addresses. The checks make any guess safe.
         ends = [values.transfer(self.pair(end + 8), entering[end + 8]) for end in self.ends if end + 8 in entering]
-        if self.entry >= 16 and Pair(self.code, self.entry - 16).ebit:  # a guess: not part of the translation
-            before = values.transfer(Pair(self.code, self.entry - 16), values.start())
-            ends.append(values.transfer(Pair(self.code, self.entry - 8), before))
+        if self.entry >= 16 and Pair(self.code, self.entry - 16, self.unit).ebit:  # a guess: not part of the translation
+            before = values.transfer(Pair(self.code, self.entry - 16, self.unit), values.start())
+            ends.append(values.transfer(Pair(self.code, self.entry - 8, self.unit), before))
         stored = {}
         for pc, state in entering.items():
             l = self.pair(pc).lower
             held = values.reg(state, l.vit) if l.op == "isw" else None
             base = values.reg(state, l.vis) if l.op == "isw" else None
             if held is not None and base is not None and len(base) == 1 and isinstance(next(iter(base)), int):
-                qword = (next(iter(base)) + l.imm) & 0x3FF
+                qword = (next(iter(base)) + l.imm) & self.words
                 for lane in lanes_of(l.dest):
                     stored.setdefault((qword, lane), set()).update(v for v in held if isinstance(v, int))
 
@@ -673,7 +688,7 @@ class Translator:
                     # One check a start value, under what every path that jumps through it found.
                     facts[token] = facts[token] & value[1] if token in facts else value[1]
                     numbers |= allowed(token)
-            targets[pc] = {(value & 0xFFFF) * 8 & 0x3FFF for value in numbers}
+            targets[pc] = {(value & 0xFFFF) * 8 & self.code_mask for value in numbers}
         return targets, {(token, found): allowed(token) for token, found in facts.items()}
 
     def branch_fact(self, pc, succ, entering, values):
@@ -824,18 +839,18 @@ class Translator:
             return "viOld" if state.backup == reg else vi(reg)
 
         def address(reg):
-            return f"(static_cast<uint32_t>(static_cast<uint16_t>({vi(reg)})) * 8u) & 0x3FFFu"
+            return f"(static_cast<uint32_t>(static_cast<uint16_t>({vi(reg)})) * 8u) & 0x{self.code_mask:X}u"
 
         if op == "lq":
-            out.append(f"    const V lv = lq(mem, {vi(l.vis)} + {l.imm});")
+            out.append(f"    const V lv = lq{self.lq_args}(mem, {vi(l.vis)} + {l.imm});")
         elif op == "sq":
-            out.append(f"    sq<{l.dest}>(mem, {vi(l.vit)} + {l.imm}, {vf(l.is_)});")
+            out.append(f"    sq<{l.dest}{self.sq_args}>(mem, {vi(l.vit)} + {l.imm}, {vf(l.is_)});")
         elif op == "ilw":
             if l.vit:
                 comp = lanes_of(l.dest)[0] if l.dest else 0
-                out.append(f"    {vi(l.vit)} = ilw(mem, {vi(l.vis)} + {l.imm}, {comp});")
+                out.append(f"    {vi(l.vit)} = ilw{self.lq_args}(mem, {vi(l.vis)} + {l.imm}, {comp});")
         elif op == "isw":
-            out.append(f"    isw<{l.dest}>(mem, {vi(l.vis)} + {l.imm}, {vi(l.vit)});")
+            out.append(f"    isw<{l.dest}{self.sq_args}>(mem, {vi(l.vis)} + {l.imm}, {vi(l.vit)});")
         elif op in ("iaddiu", "isubiu"):
             if l.vit:
                 sign = "+" if op == "iaddiu" else "-"
@@ -885,21 +900,21 @@ class Translator:
         elif op == "mr32":
             out.append(f"    const V lv = _mm_shuffle_ps({vf(l.is_)}, {vf(l.is_)}, _MM_SHUFFLE(0, 3, 2, 1));")
         elif op == "lqi":
-            out.append(f"    const V lv = lq(mem, {vi(l.vis)});")
+            out.append(f"    const V lv = lq{self.lq_args}(mem, {vi(l.vis)});")
             if l.vis:
                 out.append(f"    {vi(l.vis)} = vi16({vi(l.vis)} + 1);")
         elif op == "lqd":
             if l.vis:
                 out.append(f"    {vi(l.vis)} = vi16({vi(l.vis)} - 1);")
-            out.append(f"    const V lv = lq(mem, {vi(l.vis)});")
+            out.append(f"    const V lv = lq{self.lq_args}(mem, {vi(l.vis)});")
         elif op == "sqi":
-            out.append(f"    sq<{l.dest}>(mem, {vi(l.vit)}, {vf(l.is_)});")
+            out.append(f"    sq<{l.dest}{self.sq_args}>(mem, {vi(l.vit)}, {vf(l.is_)});")
             if l.vit:
                 out.append(f"    {vi(l.vit)} = vi16({vi(l.vit)} + 1);")
         elif op == "sqd":
             if l.vit:
                 out.append(f"    {vi(l.vit)} = vi16({vi(l.vit)} - 1);")
-            out.append(f"    sq<{l.dest}>(mem, {vi(l.vit)}, {vf(l.is_)});")
+            out.append(f"    sq<{l.dest}{self.sq_args}>(mem, {vi(l.vit)}, {vf(l.is_)});")
         elif op == "div":
             out.append(f"    qp = div(lane<{l.fsf}>({vf(l.is_)}), lane<{l.ftf}>({vf(l.it)}));")
         elif op == "sqrt":
@@ -997,7 +1012,7 @@ class Translator:
                 lines.append("    if (kickEnd > cycle) cycle = kickEnd;")
                 self.advance(state, latest, lines)
                 lines.append(("macread",))
-                lines.append(f"    endPc = 0x{(pc + 8) & 0x3FFF:04x}u;")
+                lines.append(f"    endPc = 0x{(pc + 8) & self.code_mask:04x}u;")
                 lines.append("    goto finish;")
                 break
             if pend:
@@ -1093,7 +1108,7 @@ class Translator:
         out += ["    (void)wait; (void)viOld; (void)taken; (void)jump; (void)qp; (void)clipW; (void)iR; (void)iN; (void)p;"]
         # What the program finds at its start and jumps through: other values, the microcode runs.
         def start_value(token):
-            return vi(token[1]) if token[0] == "vi" else f"ilw(mem, {token[1]}, {token[2]})"
+            return vi(token[1]) if token[0] == "vi" else f"ilw{self.lq_args}(mem, {token[1]}, {token[2]})"
         for (token, facts), numbers in sorted(self.entry_checks.items(), key=lambda item: (item[0][0], sorted(item[0][1]))):
             test = [f"{start_value(t)} {'==' if kind == 'eq0' else '!='} 0" for t, kind in sorted(facts)]
             test += [f"{start_value(token)} != {number}" for number in sorted(numbers)]
@@ -1128,42 +1143,48 @@ def fnv(data):
 
 
 def read_programs(path):
-    """data/vu_native_programs.txt: <name> <entry> <begin> <end> <fnv64 of code[begin, end)>."""
+    """data/vu_native_programs.txt: <name> <entry> <begin> <end> <fnv64 of code[begin, end)>
+    [vu0], a VU1 program unless the line ends with vu0."""
     programs = []
     for line in Path(path).read_text().splitlines():
         line = line.split("#", 1)[0].split()
         if line:
-            name, entry, begin, end, checksum = line
-            programs.append((name, int(entry, 16), int(begin, 16), int(end, 16), int(checksum, 16)))
+            name, entry, begin, end, checksum = line[:5]
+            unit = 0 if line[5:] == ["vu0"] else 1
+            if line[5:] not in ([], ["vu0"]):
+                raise TranslationError(f"{name}: unknown unit {' '.join(line[5:])}")
+            programs.append((name, int(entry, 16), int(begin, 16), int(end, 16), int(checksum, 16), unit))
     return programs
 
 
 def images(profiles):
+    """(unit, code image) of each vu1-*.code and vu0-*.code recording."""
     for profile in profiles:
-        for path in sorted(Path(profile).glob("vu1-*.code")):
-            data = path.read_bytes()
-            if len(data) == 16384:
-                yield path, data
+        for unit, size in ((1, 16384), (0, 4096)):
+            for path in sorted(Path(profile).glob(f"vu{unit}-*.code")):
+                data = path.read_bytes()
+                if len(data) == size:
+                    yield unit, data
 
 
 def generate(programs, profiles, shards=1):
     """The C++ files: the table, then the translations spread over shards files, the longest
     programs first, each into the file with the fewest pairs so far, compiled in parallel."""
     found = {}
-    for path, data in images(profiles):
-        for name, entry, begin, end, checksum in programs:
-            if name not in found and fnv(data[begin:end]) == checksum:
+    for unit, data in images(profiles):
+        for name, entry, begin, end, checksum, program_unit in programs:
+            if name not in found and unit == program_unit and fnv(data[begin:end]) == checksum:
                 found[name] = data
     head = ["// Native VU1 programs, generated by tools/translate_vu_programs.py from the game's microcode.",
             "// Built locally and never distributed.",
             '#include "runtime/ps2_vu1_native_ops.h"', "", "#include <cstring>", "",
             "namespace ps2_vu_native", "{", "#if PS2_VU_NATIVE_AVAILABLE", "namespace generated", "{"]
     table, declarations, translated = [], [], []
-    for name, entry, begin, end, checksum in programs:
+    for name, entry, begin, end, checksum, unit in programs:
         if name not in found:
             print(f"translate_vu_programs: {name}: no code image has it", file=sys.stderr)
             continue
-        translator = Translator(found[name], entry, name)
+        translator = Translator(found[name], entry, name, unit)
         translator.translate()
         if translator.footprint() != (begin, end):
             raise TranslationError(f"{name} spans {translator.footprint()}, the list says {(begin, end)}")
@@ -1176,7 +1197,7 @@ def generate(programs, profiles, shards=1):
         translated.append((len(translator.pairs), name, lines))
         declarations += [f"bool run_{name}(Context &c);", f"extern const uint8_t code_{name}[];"]
         table.append(f'    {{"{name}", 0x{entry:04x}u, 0x{begin:04x}u, 0x{end:04x}u, 0x{checksum:016x}ull, '
-                     f'generated::code_{name}, &generated::run_{name}}},')
+                     f'generated::code_{name}, &generated::run_{name}, {unit}u}},')
         print(f"translate_vu_programs: {name}: {len(translator.pairs)} pairs, {len(translator.blocks)} blocks, "
               f"MAC flags of {len(translator.needed)} of {len(translator.mac_producers)} instructions read",
               file=sys.stderr)
@@ -1190,10 +1211,10 @@ def generate(programs, profiles, shards=1):
                                                "extern const Program kGeneratedPrograms[];",
                                                "extern const uint32_t kGeneratedProgramCount;",
                                                "const Program kGeneratedPrograms[] = {"] +
-                       (table or ['    {"", 0u, 0u, 0u, 0ull, nullptr, nullptr},']) + ["};",
+                       (table or ['    {"", 0u, 0u, 0u, 0ull, nullptr, nullptr, 1u},']) + ["};",
                        f"const uint32_t kGeneratedProgramCount = {len(table)}u;", "#else",
                        "extern const Program kGeneratedPrograms[];", "extern const uint32_t kGeneratedProgramCount;",
-                       'const Program kGeneratedPrograms[] = {{"", 0u, 0u, 0u, 0ull, nullptr, nullptr}};',
+                       'const Program kGeneratedPrograms[] = {{"", 0u, 0u, 0u, 0ull, nullptr, nullptr, 1u}};',
                        "const uint32_t kGeneratedProgramCount = 0u;", "#endif", "} // namespace ps2_vu_native", ""])]
     files += ["\n".join(head + ["using namespace ops;", ""] + body + tail) for body in bodies]
     return files
@@ -1210,10 +1231,11 @@ def main():
     if args.describe:
         name, image, entry = args.describe
         data = Path(image).read_bytes()
-        translator = Translator(data, int(entry, 16), name)
+        unit = 0 if len(data) == 4096 else 1
+        translator = Translator(data, int(entry, 16), name, unit)
         translator.translate()
         begin, end = translator.footprint()
-        print(f"{name} {int(entry, 16):04x} {begin:04x} {end:04x} {fnv(data[begin:end]):016x}")
+        print(f"{name} {int(entry, 16):04x} {begin:04x} {end:04x} {fnv(data[begin:end]):016x}" + ("" if unit else " vu0"))
         return
     if not args.programs or not args.output:
         parser.error("--programs and --output are required")

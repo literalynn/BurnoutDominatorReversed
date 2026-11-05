@@ -1,6 +1,7 @@
 #include "runtime/ps2_vu1_native_ops.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <cstdio>
 #include <cstdlib>
@@ -82,7 +83,7 @@ struct Shadow
     VU1State inputState{};
     uint64_t cycles = 0;
 };
-Shadow g_shadow;
+Shadow g_shadow[2]; // per unit: VU0 runs on the game thread, VU1 on the GS worker
 
 void collect(void *user, const uint8_t *packet, uint32_t bytes)
 {
@@ -159,33 +160,48 @@ void add(const Program &program) { programs().push_back(program); }
 Mode mode() { return g_mode; }
 void setMode(Mode value) { g_mode = value; }
 
-const Program *find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation)
+const Program *find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation, uint32_t unit)
 {
     if (!g_cpuHasOps)
         return nullptr;
-    // Called at every VU1 MSCAL, from the thread that runs VU1; the microcode changes many times
-    // a frame, so each program compares its bytes at most once per generation.
+    // Called at every start, from the thread that runs the unit; the microcode changes many
+    // times a frame, so each program compares its bytes at most once per generation, and the
+    // answer for an address is kept until the next generation (VU0 starts thousands of times a
+    // frame with the same microcode).
+    struct Answer
+    {
+        uint64_t generation = ~0ull;
+        uint32_t pc = 0;
+        const Program *program = nullptr;
+    };
+    constexpr uint32_t pairs = 16384 / 8; // the larger code memory, VU1's
+    static Answer answers[2][pairs];
+    Answer &answer = answers[unit][(pc / 8) % pairs];
+    if (answer.generation == generation && answer.pc == pc)
+        return answer.program;
     struct Seen
     {
         uint64_t generation = ~0ull;
         bool matches = false;
     };
-    static std::vector<Seen> seen;
+    static std::vector<Seen> seen[2];
     const std::vector<Program> &list = programs();
-    seen.resize(list.size());
-    for (size_t index = 0; index < list.size(); ++index)
+    seen[unit].resize(list.size());
+    const Program *found = nullptr;
+    for (size_t index = 0; index < list.size() && !found; ++index)
     {
         const Program &program = list[index];
-        if (program.pc != pc)
+        if (program.pc != pc || program.unit != unit)
             continue;
-        Seen &entry = seen[index];
+        Seen &entry = seen[unit][index];
         if (entry.generation != generation)
             entry = {generation, program.end <= codeSize && program.begin < program.end &&
                                      std::memcmp(code + program.begin, program.code, program.end - program.begin) == 0};
         if (entry.matches)
-            return &program;
+            found = &program;
     }
-    return nullptr;
+    answer = {generation, pc, found};
+    return found;
 }
 
 bool run(const Program &program, Context &context)
@@ -234,9 +250,9 @@ void totals(uint64_t &compared, uint64_t &identical)
 
 void shadowStart(const Program &program, const uint8_t *data, const VU1State &state)
 {
-    Shadow &shadow = g_shadow;
+    Shadow &shadow = g_shadow[program.unit];
     shadow.program = &program;
-    shadow.inputData.assign(data, data + 16384);
+    shadow.inputData.assign(data, data + (program.unit ? 16384 : 4096));
     shadow.inputState = state;
     shadow.data = shadow.inputData;
     shadow.state = state;
@@ -255,29 +271,30 @@ void shadowStart(const Program &program, const uint8_t *data, const VU1State &st
     shadow.cycles = context.cycles;
 }
 
-void shadowCancel()
+void shadowCancel(uint32_t unit)
 {
-    if (!g_shadow.program)
+    Shadow &shadow = g_shadow[unit];
+    if (!shadow.program)
         return;
     {
         const std::lock_guard lock(g_mutex);
-        ++g_totals[g_shadow.program->name].cancelled;
+        ++g_totals[shadow.program->name].cancelled;
     }
-    g_shadow.program = nullptr;
+    shadow.program = nullptr;
 }
 
-bool shadowActive() { return g_shadow.program != nullptr; }
+bool shadowActive(uint32_t unit) { return g_shadow[unit].program != nullptr; }
 
 void shadowKick(const uint8_t *packet, uint32_t bytes)
 {
-    Shadow &shadow = g_shadow;
+    Shadow &shadow = g_shadow[1];
     shadow.microcodeKicks.insert(shadow.microcodeKicks.end(), packet, packet + bytes);
     shadow.microcodeSizes.push_back(bytes);
 }
 
-void shadowFinish(const uint8_t *data, const VU1State &state, uint64_t cycles)
+void shadowFinish(uint32_t unit, const uint8_t *data, const VU1State &state, uint64_t cycles)
 {
-    Shadow &shadow = g_shadow;
+    Shadow &shadow = g_shadow[unit];
     if (!shadow.program)
         return;
     std::string difference;
@@ -300,8 +317,8 @@ void shadowFinish(const uint8_t *data, const VU1State &state, uint64_t cycles)
         std::memcpy(a, shadow.data.data() + qword * 16, sizeof(a));
         std::memcpy(b, data + qword * 16, sizeof(b));
         char text[160];
-        std::snprintf(text, sizeof(text), "VU1 data memory differs at qword %zu: %08x %08x %08x %08x, microcode %08x %08x %08x %08x",
-                      qword, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
+        std::snprintf(text, sizeof(text), "VU%u data memory differs at qword %zu: %08x %08x %08x %08x, microcode %08x %08x %08x %08x",
+                      unit, qword, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
         difference = text;
     }
     else
@@ -319,10 +336,9 @@ void shadowFinish(const uint8_t *data, const VU1State &state, uint64_t cycles)
     }
     if (!difference.empty())
     {
-        static unsigned printed = 0;
-        if (printed < 20u)
+        static std::atomic<unsigned> printed{0};
+        if (printed.fetch_add(1) < 20u)
         {
-            ++printed;
             std::fprintf(stderr, "[vu1 native] %s start %llu: %s\n", shadow.program->name,
                          static_cast<unsigned long long>(compared), difference.c_str());
             dumpStart(shadow, compared);

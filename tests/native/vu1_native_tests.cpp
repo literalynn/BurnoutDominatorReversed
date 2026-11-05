@@ -1,8 +1,8 @@
-// Native VU1 programs against the microcode (docs/NATIVE_RENDERER.md). BDR_VU_NATIVE_CAPTURES
-// names a directory of program starts recorded with PS2_VU_CAPTURE_DIR (vu1-*.code, .data and
-// .state); each start of a translated program runs on VU1Interpreter in shadow mode, once
-// stepped by the interpreter and once by the compiled routines, and the translation's GIF
-// packets, VU1 memory, registers and cycles must be the microcode's. Without captures, or in a
+// Native VU programs against the microcode (docs/NATIVE_RENDERER.md). BDR_VU_NATIVE_CAPTURES
+// names a directory of program starts recorded with PS2_VU_CAPTURE_DIR (vu1-*.code or
+// vu0-*.code, .data and .state); each start of a translated program runs on VU1Interpreter in
+// shadow mode, once stepped by the interpreter and once by the compiled routines, and the
+// translation's GIF packets, VU memory, registers and cycles must be the microcode's. Without captures, or in a
 // build without translations, there is nothing to compare. BDR_VU_NATIVE_BENCH=N then times N
 // rounds of the starts with the compiled routines and with the translations.
 
@@ -31,8 +31,16 @@ std::vector<uint8_t> readFile(const std::filesystem::path &path)
 
 struct Start
 {
+    uint32_t unit; // 0: VU0, 1: VU1
     std::vector<uint8_t> code, data;
     VU1State state;
+};
+
+// What the game passes for each unit: its memories and the cycles a start may take.
+struct Unit
+{
+    uint8_t *code, *data;
+    uint32_t codeSize, dataSize, cycles;
 };
 } // namespace
 
@@ -53,38 +61,58 @@ int main()
     GS gs;
     gs.init(memory.getGSVRAM(), static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &memory.gs());
 
+    const Unit units[2] = {{memory.getVU0Code(), memory.getVU0Data(), PS2_VU0_CODE_SIZE, PS2_VU0_DATA_SIZE, 1u << 24},
+                           {memory.getVU1Code(), memory.getVU1Data(), PS2_VU1_CODE_SIZE, PS2_VU1_DATA_SIZE, 65536u}};
+    // The code of a start in its unit's memory, as a new microcode generation.
+    const auto upload = [&](const Start &start)
+    {
+        std::memcpy(units[start.unit].code, start.code.data(), start.code.size());
+        if (start.unit)
+            memory.markVU1CodeModified();
+        else
+            memory.markVU0CodeModified();
+    };
+    const auto find = [&](const Start &start)
+    {
+        return ps2_vu_native::find(units[start.unit].code, units[start.unit].codeSize, start.state.pc,
+                                   start.unit ? memory.getVU1CodeGeneration() : memory.getVU0CodeGeneration(), start.unit);
+    };
+
     std::vector<Start> starts;
     for (const auto &entry : std::filesystem::directory_iterator(directory))
     {
         const std::filesystem::path path = entry.path();
-        if (path.extension() != ".code" || path.filename().string().rfind("vu1-", 0) != 0)
+        const std::string name = path.filename().string();
+        if (path.extension() != ".code" || (name.rfind("vu1-", 0) != 0 && name.rfind("vu0-", 0) != 0))
             continue;
         std::filesystem::path stem = path;
         stem.replace_extension();
-        Start start{readFile(path), readFile(stem.string() + ".data"), {}};
+        Start start{name[2] == '1' ? 1u : 0u, readFile(path), readFile(stem.string() + ".data"), {}};
         const std::vector<uint8_t> stateBytes = readFile(stem.string() + ".state");
-        if (start.code.size() != PS2_VU1_CODE_SIZE || start.data.size() != PS2_VU1_DATA_SIZE || stateBytes.size() != sizeof(VU1State))
+        if (start.code.size() != units[start.unit].codeSize || start.data.size() != units[start.unit].dataSize ||
+            stateBytes.size() != sizeof(VU1State))
             continue;
         std::memcpy(&start.state, stateBytes.data(), sizeof(start.state));
-        std::memcpy(memory.getVU1Code(), start.code.data(), start.code.size());
-        memory.markVU1CodeModified();
-        if (ps2_vu_native::find(memory.getVU1Code(), PS2_VU1_CODE_SIZE, start.state.pc, memory.getVU1CodeGeneration()))
+        upload(start);
+        if (find(start))
             starts.push_back(std::move(start));
     }
 
     const auto runAll = [&](bool compiled, unsigned rounds)
     {
-        VU1Interpreter vu(VU1Interpreter::Unit::VU1);
-        vu.setCompiledExecutionEnabled(compiled);
+        VU1Interpreter vu0(VU1Interpreter::Unit::VU0), vu1(VU1Interpreter::Unit::VU1);
+        vu0.setCompiledExecutionEnabled(compiled);
+        vu1.setCompiledExecutionEnabled(compiled);
         for (unsigned round = 0; round < rounds; ++round)
             for (const Start &start : starts)
             {
-                std::memcpy(memory.getVU1Code(), start.code.data(), start.code.size());
-                memory.markVU1CodeModified();
-                std::memcpy(memory.getVU1Data(), start.data.data(), start.data.size());
+                const Unit &unit = units[start.unit];
+                VU1Interpreter &vu = start.unit ? vu1 : vu0;
+                upload(start);
+                std::memcpy(unit.data, start.data.data(), start.data.size());
                 vu.state() = start.state;
-                vu.execute(memory.getVU1Code(), PS2_VU1_CODE_SIZE, memory.getVU1Data(), PS2_VU1_DATA_SIZE, gs, &memory,
-                           start.state.pc, start.state.top, start.state.itop, 65536u);
+                vu.execute(unit.code, unit.codeSize, unit.data, unit.dataSize, gs, &memory, start.state.pc, start.state.top,
+                           start.state.itop, unit.cycles);
             }
     };
 
@@ -115,11 +143,9 @@ int main()
         for (unsigned round = 0; round < rounds; ++round)
             for (const Start &start : starts)
             {
-                std::memcpy(memory.getVU1Code(), start.code.data(), start.code.size());
-                memory.markVU1CodeModified();
-                const ps2_vu_native::Program *program =
-                    ps2_vu_native::find(memory.getVU1Code(), PS2_VU1_CODE_SIZE, start.state.pc, memory.getVU1CodeGeneration());
-                std::memcpy(data.data(), start.data.data(), data.size());
+                upload(start);
+                const ps2_vu_native::Program *program = find(start);
+                std::memcpy(data.data(), start.data.data(), start.data.size());
                 VU1State state = start.state;
                 ps2_vu_native::Context context{data.data(), &state, [](void *, const uint8_t *, uint32_t) {}, nullptr, 0};
                 ps2_vu_native::run(*program, context);

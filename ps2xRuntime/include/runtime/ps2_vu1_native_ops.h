@@ -249,24 +249,26 @@ PS2_VU_NATIVE_INLINE uint32_t flags(V acc, V a, V b, V result)
     return static_cast<uint32_t>(((signs & 1) << 3 | (signs & 2) << 1 | (signs & 4) >> 1 | (signs & 8) >> 3) << 4);
 }
 
-// VU1 data memory: qword addresses wrap at 16 KiB.
-PS2_VU_NATIVE_INLINE V lq(const uint8_t *data, int32_t address) { return _mm_loadu_ps(reinterpret_cast<const float *>(data + (address & 0x3FF) * 16)); }
-template <int Dest>
+// VU data memory: qword addresses wrap at Words + 1 qwords, 16 KiB on VU1, 4 KiB (0xFF) on VU0.
+template <int Words = 0x3FF>
+PS2_VU_NATIVE_INLINE V lq(const uint8_t *data, int32_t address) { return _mm_loadu_ps(reinterpret_cast<const float *>(data + (address & Words) * 16)); }
+template <int Dest, int Words = 0x3FF>
 PS2_VU_NATIVE_INLINE void sq(uint8_t *data, int32_t address, V value)
 {
-    float *target = reinterpret_cast<float *>(data + (address & 0x3FF) * 16);
+    float *target = reinterpret_cast<float *>(data + (address & Words) * 16);
     _mm_storeu_ps(target, blend<Dest>(_mm_loadu_ps(target), value));
 }
+template <int Words = 0x3FF>
 PS2_VU_NATIVE_INLINE int32_t ilw(const uint8_t *data, int32_t address, int component)
 {
     uint32_t word;
-    std::memcpy(&word, data + (address & 0x3FF) * 16 + component * 4, sizeof(word));
+    std::memcpy(&word, data + (address & Words) * 16 + component * 4, sizeof(word));
     return static_cast<int16_t>(word & 0xFFFFu);
 }
-template <int Dest>
+template <int Dest, int Words = 0x3FF>
 PS2_VU_NATIVE_INLINE void isw(uint8_t *data, int32_t address, int32_t value)
 {
-    sq<Dest>(data, address, bits(static_cast<uint16_t>(value)));
+    sq<Dest, Words>(data, address, bits(static_cast<uint16_t>(value)));
 }
 PS2_VU_NATIVE_INLINE int32_t vi16(int32_t value) { return static_cast<int16_t>(value); }
 
