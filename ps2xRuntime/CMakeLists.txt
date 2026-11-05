@@ -451,6 +451,13 @@ set_source_files_properties(
     src/lib/vu/ps2_vu1_lower.cpp
     PROPERTIES UNITY_GROUP vu1)
 
+# Native VU1 programs (runtime/ps2_vu1_native.h) on x86-64: GCC and Clang compile only the
+# translations for SSE4.1 and FMA3 (below), so the rest of the runtime keeps its floating point.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    set(PS2X_VU_NATIVE_X86_64 ON)
+    target_compile_definitions(ps2_runtime PRIVATE PS2X_VU_NATIVE_X86_64=1)
+endif()
+
 set(PS2X_VU_AOT_IMAGES "" CACHE STRING "Local VU code images or block profiles to compile; never distributed")
 set(PS2X_VU_AOT_PAIR_IMAGES "" CACHE STRING "Additional local VU inputs to compile as reusable individual pairs")
 set(PS2X_VU_AOT_LOOP_IMAGES "" CACHE STRING "Local VU code images to scan for bounded conditional loops")
@@ -564,6 +571,9 @@ if(PS2X_VU_PROGRAM_PROFILES)
             set(PS2X_VU_NATIVE_FP_OPTIONS /fp:strict /d2OptimizeHugeFunctions)
         else()
             set(PS2X_VU_NATIVE_FP_OPTIONS -fno-fast-math -frounding-math -ffp-contract=off)
+            if(PS2X_VU_NATIVE_X86_64)
+                list(APPEND PS2X_VU_NATIVE_FP_OPTIONS -msse4.1 -mfma)
+            endif()
         endif()
         target_sources(ps2_runtime PRIVATE ${PS2X_VU_NATIVE_SOURCES})
         set_source_files_properties(${PS2X_VU_NATIVE_SOURCES} PROPERTIES

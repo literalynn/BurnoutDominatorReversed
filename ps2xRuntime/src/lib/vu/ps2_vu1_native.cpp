@@ -1,4 +1,4 @@
-#include "runtime/ps2_vu1_native.h"
+#include "runtime/ps2_vu1_native_ops.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -7,6 +7,10 @@
 #include <map>
 #include <mutex>
 #include <vector>
+
+#if PS2_VU_NATIVE_AVAILABLE && defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace ps2_vu_native
 {
@@ -28,11 +32,33 @@ std::vector<Program> &programs()
     return list;
 }
 
+// The ops need SSE4.1 and FMA3 (ps2_vu1_native_ops.h).
+bool cpuHasOps()
+{
+#if !PS2_VU_NATIVE_AVAILABLE
+    return false;
+#elif defined(_MSC_VER)
+    int info[4];
+    __cpuid(info, 1);
+    constexpr int needed = 1 << 19 | 1 << 12 | 1 << 27; // SSE4.1, FMA, OSXSAVE
+    return (info[2] & needed) == needed && (_xgetbv(0) & 6u) == 6u; // the OS saves XMM and YMM registers
+#else
+    __builtin_cpu_init(); // static initializers may run before libgcc's
+    return __builtin_cpu_supports("sse4.1") && __builtin_cpu_supports("fma");
+#endif
+}
+const bool g_cpuHasOps = cpuHasOps();
+
 Mode initialMode()
 {
     const char *setting = std::getenv("PS2_VU_NATIVE");
     if (setting && std::strcmp(setting, "0") == 0)
         return Mode::Off;
+    if (PS2_VU_NATIVE_AVAILABLE && !g_cpuHasOps)
+    {
+        std::fputs("[vu1 native] the CPU lacks SSE4.1 or FMA3: the microcode runs the VU1 programs\n", stderr);
+        return Mode::Off;
+    }
     return setting && std::strcmp(setting, "shadow") == 0 ? Mode::Shadow : Mode::On;
 }
 Mode g_mode = initialMode();
@@ -135,6 +161,8 @@ void setMode(Mode value) { g_mode = value; }
 
 const Program *find(const uint8_t *code, uint32_t codeSize, uint32_t pc, uint64_t generation)
 {
+    if (!g_cpuHasOps)
+        return nullptr;
     // Called at every VU1 MSCAL, from the thread that runs VU1; the microcode changes many times
     // a frame, so each program compares its bytes at most once per generation.
     struct Seen
