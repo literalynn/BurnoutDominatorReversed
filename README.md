@@ -172,7 +172,7 @@ Each fix is described in [docs/CHANGES.md](docs/CHANGES.md) and the investigatio
 
 A race went from 1 frame per second (GS on the CPU) to 16 with paraLLEl-GS, then to 60: compiled VU0 and VU1 programs, VU1 and GS work moved to their own threads, a declared idle loop, and a long list of smaller fixes. On October 19 a replay of 1,500 frames of a six-car race went from 12.7 to 8.9 s of wall time, with the same picture bit for bit. `BDR_STOP_AT_VSYNC` measures a build's CPU time on such a replay ([docs/BOOT.md](docs/BOOT.md)).
 
-Since November 5, 2026 the ten heaviest VU1 microprograms (world, cars, props, sky, sparks, trails) run as C++ that the build translates from the game's own microcode, with the same output, compared over 9.5 million starts: at 300 Hz a race went from 171 to 228 frames a second on average. `PS2_VU_NATIVE=0` runs the microcode instead ([docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md)). They run on Windows and Linux with an x86-64 processor that has FMA3 (Intel since 2013, AMD since 2012); elsewhere the microcode runs.
+Since November 5, 2026 the ten heaviest VU1 microprograms (world, cars, props, sky, sparks, trails) run as C++ that the build translates from the game's own microcode, with the same output, compared over 9.5 million starts: at 300 Hz a race went from 171 to 228 frames a second on average. The game thread's VU0 microprograms followed the same night. `PS2_VU_NATIVE=0` runs the microcode instead ([docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md)). They run on Windows and Linux with an x86-64 processor that has FMA3 (Intel since 2013, AMD since 2012); elsewhere the microcode runs.
 
 ## Documentation
 
@@ -188,7 +188,7 @@ Since November 5, 2026 the ten heaviest VU1 microprograms (world, cars, props, s
 
 Contributions are welcome, from code to bug reports:
 
-- **Speed** for smaller PCs: the VU1 programs dominate a race frame ([`tools/compile_vu_programs.py`](tools/compile_vu_programs.py)).
+- **Speed** for smaller PCs: with the VU programs translated, a race's CPU time goes to the game thread (the compiled EE code, the IOP interpreter, the SPU2) and to paraLLEl-GS's submission thread ([docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md)).
 - **Modding**: [`disc_patches.cpp`](ps2xRuntime/src/lib/disc_patches.cpp) changes disc files as the game reads them, without touching the ISO.
 - **Sound**: the SPU2 ([`iop_spu2.cpp`](ps2xIOP/src/emulator/core/iop_spu2.cpp)) needs testing by ear, its reverb especially.
 - **Linux and macOS**: builds, controllers, packaging.
