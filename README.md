@@ -49,9 +49,10 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 |---|---|
 | ✅ Game | boot, intro videos, menus, World Tour, car select, events, results |
 | ✅ Races | cars, traffic, damage, crashes and Impact Time, reflections, HUD |
-| ✅ Saves | memory card (your profile is saved after every event), save states on F5 / F7 |
+| ✅ Saves | memory card (your profile is saved after every event), save states on F5 / F7, save profiles kept apart |
+| ✅ Launcher | one window to install, pick a save profile, play, read the console, change the settings and update |
 | ✅ Controls | Xbox, PlayStation and SDL pads with vibration, keyboard and mouse |
-| ✅ Graphics | up to 4x resolution, supersampling, FXAA, 16:9 |
+| ✅ Graphics | up to 4x resolution, supersampling, FXAA, real 16:9 |
 | ✅ Sound | music, engines, crashes, menus, the races' reverb |
 | ✅ Speed | 60 frames per second in six-car races; the race keeps its speed when frames come late |
 | ✅ High frame rate | 120, 144, 240... frames per second (`refresh_rate`): the simulation runs that fast, not interpolated (on a Ryzen + RTX 5090 a race draws every frame up to 240 and 297 to 331 frames a second at 300 to 500, at full speed; 144 also at 4x resolution with 16 samples a pixel) |
@@ -65,19 +66,22 @@ winget install Python.Python.3.12 Git.Git Microsoft.PowerShell
 git clone https://github.com/literalynn/BurnoutDominatorReversed.git
 ```
 
-Drop your ISO onto **`Installer.bat`** in the cloned folder (30 to 90 minutes the first time), then play with **`Play.bat`**.
+Double-click **`Launcher.bat`** in the cloned folder, choose your ISO and press *Generate the code and build the game* (30 to 90 minutes the first time), then *Play*.
 
-To update: `git pull`, then `Installer.bat` again.
+<img src="docs/screenshots/launcher.png" width="70%" alt="The launcher: ISO, installation steps, save profile, Play">
+
+The launcher also keeps **save profiles** apart (each has its own memory card and save states; the saves you already have are the profile *Default*), shows the game's **console** in a tab instead of a console window, edits the **settings**, and **updates** the project from GitHub after showing what the new version brings ([CHANGELOG.md](CHANGELOG.md)).
+
+Without the launcher: drop your ISO onto `Installer.bat`, play with `Play.bat`, and update with `git pull`, then `Installer.bat` again.
 
 <details>
 <summary><b>Linux</b></summary>
 
 ```bash
-sudo apt install git python3 cmake ninja-build g++ pkg-config libgl-dev libx11-dev libxrandr-dev libxinerama-dev \
+sudo apt install git python3 python3-tk cmake ninja-build g++ pkg-config libgl-dev libx11-dev libxrandr-dev libxinerama-dev \
   libxcursor-dev libxi-dev libasound2-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
 git clone https://github.com/literalynn/BurnoutDominatorReversed.git && cd BurnoutDominatorReversed
-python3 tools/install.py --iso "/path/to/Burnout Dominator.iso"
-python3 tools/project.py run
+python3 tools/launcher.py   # or: python3 tools/install.py --iso "/path/to/Burnout Dominator.iso", then python3 tools/project.py run
 ```
 
 macOS is not verified yet.
@@ -109,14 +113,14 @@ Every key can be changed in **F1** → *Keyboard and mouse controls*: up to thre
 | **F9** | mark a glitch: notes the moment in the log, saves a screenshot and a save state in `marks/` |
 
 <details>
-<summary><b>Settings</b> (<code>settings.ini</code> next to <code>Play.bat</code>, also changed by F1)</summary>
+<summary><b>Settings</b> (<code>settings.ini</code> next to <code>Play.bat</code>, also changed by F1 and by the launcher's Settings tab)</summary>
 
 | Setting | Default | |
 |---|---|---|
 | `window_width`, `window_height` | 1280 × 960 | start-up window size |
 | `fullscreen` | false | borderless full screen |
 | `vsync`, `fps_limit` | true, 0 | display sync and cap |
-| `aspect` | 4:3 | `4:3`, `16:9` (with in-game widescreen) or `stretch` |
+| `aspect` | 4:3 | `4:3`, `16:9` or `stretch`. With `16:9` the console tells the game that the screen is 16:9 and the game draws a real widescreen picture (a wider view, nothing stretched) from its next start, unless its own Widescreen option was set otherwise |
 | `smooth_scaling` | true | bilinear enlargement |
 | `super_sampling` | 4 | samples per pixel: 1, 2, 4, 8 or 16 |
 | `high_resolution` | true | a higher resolution built from the samples: 2x (1280 pixels wide) with 4 or 8 samples, 4x (2560) with 16 |

@@ -2,6 +2,12 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The console's screen size follows the aspect setting (November 10, 2026)
+
+- `ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp`: `GetOsdConfigParam` reports a 16:9 screen (bits 1 and 2 = 2) when the `aspect` setting is `16:9`. Burnout asks the console for its screen size until the player has chosen in the game's own options (`FUN_001e6eb8`: the byte at 0x3C4C21 says whether the player chose, else `FUN_0038b0f8` reads bits 1 and 2 of `GetOsdConfigParam`), and its view manager (0x43E7C0, flag at +0xD) then sets the cameras to 16/9 instead of 4/3 (`FUN_001a2758`). With `aspect = 16:9` a race from boot now shows a wider view with the car in its proportions; it was the 4:3 picture stretched until the player turned on the game's Widescreen option. Traced on a new profile: `FUN_001e6eb8` returns 1 with `aspect = 16:9` and 0 with `4:3`. The owner's Event Select state has 0x3C4C21 = 0: her profile never chose.
+- `ps2xRuntime/src/lib/host_settings.cpp`: the comment of `aspect` in `settings.ini`. `ps2xTest/src/ps2_runtime_kernel_tests.cpp`: the screen size follows the setting.
+- Outside the upstream tree: `tools/launcher.py` with `Launcher.bat` (installation, save profiles, the game's console, settings, updates), `project.py run --profile` and `--echo`, `CHANGELOG.md` and `.github/workflows/release.yml` (a GitHub release for each version of the changelog).
+
 ## EE float instructions checked against a console's results (November 10, 2026)
 
 - Console results: ps2autotests (`tests/cpu/ee_fpu`, ISC license) printed them on a PS2. `ps2xTest/src/ps2_float_hw_vectors.inc` holds 174 ADD.S, SUB.S, MUL.S, DIV.S, SQRT.S and RSQRT.S results (the file of upstream's commit eb8688b2); `ps2xTest/src/ps2_float_hw_compare.inc` holds 256 C.EQ.S, C.LT.S, C.LE.S, MAX.S, MIN.S, CVT.W.S and CVT.S.W results, written from `compare.expected`, `arithmetic.expected` and `convert.expected`. FINDINGS E024 says what matches and what does not.

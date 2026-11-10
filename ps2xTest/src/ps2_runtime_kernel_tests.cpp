@@ -6,6 +6,7 @@
 #include "ps2_stubs.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/gs_worker.h"
+#include "runtime/host_settings.h"
 #include "runtime/ee_scheduler.h"
 
 #include <array>
@@ -1315,6 +1316,16 @@ void register_ps2_runtime_kernel_tests()
             const uint32_t readConfig1 = readGuestU32(env.rdram.data(), kConfig1OutAddr);
             t.Equals((readConfig1 >> 13) & 0x7u, 2u, "SetOsdConfigParam2 should sync ConfigParam.version");
             t.Equals((readConfig1 >> 16) & 0x1Fu, 10u, "SetOsdConfigParam2 should sync ConfigParam.language");
+
+            // The screen size the console reports follows the aspect setting.
+            const std::string aspect = ps2x::hostSettings().aspect;
+            ps2x::hostSettings().aspect = "16:9";
+            callSyscall(0x4Bu, env.rdram.data(), &env.ctx, &env.runtime);
+            t.Equals((readGuestU32(env.rdram.data(), kConfig1OutAddr) >> 1) & 0x3u, 2u, "aspect 16:9 should report a 16:9 screen");
+            ps2x::hostSettings().aspect = "4:3";
+            callSyscall(0x4Bu, env.rdram.data(), &env.ctx, &env.runtime);
+            t.Equals((readGuestU32(env.rdram.data(), kConfig1OutAddr) >> 1) & 0x3u, 0u, "aspect 4:3 should leave the console's 4:3 screen");
+            ps2x::hostSettings().aspect = aspect;
         });
 
         tc.Run("numeric syscall 0x83 finds matching table entry", [](TestCase &t)

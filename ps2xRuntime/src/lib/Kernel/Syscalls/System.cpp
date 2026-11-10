@@ -1,5 +1,6 @@
 #include "Common.h"
 #include "System.h"
+#include "runtime/host_settings.h"
 
 namespace ps2_syscalls
 {
@@ -119,6 +120,11 @@ namespace ps2_syscalls
             std::lock_guard<std::mutex> lock(g_osd_mutex);
             raw = g_osd_config_raw;
         }
+        // The console's screen size (bits 1 and 2: 0 = 4:3, 1 = full screen, 2 = 16:9) follows the
+        // aspect setting. A game that asks it draws a real 16:9 picture: Burnout does until the
+        // player chooses in its own options (FUN_001e6eb8 reads this through FUN_0038b0f8).
+        if (ps2x::hostSettings().aspect == "16:9")
+            raw = (raw & ~0x6u) | (2u << 1);
 
         *param = raw;
 

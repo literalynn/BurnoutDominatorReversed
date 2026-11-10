@@ -258,7 +258,7 @@ def recorded_iso(local: Path) -> Path | None:
 
 def iso_hint(windows: bool) -> str:
     if windows:
-        return ("Drop your ISO file onto Installer.bat, or type  "
+        return ("Choose it in the launcher (Launcher.bat), drop it onto Installer.bat, or type  "
                 'python tools\\install.py --iso "D:\\path\\to\\the game.iso"')
     return 'Give it with  python3 tools/install.py --iso "/path/to/the game.iso"'
 
@@ -396,11 +396,9 @@ def project(env: dict, *arguments: str) -> None:
 
 
 def final_message(windows: bool) -> list[str]:
-    launch = ("To start the game: double-click Play.bat (or type  python tools\\project.py run)."
-              if windows else "To start the game: python3 tools/project.py run")
-    return [launch,
-            "Keep the ISO where it is: the game reads it at every launch.",
-            "The game does not reach the menu yet: the log shown at the end of a run is what helps development."]
+    launch = ("To start the game: Play in the launcher (Launcher.bat), or double-click Play.bat."
+              if windows else "To start the game: python3 tools/launcher.py, or python3 tools/project.py run")
+    return [launch, "Keep the ISO where it is: the game reads it at every launch."]
 
 
 # --- Main -------------------------------------------------------------------

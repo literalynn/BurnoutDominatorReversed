@@ -42,6 +42,8 @@ GENERATED = WORK / "generated"
 VU_PROGRAMS = LOCAL / "vu-programs"  # VU1 programs recorded by `run --vu-capture`
 VU_MANIFEST = ROOT / "data" / "vu_programs.manifest"
 VU_SHIPPED = LOCAL / "vu-programs-shipped"  # the manifest's programs, taken from the extracted ELF
+DEFAULT_PROFILE = "Default"
+PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
 
 
 def sha256(path: Path) -> str:
@@ -386,6 +388,16 @@ def default_exe() -> Path:
     raise RuntimeError("Game executable not found; build it with: project.py build --game")
 
 
+def save_dir(profile: str | None) -> Path:
+    """The memory card folder of a save profile; the game keeps its save states next to it.
+    The default profile is <work>/local/saves, where saves were before profiles existed."""
+    if not profile or profile == DEFAULT_PROFILE:
+        return LOCAL / "saves"
+    if not PROFILE_NAME.fullmatch(profile):
+        raise RuntimeError(f"Profile name {profile!r}: use letters, digits, spaces, - and _ (40 at most)")
+    return LOCAL / "profiles" / profile / "saves"
+
+
 def launch(args) -> None:
     elf = checked_elf()
     if not (GENERATED / "generation.json").is_file():
@@ -394,7 +406,9 @@ def launch(args) -> None:
     command = [str(exe), str(elf)]
     if not args.no_iso:
         command += ["--iso", str(verified_iso())]
-    command += ["--disc", str(LOCAL / "disc"), "--save", str(LOCAL / "saves")]
+    saves = save_dir(args.profile)
+    saves.mkdir(parents=True, exist_ok=True)
+    command += ["--disc", str(LOCAL / "disc"), "--save", str(saves)]
     # Player settings next to Play.bat; the game writes the defaults on first launch.
     command += ["--settings", str(ROOT / "settings.ini")]
     seconds = args.seconds or args.smoke_seconds
@@ -425,14 +439,24 @@ def launch(args) -> None:
         VU_PROGRAMS.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, PS2_VU_PROGRAM_PROFILE=str(VU_PROGRAMS))
     with log.open("w", encoding="utf-8") as f:
-        try:
-            result = subprocess.run(command, cwd=WORK, stdout=f, stderr=subprocess.STDOUT, env=env,
-                                    timeout=seconds + 60 if seconds else None)
-            code = result.returncode
-        except subprocess.TimeoutExpired:
-            code = "host-timeout"
-    tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-args.tail:]
-    print("\n".join(tail))
+        if args.echo:
+            # The launcher shows the game's output as it comes.
+            with subprocess.Popen(command, cwd=WORK, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                                  encoding="utf-8", errors="replace") as game:
+                for line in game.stdout:
+                    f.write(line)
+                    print(line, end="", flush=True)
+            code = game.returncode
+        else:
+            try:
+                result = subprocess.run(command, cwd=WORK, stdout=f, stderr=subprocess.STDOUT, env=env,
+                                        timeout=seconds + 60 if seconds else None)
+                code = result.returncode
+            except subprocess.TimeoutExpired:
+                code = "host-timeout"
+    if not args.echo:
+        tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-args.tail:]
+        print("\n".join(tail))
     print(f"Log: {log}\nExit code: {code}")
     if code not in (0, 124):
         raise RuntimeError(f"Game exited with {code} (124 = time limit, 3 = missing function)")
@@ -497,6 +521,9 @@ def main() -> int:
     p.add_argument("--tail", default=40, type=int, help="Log lines printed after the run")
     p.add_argument("--trace-calls", type=hex_list, help="Log calls and returns of these guest functions (0xADDR,...)")
     p.add_argument("--trace-watch", type=hex_list, help="32-bit guest words printed with each trace line (0xADDR,...)")
+    p.add_argument("--profile", help="Save profile: its own memory card and save states under "
+                                     "<work>/local/profiles/<name> (default: <work>/local/saves)")
+    p.add_argument("--echo", action="store_true", help="Print the game's output as it comes, not the log's tail")
     p.add_argument("--state", type=Path,
                    help="Save state slot: F5 saves it, F7 loads it (default <work>/local/states/quick.bdrstate)")
     p.add_argument("--load-state", type=Path, nargs="?", const=LOCAL / "states" / "quick.bdrstate",
