@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import threading
+import traceback
 
 try:
     import tkinter as tk
@@ -136,13 +137,13 @@ def console_python() -> str:
 
 class Launcher:
     def __init__(self, install_now: bool = False) -> None:
+        self.lock = install.read_json(ROOT / "project.json")
+        self.work = work_dir()
+        self.local = self.work / "local"
         self.root = tk.Tk()
         self.root.title("Burnout Dominator Reversed")
         self.root.geometry("940x660")
         self.root.minsize(760, 520)
-        self.lock = install.read_json(ROOT / "project.json")
-        self.work = work_dir()
-        self.local = self.work / "local"
         self.process: subprocess.Popen | None = None
         self.running = ""  # what self.process is, for the messages
         self.events: queue.Queue = queue.Queue()
@@ -155,6 +156,8 @@ class Launcher:
         self.build_settings()
         self.build_updates()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        # pythonw has no stderr: an error in a handler goes to the console tab.
+        self.root.report_callback_exception = lambda *error: self.write("".join(traceback.format_exception(*error)))
         self.refresh()
         self.root.after(100, self.drain)
         threading.Thread(target=self.check_updates, args=(True,), daemon=True).start()
@@ -218,8 +221,10 @@ class Launcher:
             self.iso.set(str(Path(path)))
 
     def read_state(self) -> dict:
-        path = self.local / "launcher.json"
-        return install.read_json(path) if path.is_file() else {}
+        try:
+            return json.loads((self.local / "launcher.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}  # no choice remembered yet, or an unreadable file: the default profile
 
     def write_state(self) -> None:
         if self.local.is_dir():
@@ -350,7 +355,8 @@ class Launcher:
                     self.show_updates(event[1], event[2])
         except queue.Empty:
             pass
-        self.root.after(100, self.drain)
+        finally:
+            self.root.after(100, self.drain)  # also after an error in a handler
 
     # --- Settings -----------------------------------------------------------
 
@@ -500,7 +506,13 @@ def main() -> int:
         print("Tk is missing: install it (Linux: sudo apt install python3-tk) or use tools/install.py and tools/project.py run.",
               file=sys.stderr)
         return 1
-    Launcher(install_now="--install" in sys.argv[1:]).root.mainloop()
+    try:
+        app = Launcher(install_now="--install" in sys.argv[1:])
+    except install.SetupError as error:  # a work directory the installer refuses, an unreadable project file
+        tk.Tk().withdraw()
+        messagebox.showerror("Burnout Dominator Reversed", str(error))
+        return 1
+    app.root.mainloop()
     return 0
 
 
