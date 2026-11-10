@@ -2,6 +2,10 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.2.1 (November 10, 2026)
+
+- The launcher shows the red B again; only its icon in the taskbar and the title bar is grey.
+
 ## 1.2.0 (November 10, 2026)
 
 - **The launcher has a window of its own**, drawn by the program itself instead of a page in Edge: same tabs, same settings, nothing to translate. It is the same on Windows, Linux and macOS. On Windows it is inside `BurnoutDominator.exe`; on Linux and macOS `BurnoutDominator.py` builds it the first time (about a minute) and after each update. If it cannot start, the launcher opens as a page like before.

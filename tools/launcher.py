@@ -706,7 +706,8 @@ def serve(arguments: list[str]) -> int:
 
 
 PAGE = Path(__file__).with_name("launcher.html").read_text(encoding="utf-8").replace(
-    "__ICON__", base64.b64encode(Path(__file__).with_name("launcher.png").read_bytes()).decode("ascii"))
+    "__ICON__", base64.b64encode(Path(__file__).with_name("launcher.png").read_bytes()).decode("ascii")).replace(
+    "__WINDOW_ICON__", base64.b64encode(Path(__file__).with_name("launcher_icon.png").read_bytes()).decode("ascii"))
 # The Settings tab of the page and of the launcher's window (tools/launcher/): "columns" of cards, one row per line of
 # settings.ini. A row without a control named (choice, range, select, number, text) is an on/off switch; "and" is a
 # second number on the same row. A setting the table does not name appears under "Other", as text. The limits are the

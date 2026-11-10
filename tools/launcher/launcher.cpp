@@ -2273,14 +2273,21 @@ int launcherMain(int argc, char **argv)
     SetWindowMinSize(int(720 * g_s), int(480 * g_s));
     sys::darkTitleBar(GetWindowHandle());
     {
-        std::ifstream png(pathOf(script).parent_path() / "launcher.png", std::ios::binary);
-        const std::vector<unsigned char> data((std::istreambuf_iterator<char>(png)), std::istreambuf_iterator<char>());
-        Image icon = LoadImageFromMemory(".png", data.data(), int(data.size()));
+        const auto load = [&](const char *name) {
+            std::ifstream png(pathOf(script).parent_path() / name, std::ios::binary);
+            const std::vector<unsigned char> data((std::istreambuf_iterator<char>(png)), std::istreambuf_iterator<char>());
+            return LoadImageFromMemory(".png", data.data(), int(data.size()));
+        };
+#ifndef _WIN32
+        // The window's icon is the grey B, the page shows the red one. Windows takes BurnoutDominator.exe's own icon.
+        Image grey = load("launcher_icon.png");
+        if (grey.data)
+            SetWindowIcon(grey);
+        UnloadImage(grey);
+#endif
+        Image icon = load("launcher.png");
         if (icon.data)
         {
-#ifndef _WIN32
-            SetWindowIcon(icon); // Windows takes BurnoutDominator.exe's own icon
-#endif
             g.icon = LoadTextureFromImage(icon);
             GenTextureMipmaps(&g.icon);
             SetTextureFilter(g.icon, TEXTURE_FILTER_TRILINEAR);
