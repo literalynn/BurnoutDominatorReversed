@@ -2,6 +2,10 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.2.2 (November 10, 2026)
+
+- Linux: the launcher's window also builds with the Clang compiler (it fell back to the page).
+
 ## 1.2.1 (November 10, 2026)
 
 - The launcher shows the red B again; only its icon in the taskbar and the title bar is grey.

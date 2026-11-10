@@ -63,24 +63,37 @@ namespace
         enum Kind { Null, False, True, Number, String, Array, Object } kind = Null;
         std::string text; // a string's value, a number as written
         std::vector<Json> items;
-        std::vector<std::pair<std::string, Json>> fields;
+        struct Field; // not std::pair: a pair may not hold the incomplete Json (libstdc++ with Clang refuses it)
+        std::vector<Field> fields;
 
-        const Json &operator[](std::string_view key) const
-        {
-            for (const auto &field : fields)
-                if (field.first == key)
-                    return field.second;
-            return none();
-        }
+        const Json &operator[](std::string_view key) const;
         const Json &operator[](size_t index) const { return index < items.size() ? items[index] : none(); }
-        static const Json &none()
-        {
-            static const Json nothing;
-            return nothing;
-        }
+        static const Json &none();
         bool yes() const { return kind == True; }
         long long integer() const { return kind == Number ? std::strtoll(text.c_str(), nullptr, 10) : 0; }
     };
+
+    struct Json::Field
+    {
+        std::string first;
+        Json second;
+        Field(std::string key, Json value) : first(std::move(key)), second(std::move(value)) {}
+    };
+
+    // Out of the class: a Json made or destroyed in its body would need Field complete there.
+    const Json &Json::none()
+    {
+        static const Json nothing;
+        return nothing;
+    }
+
+    const Json &Json::operator[](std::string_view key) const
+    {
+        for (const auto &field : fields)
+            if (field.first == key)
+                return field.second;
+        return none();
+    }
 
     struct JsonReader
     {
