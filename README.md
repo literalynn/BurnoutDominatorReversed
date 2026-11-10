@@ -14,20 +14,40 @@
 
 </div>
 
-The game's PS2 code is translated ahead of time into C++ and compiled for the PC; the rest of the console (graphics chip, sound, I/O processor) runs next to it. The result is a normal PC program: the whole game is playable, from the intro videos to the last World Tour event.
+The game's PS2 program is translated ahead of time into C++ and compiled for the PC; the rest of the console (graphics chip, sound, I/O processor) runs next to it. The result is a normal PC program that plays the whole game, from the intro videos to the last World Tour event, at 60 frames per second or more and up to four times the PS2's resolution.
 
 > [!IMPORTANT]
 > **No game data is included.** You need your own disc image of the European release (`SLES-54627`). The game is built on your PC from that image; nothing of it is distributed here.
 
+## Status
+
+The game is complete and playable from start to finish. The project is a work in progress: it is developed and tested on one Windows PC, and the remaining work is speed on smaller PCs, other systems and modding.
+
+| | |
+|---|---|
+| **Game** | Every mode, event and track of the European release, crashes and Impact Time, videos, music, sound effects, memory card saves. |
+| **Windows 10 / 11** | The main platform: installer, launcher and game tested. |
+| **Linux** | Builds in CI with GCC and Clang and is played by contributors; less tested than Windows. The launcher's window is built on your PC at its first start (if that fails, the launcher opens in your browser). |
+| **macOS, Android** | Not supported yet. |
+| **Speed** | Developed on a Ryzen 7 9800X3D with an RTX 5090: races at full speed at 60 frames a second, about 240 at 240 Hz and 300 at 300 Hz. A player with a Ryzen 7 9800X3D and an RTX 5070 Ti reported 60 in races. Smaller PCs are untested; one fast core matters most. |
+| **Accuracy** | Nothing in the game is skipped or faked. The main processor's float results were compared with a real console's: they match except some additions and multiplications that differ in the last bit. The vector units' arithmetic and the sound's reverb have not been compared with a console yet. |
+
+**Known issues**
+
+- The sky can flicker or change colour for a moment in some races, and the game's speed can vary briefly on some PCs (reported by players).
+- At 2x and 4x, a faint line can show where a menu picture is made of several textures.
+- A save state keeps the picture shape (4:3 or 16:9) it was made with; a change of shape takes effect at the game's next start.
+
 ## Features
 
 - **The complete game**: World Tour, every event type, crashes and Impact Time, videos, music and sound effects.
-- **60 frames per second**, or more: 120, 144, 240 and up to 500, simulated for real, not interpolated.
-- **Higher resolution**: up to four times the PS2's, 1 to 16 samples per pixel, FXAA, progressive scan.
+- **60 frames per second, or more**: 120, 144, 240 and up to 500, simulated for real, not interpolated, at the original speed.
+- **Higher resolution**: two or four times the PS2's, 1 to 16 samples per pixel, FXAA, progressive scan, and a HUD and menus that stay smooth instead of blocky.
 - **Real 16:9**: the game draws a wider view; nothing is stretched.
 - **Controllers**: Xbox, PlayStation and other SDL gamepads with vibration; keyboard and mouse with keys you can change.
 - **Saves**: the memory card, save states (F5 / F7), and save profiles kept apart.
-- **A launcher** that installs the game, starts it, keeps it up to date and edits its settings.
+- **Fast loading**: loading screens run faster than real time.
+- **One file to install**: `BurnoutDominator.exe` (Windows) or `BurnoutDominator.py` (Linux) installs the game into its own folder, opens the launcher and keeps everything up to date, itself included.
 
 ## Screenshots
 
@@ -53,15 +73,15 @@ The game's PS2 code is translated ahead of time into C++ and compiled for the PC
 | | |
 |---|---|
 | **Game** | your own Burnout Dominator ISO, European release (`SLES-54627`). Other releases are not supported. |
-| **System** | Windows 10 or 11, 64-bit. Linux builds from source. macOS is not verified. |
+| **System** | Windows 10 or 11, 64-bit, or Linux (x86-64). |
 | **Processor** | x86-64, four threads or more; single-thread speed matters most. FMA3 (Intel since 2013, AMD since 2012) is used when present. |
 | **Graphics** | a card with Vulkan. Two and four times the PS2's resolution need a dedicated card. |
 | **Disk** | 25 GB free. |
-| **Build tools** | Windows: Visual Studio 2022 or 2026 (Community or Build Tools) with *Desktop development with C++*. Linux: see below. |
+| **Build tools** | the game is compiled on your PC. Windows: Visual Studio 2022 or 2026 (Community or Build Tools) with *Desktop development with C++*. Linux: the packages below. |
 
 ## Installation
 
-The first installation translates and compiles the game on your PC: 30 to 90 minutes.
+The first installation translates and compiles the game on your PC: 30 to 90 minutes. After that, an update rebuilds only what changed.
 
 ### Windows
 
@@ -71,10 +91,8 @@ The first installation translates and compiles the game on your PC: 30 to 90 min
    winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
    ```
 
-2. Download **[`BurnoutDominator.exe`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.exe)** into an empty folder and start it. It downloads the project into that folder, with a Python and a Git of its own (official builds, checked by SHA-256). The file is not signed: if Windows SmartScreen stops it, choose *More info*, then *Run anyway*.
+2. Download **[`BurnoutDominator.exe`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.exe)** into an empty folder and start it. It downloads the project into that folder, with a Python and a Git of its own (official builds, checked by SHA-256), then opens the launcher. The file is not signed: if Windows SmartScreen stops it, choose *More info*, then *Run anyway*.
 3. In the launcher, choose your ISO, press **Generate the code and build the game**, then **Play**.
-
-<img src="docs/screenshots/launcher.jpg" width="80%" alt="The launcher: ISO, installation steps, save profile, Play">
 
 Everything stays in that one folder: the project (`source`), the game's files (`work`), your saves (`save`) and `settings.ini`. The folder can be moved or copied to another drive; the first update after a move builds everything again. To uninstall, delete the folder. Keep the ISO where it is: the game reads it at every launch.
 
@@ -85,7 +103,7 @@ sudo apt install git python3 cmake ninja-build g++ pkg-config libgl-dev libx11-d
   libxcursor-dev libxi-dev libasound2-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
 ```
 
-Then download [`BurnoutDominator.py`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.py) into an empty folder and run `python3 BurnoutDominator.py`. It works like the Windows file; at its first start and after each update it builds the launcher's window (a few minutes the first time). If that cannot be done, it says why and the launcher opens in your browser instead.
+Then download [`BurnoutDominator.py`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.py) into an empty folder and run `python3 BurnoutDominator.py`. It works like the Windows file and uses the system's Python and Git. It builds the launcher's window at its first start (about a minute) and after each update; if it cannot, it says why and opens the launcher in your browser.
 
 ### From a Git checkout
 
@@ -95,20 +113,22 @@ cd BurnoutDominatorReversed
 python tools/launcher.py        # Windows: Launcher.bat
 ```
 
-The game's files then go to a work directory outside the checkout (`C:\bdr-work` on Windows, `~/bdr-work` elsewhere). Without the launcher: `python tools/install.py --iso <ISO>`, then `python tools/project.py run`. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the details.
+The launcher then opens as a page in a browser window, and the game's files go to a work directory outside the checkout (`C:\bdr-work` on Windows, `~/bdr-work` elsewhere). Without the launcher: `python tools/install.py --iso <ISO>`, then `python tools/project.py run`. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the details.
 
 ## The launcher
 
-A window of its own ([tools/launcher/](tools/launcher/), drawn with raylib like the game) over [tools/launcher.py](tools/launcher.py), which does the work. Closing the window does not stop a running game; starting the launcher while its window is open brings that window to the front. From a Git checkout, `python tools/launcher.py` shows the same tabs as a page ([tools/launcher.html](tools/launcher.html)).
+<img src="docs/screenshots/launcher.jpg" width="80%" alt="The launcher's Settings tab">
+
+A window of its own, the same on every system ([tools/launcher/](tools/launcher/), drawn with raylib like the game), over [tools/launcher.py](tools/launcher.py), which does the work. Closing it does not stop a running game; starting it again while its window is open brings that window to the front.
 
 | Tab | |
 |---|---|
 | **Play** | the ISO, the installation steps, the save profile to play with, and Play. |
 | **Console** | what the installation and the game print; no console window stays open. |
 | **Settings** | picture, sound, gamepad, keys. Changes are saved at once. |
-| **Updates** | checks GitHub, shows what a new version brings ([CHANGELOG.md](CHANGELOG.md)) and installs it; only what changed is built again. |
+| **Updates** | checks GitHub, shows what a new version brings ([CHANGELOG.md](CHANGELOG.md)) and installs it, `BurnoutDominator.exe` included. |
 
-**Save profiles** each have their own memory card and save states; the first one is *Default*. They are the folders of `save` in the installation folder (in a Git checkout, of the work directory's `local`). *New* creates one, empty or with a copy of the saves in another folder (another installation's, for example).
+**Save profiles** each have their own memory card and save states; the first one is *Default*. They are the folders of `save` in the installation folder (in a Git checkout, they are in the work directory). *New* creates one, empty or with a copy of the saves in another folder (another installation's, for example).
 
 ## Controls
 
@@ -173,13 +193,16 @@ The executable is built from the game's own code, translated from your disc: dis
 The European PlayStation 2 release, `SLES-54627`. The installer checks the disc image. The American, Japanese and PSP releases are different programs and are not supported.
 
 **Is it an emulator?**
-Partly. The game's main program is not interpreted: it is translated to C++ before the build, like its vertex programs. The graphics chip, the sound chip and the I/O processor are emulated.
+Partly. The game's main program is not interpreted: it is translated to C++ before the build, like its vector-unit programs. The graphics chip, the sound chip and the I/O processor are emulated.
 
 **Can I bring my saves?**
 A save that is a folder (`BESLES-54627...` with its `icon.sys`, as PCSX2's *folder* memory cards keep it) can be copied into a new save profile from the launcher. Memory card image files and `.psu` or `.max` files are not read.
 
-**Linux, macOS, Android?**
-Windows is the tested platform. Linux builds in CI and from source. There is no macOS or Android build.
+**Are the PSP version's extra tracks in it?**
+No. The PS2 program still names them, but their data is not on the PS2 disc ([FINDINGS E025](docs/FINDINGS.md)).
+
+**Is there an "unlock everything" option?**
+Not yet. The game's own debug "Unlock All" is empty in the released game; progress comes from playing, or from a save copied into a profile.
 
 ## How it works
 
@@ -189,16 +212,16 @@ Windows is the tested platform. Linux builds in CI and from source. There is no 
 | **VU0** and **VU1**, the vector units that transform and light every vertex | their microprograms are translated to C++ as well, with an interpreter for the rest |
 | **GS**, the graphics chip | [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs), on the GPU through Vulkan |
 | **IOP**, the I/O processor with its sound, disc and pad modules | emulated, running the game's own modules |
-| **SPU2**, **IPU**, DMA, timers | emulated: sound voices and mixing, the MPEG video decoder |
+| **SPU2**, **IPU**, DMA, timers | emulated: sound voices, reverb and mixing; the videos' MPEG decoding goes through FFmpeg |
 
-Nothing in the game is skipped or faked: a console library function is replaced by native code only where its identity is proven ([docs/SDK_FUNCTIONS.md](docs/SDK_FUNCTIONS.md)). The repository holds a snapshot of PS2Recomp with this project's changes ([docs/CHANGES.md](docs/CHANGES.md)), the runner, the installer and the launcher. Game files and the code generated from them stay in the work directory and are never committed.
+A console library function is replaced by native code only where its identity is proven ([docs/SDK_FUNCTIONS.md](docs/SDK_FUNCTIONS.md)). The repository holds a snapshot of PS2Recomp with this project's changes ([docs/CHANGES.md](docs/CHANGES.md)), the runner, the installer and the launcher. Game files and the code generated from them stay in the work directory and are never committed.
 
 ## Documentation
 
 | | |
 |---|---|
 | [CHANGELOG](CHANGELOG.md) | what each version changes for players |
-| [STATUS](docs/STATUS.md) | what works and what is left |
+| [STATUS](docs/STATUS.md) | the project's history and what is left |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | build steps, run options, tests, repository layout |
 | [BOOT](docs/BOOT.md) | boot sequence, IOP modules, diagnostics |
 | [NATIVE_RENDERER](docs/NATIVE_RENDERER.md) | the translated VU programs and where the time goes |
@@ -210,16 +233,19 @@ Nothing in the game is skipped or faked: a console library function is replaced 
 Bug reports and pull requests are welcome; read [CONTRIBUTING.md](CONTRIBUTING.md) first (no faked success, evidence for every SDK binding, every upstream change documented). A useful bug report says what you saw, when, on which hardware, and comes with a save state (F5) taken just before if you can. Areas where help counts most:
 
 - **Speed** on smaller PCs: the game thread and the graphics submission thread ([docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md)).
-- **Linux and macOS**: builds, controllers, packaging.
-- **Sound**: the SPU2 ([`iop_spu2.cpp`](ps2xIOP/src/emulator/core/iop_spu2.cpp)) needs testing by ear, its reverb especially.
+- **Linux and macOS**: testing, controllers, packaging; a macOS build of the game.
+- **Sound**: the SPU2 ([`iop_spu2.cpp`](ps2xIOP/src/emulator/core/iop_spu2.cpp)) needs testing by ear against a console, its reverb especially.
 - **Modding**: [`disc_patches.cpp`](ps2xRuntime/src/lib/disc_patches.cpp) changes disc files as the game reads them, without touching the ISO.
 
 ## Credits
 
 - [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors: the recompiler and the runtime this project builds on (GPLv3).
 - [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) by Arntzen Software: the GS renderer (LGPLv3).
+- [raylib](https://github.com/raysan5/raylib) (zlib): the game's and the launcher's window, keyboard, mouse and sound output.
+- [SDL2](https://www.libsdl.org/) (zlib): gamepads and vibration.
+- [FFmpeg](https://ffmpeg.org/) (LGPL): the videos' MPEG decoding.
 - [ps2autotests](https://github.com/unknownbrackets/ps2autotests) (ISC): the console results the EE's float instructions are checked against.
-- [PCSX2](https://github.com/PCSX2/pcsx2) (GPLv3 or later): the reference for the EE divider.
+- [PCSX2](https://github.com/PCSX2/pcsx2) (GPLv3 or later): the reference for the EE divider and the SPU2's voice and mixing rules.
 
 ## License
 
