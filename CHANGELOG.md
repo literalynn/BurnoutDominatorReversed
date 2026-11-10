@@ -2,6 +2,12 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.1.4 (November 10, 2026)
+
+- **Sharper HUD and menus in high resolution**: the race display (speed, laps, positions, the names over the rivals) and the menus' text and art are now smooth at 2x and 4x instead of showing big square pixels. The setting is "Smooth HUD", on by default.
+- **16:9 explained**: the game reads the screen shape when it starts. After changing "Picture shape" to or from 16:9, restart the game to get the wider view; a save state keeps the view it was saved with. "Stretch" fills the window with the 4:3 view.
+- The launcher's icon is now a grey B, so it is not mistaken for the game, which keeps the red one.
+
 ## 1.1.3 (November 10, 2026)
 
 - **A `save` folder**: in an installation made with `BurnoutDominator.exe`, your saves are now in the `save` folder next to it, one folder per profile (`save\Default`...). The saves you already have move there by themselves at the launcher's next start.
@@ -30,4 +36,4 @@ What changes for players, newest first. The launcher shows the entries an update
 - **Launcher** (`Launcher.bat`): one window to choose the ISO, generate the code and build the game, pick a save profile, play, read the console and change the settings. No console window stays open while you play.
 - **Save profiles**: each profile has its own memory card and save states. The saves you already have are the profile "Default".
 - **Updates**: the launcher's Updates tab checks GitHub, shows what the new version brings and installs it.
-- **Real 16:9**: with `aspect = 16:9` the game draws a true widescreen picture by itself, because the console now tells it that the screen is 16:9. The game's own Widescreen option still has the last word once you have changed it.
+- **Real 16:9**: with `aspect = 16:9` the game draws a true widescreen picture by itself, because the console now tells it that the screen is 16:9. The game reads it when it starts.
