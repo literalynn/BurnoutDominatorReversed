@@ -121,8 +121,8 @@ namespace ps2_syscalls
             raw = g_osd_config_raw;
         }
         // The console's screen size (bits 1 and 2: 0 = 4:3, 1 = full screen, 2 = 16:9) follows the
-        // aspect setting. A game that asks it draws a real 16:9 picture: Burnout does until the
-        // player chooses in its own options (FUN_001e6eb8 reads this through FUN_0038b0f8).
+        // aspect setting. A game that asks it draws a real 16:9 picture: Burnout asks once, at boot
+        // (FUN_001b48f8 through FUN_001e6eb8 and FUN_0038b0f8), and has no option of its own.
         if (ps2x::hostSettings().aspect == "16:9")
             raw = (raw & ~0x6u) | (2u << 1);
 

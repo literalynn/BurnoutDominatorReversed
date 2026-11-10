@@ -508,7 +508,7 @@ namespace
         if (!controls)
         {
             hints[0] = "Up/Down: choose   Left/Right or click: change   Enter: open";
-            hints[1] = g_menu.row == RowAspect ? "16:9: also turn on widescreen in the game's options"
+            hints[1] = g_menu.row == RowAspect ? "16:9 widens the game's view from its next start"
                                                : "Saved to settings.ini at once";
             hints[2] = "Esc or F1: back to the game (paused while this is open)";
         }

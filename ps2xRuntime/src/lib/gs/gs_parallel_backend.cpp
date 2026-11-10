@@ -25,7 +25,7 @@
 
 namespace ParallelGS
 {
-    extern bool bdr_smooth_ui_sprites; // patched into gs_interface.cpp
+    extern bool bdr_smooth_ui; // patched into gs_interface.cpp
 }
 
 namespace
@@ -503,7 +503,10 @@ namespace
                 gs.set_super_sampling_rate(ParallelGS::SuperSampling(samples), true, true);
                 superSampling = samples;
             }
-            ParallelGS::bdr_smooth_ui_sprites = ps2x::hostSettings().hudSmoothing; // see ParallelGSPatches.cmake
+            // See ParallelGSPatches.cmake. Only when the samples make a higher resolution: at the
+            // PS2's own, averaging them would just blur the art.
+            const ps2x::HostSettings &settings = ps2x::hostSettings();
+            ParallelGS::bdr_smooth_ui = settings.hudSmoothing && settings.highResolution && settings.superSampling >= 4;
             auto &p = gs.get_priv_register_state();
             p.qwords_lo[0] = request.pmode;
             p.qwords_lo[2] = priv.smode1;

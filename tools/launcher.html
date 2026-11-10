@@ -278,7 +278,7 @@ function show(page) {
 // A setting this table does not name appears under "Other", as text. The limits are the game's own.
 const SETTINGS = [[
   {title: "Display", rows: [
-    {key: "aspect", label: "Picture shape", help: "16:9 is real widescreen: the game draws a wider view, nothing is stretched.", choice: ["4:3", "16:9", "stretch"]},
+    {key: "aspect", label: "Picture shape", help: "16:9 is real widescreen: the game draws a wider view from its next start (a save state keeps the view it was saved with). Stretch fills the window with the 4:3 picture.", choice: ["4:3", "16:9", "stretch"]},
     {key: "fullscreen", label: "Start in full screen", help: "F11 or Alt+Enter switches while you play."},
     {key: "window_width", and: "window_height", label: "Window size", help: "In pixels, when the game starts in a window.", number: [320, 16384]},
     {key: "refresh_rate", label: "Frame rate", help: "60 is the original. From 120 the whole game runs that many frames a second: smoother, same speed, more work for the processor.",

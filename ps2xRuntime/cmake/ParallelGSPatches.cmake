@@ -32,10 +32,15 @@ parallel_gs_replace("transfer_state.fifo_readback_128b_size = required_bytes / 1
 # a pixel reads the same texel and a bilinear HUD texture shows its texels as blocks at 2x
 # and 4x. Sprites that sample a palette texture (PSMT8, PSMT4: HUD and menu art, never a
 # render target) with LINEAR magnification rasterize and interpolate per sample when
-# bdr_smooth_ui_sprites (the ubershader snaps attributes along with the raster).
-parallel_gs_replace("void GSInterface::set_hacks(const Hacks &hacks_)" "bool bdr_smooth_ui_sprites = false;\n\nvoid GSInterface::set_hacks(const Hacks &hacks_)")
+# bdr_smooth_ui (the ubershader snaps attributes along with the raster). Flat triangles
+# (Burnout's HUD text and boost bar, the front end's art and text) are snapped by the GPU
+# triangle setup instead: such triangles get bit 27 of their tex word, which the triangle
+# setup of pgs_triangle_setup.spv.h (tools/pgs_shader.py) reads to interpolate them per sample.
+parallel_gs_replace("void GSInterface::set_hacks(const Hacks &hacks_)" "bool bdr_smooth_ui = false;\n\nvoid GSInterface::set_hacks(const Hacks &hacks_)")
+parallel_gs_replace("\tprim_attr.tex2 = prim_state.tex2;\n"
+    "\tprim_attr.tex2 = prim_state.tex2;\n\textern bool bdr_smooth_ui; // defined further down; GCC and Clang need it declared before this template body\n\tconst bool bdr_smooth = bdr_smooth_ui && prim.desc.TME && ctx.tex1.desc.MMAG == TEX1Bits::LINEAR &&\n\t                        (ctx.tex0.desc.PSM == PSMT8 || ctx.tex0.desc.PSM == PSMT4);\n\tif (bdr_smooth && !quad && !is_line)\n\t\tprim_attr.tex |= 1u << 27;\n")
 parallel_gs_replace("\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_RASTER;\n\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_ATTRIBUTE;\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);"
-    "\t\textern bool bdr_smooth_ui_sprites; // defined further down; GCC and Clang need it declared before this template body\n\t\tif (!(bdr_smooth_ui_sprites && prim.desc.TME && ctx.tex1.desc.MMAG == TEX1Bits::LINEAR &&\n\t\t      (ctx.tex0.desc.PSM == PSMT8 || ctx.tex0.desc.PSM == PSMT4)))\n\t\t\tprim_attr.state |= (1u << STATE_BIT_SNAP_RASTER) | (1u << STATE_BIT_SNAP_ATTRIBUTE);\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);")
+    "\t\tif (!bdr_smooth)\n\t\t\tprim_attr.state |= (1u << STATE_BIT_SNAP_RASTER) | (1u << STATE_BIT_SNAP_ATTRIBUTE);\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);")
 parallel_gs_use_patched(${patch_file} gs_interface_patched.cpp)
 
 # compute_page_rect: max_block_x/y are taken modulo the blocks of a page, so
@@ -55,9 +60,12 @@ parallel_gs_use_patched(${patch_file} gs_util_patched.cpp)
 # (tools/pgs_shader.py); the rest scales the circuit images, scissors and viewports by 4.
 set(patch_file gs/gs_renderer.cpp)
 file(READ "${parallel_gs_SOURCE_DIR}/${patch_file}" patch_source)
-parallel_gs_replace("#include \"shaders/slangmosh.hpp\"" "#include \"shaders/slangmosh.hpp\"\n#include \"pgs_sample_circuit.spv.h\"")
+parallel_gs_replace("#include \"shaders/slangmosh.hpp\"" "#include \"shaders/slangmosh.hpp\"\n#include \"pgs_sample_circuit.spv.h\"\n#include \"pgs_triangle_setup.spv.h\"")
 parallel_gs_replace("\tsample_quad[0] = device_->request_program(shaders.quad, shaders.sample_circuit[0]);"
     "\tsample_quad[0] = device_->request_program(shaders.quad, device_->request_shader(pgs_sample_circuit_spirv, sizeof(pgs_sample_circuit_spirv), &shaders.sample_circuit[0]->get_layout()));")
+# The triangle setup that keeps the smoothed UI per sample (HUD smoothing, above).
+parallel_gs_replace("\tweave_quad = device_->request_program(shaders.quad, shaders.weave);\n"
+    "\tweave_quad = device_->request_program(shaders.quad, shaders.weave);\n\tshaders.triangle_setup = device_->request_program(pgs_triangle_setup_spirv, sizeof(pgs_triangle_setup_spirv),\n\t\t&shaders.triangle_setup->get_shader(Vulkan::ShaderStage::Compute)->get_layout());\n")
 parallel_gs_replace("\tif (super_samples > 1)\n\t{\n\t\tvalid_extent.width *= 2;\n\t\tvalid_extent.height *= 2;\n\t}"
     "\tif (super_samples > 1)\n\t{\n\t\tvalid_extent.width <<= super_samples == 16 ? 2 : 1;\n\t\tvalid_extent.height <<= super_samples == 16 ? 2 : 1;\n\t}")
 parallel_gs_replace("\tif (high_resolution_scanout)\n\t\tsuper_samples = 1 << (sampling_rate_x_log2 + sampling_rate_y_log2);\n"

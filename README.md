@@ -142,12 +142,12 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 | `window_width`, `window_height` | 1280 × 960 | start-up window size |
 | `fullscreen` | false | borderless full screen |
 | `vsync`, `fps_limit` | true, 0 | display sync and cap |
-| `aspect` | 4:3 | `4:3`, `16:9` or `stretch`. With `16:9` the game draws a real widescreen picture from its next start, unless its own Widescreen option was set otherwise |
+| `aspect` | 4:3 | `4:3`, `16:9` or `stretch`. With `16:9` the game draws a wider view from its next start (a save state keeps the view it was saved with); `stretch` fills the window with the 4:3 picture |
 | `smooth_scaling` | true | bilinear enlargement |
 | `super_sampling` | 4 | samples per pixel: 1, 2, 4, 8 or 16 |
 | `high_resolution` | true | a higher resolution built from the samples: 2x (1280 pixels wide) with 4 or 8 samples, 4x (2560) with 16 |
 | `fxaa` | false | FXAA on the finished picture |
-| `hud_smoothing` | true | the race HUD smooth instead of blocky at 2x and 4x |
+| `hud_smoothing` | true | the HUD and the menus' art and text smooth instead of blocky at 2x and 4x |
 | `progressive_scan` | true | whole frames, no interlacing lines |
 | `gs_thread` | true | the PS2's graphics units on a second processor core |
 | `fast_loading` | true | loading screens run faster than real time |
