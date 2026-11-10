@@ -1,7 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" translate="no">
 <head>
 <meta charset="utf-8">
+<meta name="google" content="notranslate"><!-- no "Translate this page?" bubble over the window -->
 <title>Burnout Dominator Reversed</title>
 <link rel="icon" href="data:image/png;base64,__ICON__">
 <style>
@@ -47,9 +48,9 @@ footer { flex: none; display: flex; gap: 18px; padding: 7px 28px; font-size: 12p
 .hint { color: var(--mute); font-size: 12.5px; margin: 10px 0 0; }
 .row { display: flex; gap: 8px; align-items: center; }
 
-input[type=text], select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; font: inherit;
-                           outline: none; min-width: 0; transition: border-color .15s, box-shadow .15s; }
-input[type=text]:focus, select:focus { border-color: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+input[type=text], input[type=number], select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+                                               font: inherit; outline: none; min-width: 0; transition: border-color .15s, box-shadow .15s; }
+input[type=text]:focus, input[type=number]:focus, select:focus { border-color: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
 input.wide { flex: 1; }
 ::placeholder { color: #55555d; }
 
@@ -64,7 +65,8 @@ input.wide { flex: 1; }
 
 /* Play page */
 .columns { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
-@media (max-width: 940px) { .columns { grid-template-columns: 1fr; } }
+.columns.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 940px) { .columns, .columns.even { grid-template-columns: minmax(0, 1fr); } }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
 .steps li { display: flex; align-items: center; gap: 10px; color: var(--mute); }
 .steps li::before { content: ""; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid rgba(229, 32, 46, .7); flex: none; }
@@ -85,26 +87,50 @@ body.busy .state { color: var(--text); }
 #log { margin: 0; height: calc(100vh - 248px); min-height: 160px; overflow: auto; background: #070708; border: 1px solid var(--line); border-radius: 12px;
        color: #c9c9cf; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; padding: 14px 16px; white-space: pre-wrap; word-break: break-all; user-select: text; }
 
-/* Settings */
-.settings .hint { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); max-width: 860px; }
-.settings .hint:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
-.setting { display: flex; align-items: center; gap: 14px; padding: 5px 0; }
-.setting label.name { width: 190px; font: 12.5px "Cascadia Mono", Consolas, monospace; font-weight: 400; color: var(--text); }
-.setting input[type=text] { width: 320px; padding: 6px 10px; }
-.setting select { width: 130px; padding: 6px 10px; }
+/* Settings: two columns of cards, one row per setting with its control on the right. */
+.set { display: flex; align-items: center; gap: 18px; padding: 11px 0; border-top: 1px solid var(--line); }
+.card h2 + .set { border-top: 0; padding-top: 2px; }
+.set:last-child { padding-bottom: 0; }
+.what { flex: 1; min-width: 0; }
+.what b { display: block; font-weight: 500; }
+.what small { display: block; color: var(--mute); font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
+.set input[type=number] { width: 84px; padding: 6px 9px; }
+.set input[type=text] { width: 220px; padding: 6px 10px; }
+.set select { padding: 6px 10px; }
+.set .times { color: var(--mute); margin: 0 -10px; }
 .switch { position: relative; width: 38px; height: 22px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
 .switch i { position: absolute; inset: 0; background: #2a2a30; border-radius: 999px; transition: background .15s; }
 .switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #8a8a93; transition: left .15s, background .15s; }
 .switch input:checked + i { background: var(--red); }
 .switch input:checked + i::after { left: 19px; background: #fff; }
+.switch input:focus-visible + i, .seg input:focus-visible + span { box-shadow: 0 0 0 3px var(--red-soft); }
+.seg { display: inline-flex; flex: none; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 2px; }
+.seg label { position: relative; }
+.seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.seg span { display: block; padding: 4px 12px; border-radius: 7px; color: var(--mute); font-weight: 500; transition: background .15s, color .15s; }
+.seg input:checked + span { background: #2a2a30; color: var(--text); }
+.slide { display: flex; align-items: center; gap: 12px; flex: none; }
+.slide input { width: 170px; accent-color: var(--red); cursor: pointer; }
+.slide output { width: 44px; text-align: right; color: var(--mute); font-variant-numeric: tabular-nums; }
+.binds { display: grid; grid-template-columns: 1fr 1fr; gap: 0 36px; }
+@media (max-width: 940px) { .binds { grid-template-columns: 1fr; } }
+.binds .set { border-top: 1px solid var(--line); padding: 9px 0; }
+.chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.chip { font: inherit; font-size: 13px; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 3px 9px;
+        cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+.chip:hover { border-color: rgba(229, 32, 46, .6); }
+.chip i { font-style: normal; color: var(--mute); margin-left: 7px; }
+.chip.add { color: var(--mute); border-style: dashed; }
+.chip.add:hover { color: var(--text); }
+.chip.listening { color: var(--text); border: 1px solid var(--red); background: var(--red-soft); }
 
 /* Updates */
 .entry h2 { font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text); }
 .entry ul { margin: 0; padding-left: 18px; color: #c9c9cf; }
 .entry li { margin: 6px 0; user-select: text; }
 .entry li b { color: var(--text); font-weight: 600; }
-.entry code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font: 12.5px "Cascadia Mono", Consolas, monospace; }
+code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font: 12.5px "Cascadia Mono", Consolas, monospace; }
 
 #toast { position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); background: var(--raised); color: var(--text); border: 1px solid var(--line);
          border-left: 3px solid var(--red); border-radius: 10px; padding: 10px 16px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80%; }
@@ -157,9 +183,17 @@ body.busy .state { color: var(--text); }
             <button class="btn" id="new-profile">New</button>
             <button class="btn quiet" id="open-profile">Open its folder</button>
           </div>
-          <div class="row" id="new-row" hidden style="margin-top:10px">
-            <input type="text" id="new-name" placeholder="Name of the new profile" maxlength="40" style="width:260px">
-            <button class="btn primary" id="create-profile">Create</button>
+          <div id="new-row" hidden>
+            <div class="row" style="margin-top:10px">
+              <input type="text" id="new-name" placeholder="Name of the new profile" maxlength="40" style="width:260px">
+            </div>
+            <div class="row" style="margin-top:8px">
+              <input type="text" class="wide" id="new-saves" placeholder="Optional: a folder of saves to copy into it" spellcheck="false">
+              <button class="btn" id="browse-saves">Browse</button>
+            </div>
+            <p class="hint">To bring saves from elsewhere, give their folder: a save folder (it holds icon.sys), the folder above it, or another
+              installation's <code>work\local</code> folder. They are copied; the originals stay where they are.</p>
+            <div class="row" style="margin-top:10px"><button class="btn primary" id="create-profile">Create the profile</button></div>
           </div>
           <p class="hint">Each profile has its own memory card and save states.</p>
         </div>
@@ -183,11 +217,8 @@ body.busy .state { color: var(--text); }
   </section>
 
   <section id="settings" class="page">
-    <div class="bar">
-      <button class="btn primary" id="save">Save</button>
-      <span class="note" id="settings-note"></span>
-    </div>
-    <div class="card settings" id="settings-list"></div>
+    <p class="hint" id="settings-note" style="margin:0 0 14px">Changes are saved at once and apply the next time the game starts. F1 in the game changes the same settings.</p>
+    <div id="settings-list"></div>
   </section>
 
   <section id="updates" class="page">
@@ -206,7 +237,7 @@ body.busy .state { color: var(--text); }
 "use strict";
 const TOKEN = "__TOKEN__";
 const $ = id => document.getElementById(id);
-let state = null, build = null, settingsStamp = null, toastTimer = 0;
+let state = null, build = null, settingsStamp = -1, toastTimer = 0;
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -242,55 +273,253 @@ function show(page) {
   if (page === "console") $("log").scrollTop = $("log").scrollHeight;
 }
 
-function renderSettings(items) {
-  const list = $("settings-list");
-  list.textContent = "";
-  for (const item of items) {
-    if (item.comment !== undefined) {
-      const hint = document.createElement("p");
-      hint.className = "hint";
-      hint.textContent = item.comment;
-      list.append(hint);
-      continue;
+// The Settings page: how the lines of settings.ini are shown, as two columns of cards. A row without a control
+// named (choice, range, select, number, text) is an on/off switch; `and` is a second number on the same row.
+// A setting this table does not name appears under "Other", as text. The limits are the game's own.
+const SETTINGS = [[
+  {title: "Display", rows: [
+    {key: "aspect", label: "Picture shape", help: "16:9 is real widescreen: the game draws a wider view, nothing is stretched.", choice: ["4:3", "16:9", "stretch"]},
+    {key: "fullscreen", label: "Start in full screen", help: "F11 or Alt+Enter switches while you play."},
+    {key: "window_width", and: "window_height", label: "Window size", help: "In pixels, when the game starts in a window.", number: [320, 16384]},
+    {key: "refresh_rate", label: "Frame rate", help: "60 is the original. From 120 the whole game runs that many frames a second: smoother, same speed, more work for the processor.",
+     select: ["50", "60", "120", "144", "165", "240", "300", "360", "500"], unit: " fps"},
+    {key: "vsync", label: "Vertical sync", help: "Waits for the monitor: no tearing."},
+    {key: "fps_limit", label: "Display limit", help: "The most frames a second the window shows. 0: no limit.", number: [0, 10000]},
+    {key: "show_fps", label: "Frame counter", help: "Frames a second, in the window's corner."}]},
+  {title: "Sound", rows: [
+    {key: "volume", label: "Volume", range: [0, 100], unit: "%"}]},
+  {title: "Gamepad", rows: [
+    {key: "vibration", label: "Vibration"},
+    {key: "stick_deadzone", label: "Stick dead zone", help: "How far a stick moves before it counts.", range: [0, 90], unit: "%"},
+    {key: "gamepad_mappings", label: "Extra mappings file", help: "A gamecontrollerdb.txt for a pad the game does not recognise. Usually empty.", text: true}]},
+], [
+  {title: "Picture quality", rows: [
+    {key: "high_resolution", label: "High resolution", help: "Twice the PS2's resolution with 4 or 8 samples, four times with 16."},
+    {key: "super_sampling", label: "Samples per pixel", help: "More samples: smoother edges, more work for the graphics card.", choice: ["1", "2", "4", "8", "16"]},
+    {key: "fxaa", label: "FXAA", help: "Smooths the edges of the finished picture."},
+    {key: "hud_smoothing", label: "Smooth HUD", help: "The race display and the menu art smooth instead of blocky in high resolution."},
+    {key: "progressive_scan", label: "Progressive scan", help: "Whole frames instead of interlaced fields: no combed lines."},
+    {key: "smooth_scaling", label: "Smooth enlargement", help: "Off: sharp pixels."}]},
+  {title: "Performance", rows: [
+    {key: "gs_thread", label: "Graphics on a second core", help: "The PS2's graphics units run on a processor core of their own."},
+    {key: "fast_loading", label: "Fast loading", help: "Loading screens run faster than real time."},
+    {key: "keep_speed", label: "Keep the game's speed", help: "When the graphics cannot keep up, the game draws fewer frames instead of slowing down."}]},
+]];
+// The PS2 buttons, in the order of settings.ini (key_up...), with what the game uses them for.
+const BUTTONS = [["up", "Up", "menus"], ["down", "Down", "menus"], ["left", "Left", "steer"], ["right", "Right", "steer"],
+                 ["cross", "✕ Cross", "accelerate, select"], ["circle", "○ Circle"], ["square", "□ Square", "brake"],
+                 ["triangle", "△ Triangle", "back"], ["l1", "L1"], ["r1", "R1", "boost, Impact Time"], ["l2", "L2"], ["r2", "R2"],
+                 ["start", "Start"], ["select", "Select"], ["l3", "L3"], ["r3", "R3"]];
+// A browser's key codes that are not a letter, a digit, a keypad digit or F1-F12, with the names settings.ini uses.
+const CODES = {Space: "SPACE", Quote: "APOSTROPHE", Comma: "COMMA", Minus: "MINUS", Period: "PERIOD", Slash: "SLASH", Semicolon: "SEMICOLON",
+  Equal: "EQUAL", BracketLeft: "LEFT_BRACKET", Backslash: "BACKSLASH", BracketRight: "RIGHT_BRACKET", Backquote: "GRAVE", Escape: "ESCAPE",
+  Enter: "ENTER", Tab: "TAB", Backspace: "BACKSPACE", Insert: "INSERT", Delete: "DELETE", ArrowRight: "RIGHT", ArrowLeft: "LEFT",
+  ArrowDown: "DOWN", ArrowUp: "UP", PageUp: "PAGE_UP", PageDown: "PAGE_DOWN", Home: "HOME", End: "END", CapsLock: "CAPS_LOCK",
+  ScrollLock: "SCROLL_LOCK", NumLock: "NUM_LOCK", PrintScreen: "PRINT_SCREEN", Pause: "PAUSE", NumpadDecimal: "KP_DECIMAL",
+  NumpadDivide: "KP_DIVIDE", NumpadMultiply: "KP_MULTIPLY", NumpadSubtract: "KP_SUBTRACT", NumpadAdd: "KP_ADD", NumpadEnter: "KP_ENTER",
+  NumpadEqual: "KP_EQUAL", ShiftLeft: "LEFT_SHIFT", ControlLeft: "LEFT_CONTROL", AltLeft: "LEFT_ALT", MetaLeft: "LEFT_SUPER",
+  ShiftRight: "RIGHT_SHIFT", ControlRight: "RIGHT_CONTROL", AltRight: "RIGHT_ALT", MetaRight: "RIGHT_SUPER", ContextMenu: "MENU"};
+const MOUSE = ["MOUSE_LEFT", "MOUSE_MIDDLE", "MOUSE_RIGHT", "MOUSE_SIDE", "MOUSE_EXTRA"];  // by the browser's button number
+let values = {}, stopListening = null;
+
+function inputName(code) {
+  const match = /^(?:Key([A-Z])|Digit(\d)|Numpad(\d)|(F(?:[1-9]|1[0-2])))$/.exec(code);
+  return match ? match[1] || match[2] || (match[3] && "KP_" + match[3]) || match[4] : CODES[code] || "";
+}
+// "LEFT_SHIFT" -> "Left Shift", "KP_1" -> "Keypad 1", "MOUSE_WHEEL_UP" -> "Wheel Up"
+function keyLabel(name) {
+  return name.replace(/^KP_/, "KEYPAD_").replace(/^MOUSE_WHEEL_/, "WHEEL_").split("_")
+    .map(word => word.length > 2 || word === "UP" ? word[0] + word.slice(1).toLowerCase() : word).join(" ");
+}
+function element(tag, className, text) {
+  const made = document.createElement(tag);
+  if (className) made.className = className;
+  if (text !== undefined) made.textContent = text;
+  return made;
+}
+// Each change is written at once. The page's own writes do not make it draw the settings again (see render).
+async function saveSetting(key, value, redraw) {
+  const answer = await api("settings", {values: {[key]: value}});
+  if (!answer) return;
+  settingsStamp = answer.settings_stamp;
+  if (redraw) renderSettings(answer.settings); else values[key] = value;
+}
+
+function control(row) {
+  const key = row.key;
+  if (row.choice) {
+    const group = element("div", "seg");
+    group.setAttribute("role", "radiogroup");
+    group.setAttribute("aria-label", row.label);
+    for (const option of row.choice) {
+      const wrap = element("label"), input = element("input");
+      input.type = "radio";
+      input.name = key;
+      input.checked = values[key] === option;
+      input.addEventListener("change", () => saveSetting(key, option));
+      wrap.append(input, element("span", "", option[0].toUpperCase() + option.slice(1)));
+      group.append(wrap);
     }
-    const row = document.createElement("div");
-    row.className = "setting";
-    const name = document.createElement("label");
-    name.className = "name";
-    name.textContent = item.key;
-    row.append(name);
-    let control;
-    if (item.value === "true" || item.value === "false") {
-      const wrap = document.createElement("label");
-      wrap.className = "switch";
-      control = document.createElement("input");
-      control.type = "checkbox";
-      control.checked = item.value === "true";
-      wrap.append(control, document.createElement("i"));
-      row.append(wrap);
-    } else if (item.choices && item.key !== "refresh_rate") {
-      control = document.createElement("select");
-      for (const choice of item.choices) control.add(new Option(choice, choice, false, choice === item.value));
-      row.append(control);
-    } else {
-      control = document.createElement("input");
-      control.type = "text";
-      control.value = item.value;
-      control.spellcheck = false;
-      if (item.choices) {
-        const options = document.createElement("datalist");
-        options.id = "choices-" + item.key;
-        for (const choice of item.choices) options.append(new Option(choice));
-        control.setAttribute("list", options.id);
-        control.style.width = "130px";
-        row.append(options);
-      }
-      row.append(control);
-    }
-    control.dataset.key = item.key;
-    list.append(row);
+    return [group];
   }
-  if (!items.length) list.textContent = "The game writes its settings file at its first launch; the settings appear here afterwards.";
+  if (row.range) {
+    const wrap = element("div", "slide"), input = element("input"), shown = element("output", "", values[key] + row.unit);
+    input.type = "range";
+    [input.min, input.max] = row.range;
+    input.value = values[key];
+    input.setAttribute("aria-label", row.label);
+    input.addEventListener("input", () => { shown.textContent = input.value + row.unit; });
+    input.addEventListener("change", () => saveSetting(key, input.value));
+    wrap.append(input, shown);
+    return [wrap];
+  }
+  if (row.select) {
+    const select = element("select");
+    select.setAttribute("aria-label", row.label);
+    for (const option of row.select.includes(values[key]) ? row.select : [values[key], ...row.select])
+      select.add(new Option(option + row.unit, option, false, option === values[key]));
+    select.addEventListener("change", () => saveSetting(key, select.value));
+    return [select];
+  }
+  if (row.number) {
+    const number = (name, label) => {
+      const input = element("input"), [low, high] = row.number;
+      input.type = "number";
+      [input.min, input.max] = row.number;
+      input.value = values[name];
+      input.setAttribute("aria-label", label);
+      input.addEventListener("change", () => {
+        input.value = Math.min(high, Math.max(low, Math.round(Number(input.value)) || 0));
+        saveSetting(name, input.value);
+      });
+      return input;
+    };
+    return row.and ? [number(key, row.label + ": width"), element("span", "times", "×"), number(row.and, row.label + ": height")] : [number(key, row.label)];
+  }
+  const input = element("input");
+  input.setAttribute("aria-label", row.label);
+  if (row.text) {
+    input.type = "text";
+    input.value = values[key];
+    input.spellcheck = false;
+    input.addEventListener("change", () => saveSetting(key, input.value.trim()));
+    return [input];
+  }
+  const wrap = element("label", "switch");
+  input.type = "checkbox";
+  input.checked = values[key] === "true";
+  input.addEventListener("change", () => saveSetting(key, input.checked ? "true" : "false"));
+  wrap.append(input, element("i"));
+  return [wrap];
+}
+function settingRow(row) {
+  const line = element("div", "set"), what = element("div", "what");
+  what.append(element("b", "", row.label));
+  if (row.help) what.append(element("small", "", row.help));
+  line.append(what, ...control(row));
+  return line;
+}
+
+// One PS2 button: its keys as chips (a click removes one) and "+", which takes the next key, mouse button or wheel move.
+function bindRow([name, label, role]) {
+  const key = "key_" + name, line = element("div", "set"), what = element("div", "what"), chips = element("div", "chips");
+  const inputs = values[key].split(/\s+/).filter(word => word && word !== "NONE");
+  const save = list => saveSetting(key, list.join(" ") || "NONE", true);
+  what.append(element("b", "", label));
+  if (role) what.append(element("small", "", role));
+  inputs.forEach((input, index) => {
+    const chip = element("button", "chip", keyLabel(input));
+    chip.title = "Remove";
+    chip.setAttribute("aria-label", label + ": remove " + keyLabel(input));
+    chip.append(element("i", "", "×"));
+    chip.addEventListener("click", () => save(inputs.filter((_, at) => at !== index)));
+    chips.append(chip);
+  });
+  if (inputs.length < 3) {
+    const add = element("button", "chip add", "+");
+    add.title = "Add a key or a mouse button";
+    add.setAttribute("aria-label", label + ": add a key or a mouse button");
+    add.addEventListener("click", () => {
+      if (add.classList.contains("listening")) stopListening();
+      else listen(add, input => { if (!inputs.includes(input)) save([...inputs, input]); });
+    });
+    chips.append(add);
+  }
+  line.append(what, chips);
+  return line;
+}
+function listen(chip, done) {
+  if (stopListening) stopListening();
+  const take = (event, input) => {
+    event.preventDefault();
+    event.stopPropagation();
+    stopListening();
+    if (input) done(input); else toast("This key cannot be used.");
+  };
+  const onKey = event => take(event, inputName(event.code));
+  const onWheel = event => take(event, event.deltaY < 0 ? "MOUSE_WHEEL_UP" : "MOUSE_WHEEL_DOWN");
+  const onMouse = event => {
+    if (event.target === chip) return;  // its own click stops listening
+    // The click that follows a left press must not also press what is under the pointer.
+    if (event.button === 0) window.addEventListener("click", click => { click.preventDefault(); click.stopPropagation(); }, {capture: true, once: true});
+    take(event, MOUSE[event.button] || "");
+  };
+  const onMenu = event => event.preventDefault();
+  stopListening = () => {
+    window.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("mousedown", onMouse, true);
+    window.removeEventListener("wheel", onWheel, true);
+    window.removeEventListener("contextmenu", onMenu, true);
+    window.removeEventListener("blur", stopListening);
+    chip.textContent = "+";
+    chip.classList.remove("listening");
+    stopListening = null;
+  };
+  chip.textContent = "Press a key or a mouse button";
+  chip.classList.add("listening");
+  window.addEventListener("keydown", onKey, true);
+  window.addEventListener("mousedown", onMouse, true);
+  window.addEventListener("wheel", onWheel, {capture: true, passive: false});
+  window.addEventListener("contextmenu", onMenu, true);
+  window.addEventListener("blur", stopListening);
+}
+
+function renderSettings(items) {
+  if (stopListening) stopListening();
+  const list = $("settings-list"), shown = new Set(), columns = element("div", "columns even");
+  values = Object.fromEntries(items.filter(item => item.key).map(item => [item.key, item.value]));
+  list.textContent = "";
+  $("settings-note").hidden = !items.length;
+  if (!items.length) {
+    list.append(element("div", "card", "The game writes its settings file at its first launch; the settings appear here afterwards."));
+    return;
+  }
+  const card = (title, ...content) => {
+    const made = element("div", "card");
+    made.append(element("h2", "", title), ...content);
+    return made;
+  };
+  for (const groups of SETTINGS) {
+    const column = element("div");
+    for (const group of groups) {
+      const rows = group.rows.filter(row => row.key in values && (!row.and || row.and in values));
+      rows.forEach(row => shown.add(row.key).add(row.and));
+      if (rows.length) column.append(card(group.title, ...rows.map(settingRow)));
+    }
+    columns.append(column);
+  }
+  list.append(columns);
+  const buttons = BUTTONS.filter(([name]) => "key_" + name in values);
+  if (buttons.length) {
+    const binds = element("div", "binds");
+    binds.append(...buttons.map(bindRow));
+    const hint = element("p", "hint", "Up to three keys, mouse buttons or wheel moves for each PS2 button. Press + and then the key to add; click a key to remove it.");
+    hint.style.margin = "0 0 6px";
+    list.append(card("Keyboard and mouse", hint, binds));
+    buttons.forEach(([name]) => shown.add("key_" + name));
+  }
+  const other = Object.keys(values).filter(key => !shown.has(key));
+  if (other.length) list.append(card("Other", ...other.map(key => settingRow({key, label: key, text: true}))));
 }
 
 function render(s) {
@@ -317,10 +546,11 @@ function render(s) {
   $("stop").disabled = $("stop2").disabled = !busy;
   $("state").textContent = busy ? (s.phase || s.running + " running") : s.ready ? "Ready." : "Give the ISO, then generate the code and build the game.";
   $("console-note").textContent = busy ? s.running + " running." : "";
-  if (s.settings_stamp !== settingsStamp) {
+  // Drawn again only when the file is newer than what the page shows: an answer that was already on its way
+  // when the page saved a setting must not put the old value back.
+  if (s.settings_stamp > settingsStamp) {
     settingsStamp = s.settings_stamp;
     renderSettings(s.settings);
-    $("settings-note").textContent = "F1 in the game changes the same settings. Changes apply at the next launch.";
   }
   const updates = s.updates;
   $("update-note").textContent = updates.note;
@@ -351,21 +581,27 @@ $("stop2").addEventListener("click", () => act("stop"));
 $("profile").addEventListener("change", () => act("select", {profile: $("profile").value}));
 $("new-profile").addEventListener("click", () => { $("new-row").hidden = !$("new-row").hidden; if (!$("new-row").hidden) $("new-name").focus(); });
 $("create-profile").addEventListener("click", async () => {
-  if (await act("new-profile", {name: $("new-name").value})) { $("new-name").value = ""; $("new-row").hidden = true; }
+  const saves = $("new-saves").value.trim();
+  if (!await act("new-profile", {name: $("new-name").value, saves})) return;
+  if (saves) toast("The saves were copied into the new profile.");
+  $("new-name").value = $("new-saves").value = "";
+  $("new-row").hidden = true;
+});
+$("browse-saves").addEventListener("click", async () => {
+  const answer = await api("browse-saves");
+  if (answer && answer.path) $("new-saves").value = answer.path;
 });
 $("new-name").addEventListener("keydown", event => { if (event.key === "Enter") $("create-profile").click(); });
 $("open-profile").addEventListener("click", () => api("open-profile", {profile: $("profile").value}));
 $("copy").addEventListener("click", () => navigator.clipboard.writeText($("log").textContent));
 $("clear").addEventListener("click", () => { $("log").textContent = ""; });
-$("save").addEventListener("click", async () => {
-  const values = {};
-  document.querySelectorAll("#settings-list [data-key]").forEach(control => {
-    values[control.dataset.key] = control.type === "checkbox" ? (control.checked ? "true" : "false") : control.value;
-  });
-  if (await act("settings", {values})) $("settings-note").textContent = "Saved. Changes apply at the next launch of the game.";
-});
 $("check").addEventListener("click", () => { $("update-note").textContent = "Checking..."; api("check-updates"); });
 $("update").addEventListener("click", async () => { if (await act("update")) show("console"); });
+
+// The app window opens at 1280 x 720 the first time (a browser tab ignores this); afterwards it keeps the size it was given.
+try {
+  if (!localStorage.getItem("sized")) { localStorage.setItem("sized", "1"); window.resizeTo(1280, 720); }
+} catch (error) { /* no storage: the window keeps its size */ }
 
 // Console lines and state changes come over one stream; a reconnection sends the console again.
 const events = new EventSource("/events?t=" + TOKEN);

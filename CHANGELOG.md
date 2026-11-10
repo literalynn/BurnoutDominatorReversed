@@ -2,6 +2,13 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.1.1 (November 10, 2026)
+
+- **Settings tab redone**: the settings are grouped by subject, with switches, sliders and choices, and a line that says what each one does. A change is saved at once. To change a key, press + and then the key.
+- **Saves from elsewhere**: a new save profile can start with a copy of the saves in a folder you give, another installation's for example.
+- The launcher's window opens at 1280 × 720 (16:9).
+- Edge no longer offers to translate the launcher's window.
+
 ## 1.1.0 (November 10, 2026)
 
 - **One file to install.** Download `BurnoutDominator.exe` (Windows) or `BurnoutDominator.py` (Linux, macOS) from the latest release, put it in an empty folder and start it. It downloads what it needs into that folder (on Windows a Python and a Git of its own) and everything stays there: the project, the game's files, the settings and the saves. The folder can be moved.

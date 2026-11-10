@@ -47,8 +47,6 @@ LATEST_RELEASE = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # children never open a console window
 SETTING_LINE = re.compile(r"\s*([a-z0-9_]+)\s*=\s*(.*?)\s*$")
 # Settings with a fixed list of values; refresh_rate also takes any number typed in.
-CHOICES = {"aspect": ("4:3", "16:9", "stretch"), "super_sampling": ("1", "2", "4", "8", "16"),
-           "refresh_rate": ("50", "60", "120", "144", "165", "240", "300", "360", "500")}
 CONSOLE_LINES = 5000
 PORTS = range(47800, 47810)  # a fixed first choice: the app window remembers its size per address
 
@@ -73,6 +71,24 @@ def profiles(local: Path) -> list[str]:
     folder = local / "profiles"
     names = sorted(p.name for p in folder.iterdir() if p.is_dir() and PROFILE_NAME.fullmatch(p.name)) if folder.is_dir() else []
     return [DEFAULT_PROFILE] + [name for name in names if name != DEFAULT_PROFILE]
+
+
+def copy_saves(source: Path, profile: Path) -> None:
+    """Copy the saves a player points at into a new profile's folder. `source` is a profile or work folder (it has
+    "saves"), a memory card folder (it holds save folders) or one save folder (it holds icon.sys)."""
+    if not source.is_dir():
+        raise ValueError("This folder does not exist.")
+    if (source / "saves").is_dir():
+        for part in ("saves", "saves_slot1", "states"):
+            if (source / part).is_dir():
+                shutil.copytree(source / part, profile / part)
+    elif (source / "icon.sys").is_file():
+        shutil.copytree(source, profile / "saves" / source.name)
+    elif any((entry / "icon.sys").is_file() for entry in source.iterdir() if entry.is_dir()):
+        shutil.copytree(source, profile / "saves")
+    else:
+        raise ValueError("No PS2 save in this folder. Choose a save folder (it holds icon.sys), the folder above it, "
+                         "or a profile's folder.")
 
 
 def parse_settings(text: str) -> list[dict]:
@@ -204,16 +220,18 @@ def console_python() -> str:
     return str(console if console.is_file() else exe)
 
 
-def choose_iso() -> str:
-    """A native file dialog; "" when cancelled or when the system has none we know."""
+def choose(folder: bool = False) -> str:
+    """A native dialog for the ISO, or for a folder of saves; "" when cancelled or when the system has none we know."""
     if os.name == "nt":
+        kind, setup, picked = (("FolderBrowserDialog", "$dialog.Description = 'The folder that holds your saves'", "SelectedPath") if folder else
+                               ("OpenFileDialog", "$dialog.Title = 'Burnout Dominator ISO'; $dialog.Filter = 'ISO image (*.iso)|*.iso|All files|*.*'", "FileName"))
         script = ("Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form -Property @{TopMost=$true};"
-                  "$dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = 'Burnout Dominator ISO';"
-                  "$dialog.Filter = 'ISO image (*.iso)|*.iso|All files|*.*';"
-                  "if ($dialog.ShowDialog($owner) -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.FileName }")
+                  f"$dialog = New-Object System.Windows.Forms.{kind}; {setup};"
+                  f"if ($dialog.ShowDialog($owner) -eq 'OK') {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.{picked} }}")
         command = ["powershell", "-NoProfile", "-Command", script]
     elif shutil.which("zenity"):
-        command = ["zenity", "--file-selection", "--title=Burnout Dominator ISO", "--file-filter=*.iso"]
+        command = ["zenity", "--file-selection"] + (["--directory", "--title=The folder that holds your saves"] if folder else
+                                                    ["--title=Burnout Dominator ISO", "--file-filter=*.iso"])
     else:
         return ""
     result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
@@ -232,7 +250,7 @@ def open_window(url: str) -> None:
     """An app window without browser controls where Edge offers one, else a browser tab."""
     edge = find_edge() if os.name == "nt" else None
     if edge:
-        subprocess.Popen([edge, f"--app={url}", "--window-size=1240,820"])
+        subprocess.Popen([edge, f"--app={url}", "--window-size=1280,720"])  # the page sets this size itself the first time
     else:
         webbrowser.open(url)
 
@@ -297,8 +315,6 @@ class Launcher:
         settings = parse_settings(SETTINGS.read_text(encoding="utf-8")) if SETTINGS.is_file() else []
         for item in settings:
             item.pop("closed", None)
-            if item.get("key") in CHOICES:
-                item["choices"] = CHOICES[item["key"]]
         entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8")) if CHANGELOG.is_file() else []
         return {"iso": str(recorded or ""), "steps": status, "ready": all(status.values()),
                 "running": self.running if self.process else "", "phase": self.phase if self.process else "",
@@ -357,11 +373,19 @@ class Launcher:
         if profile in profiles(self.local) and self.local.is_dir():
             (self.local / "launcher.json").write_text(json.dumps({"profile": profile}, indent=2) + "\n", encoding="utf-8")
 
-    def new_profile(self, name: str) -> None:
+    def new_profile(self, name: str, saves: str = "") -> None:
+        """A new profile, empty or holding a copy of the saves in the folder `saves`."""
         name = name.strip()
         if not PROFILE_NAME.fullmatch(name) or name in profiles(self.local):
             raise ValueError("Use a new name made of letters, digits, spaces, - and _ (40 at most).")
-        (self.local / "profiles" / name / "saves").mkdir(parents=True)
+        target = self.local / "profiles" / name
+        if saves.strip():
+            try:
+                copy_saves(Path(saves.strip().strip('"')), target)
+            except (ValueError, OSError):
+                shutil.rmtree(target, ignore_errors=True)  # no half-copied profile
+                raise
+        (target / "saves").mkdir(parents=True, exist_ok=True)
         self.select(name)
 
     def open_profile(self, profile: str) -> None:
@@ -377,7 +401,8 @@ class Launcher:
     def save_settings(self, values: dict) -> None:
         if SETTINGS.is_file():
             clean = {str(key): str(value).replace("\n", " ").strip() for key, value in values.items()}
-            SETTINGS.write_text(apply_settings(SETTINGS.read_text(encoding="utf-8"), clean), encoding="utf-8")
+            with self.changed:  # one request at a time reads the file and writes it back
+                SETTINGS.write_text(apply_settings(SETTINGS.read_text(encoding="utf-8"), clean), encoding="utf-8")
 
     # --- Updates ------------------------------------------------------------
 
@@ -425,8 +450,8 @@ class Launcher:
     def command(self, name: str, body: dict) -> dict:
         """One request of the page; the answer is the new state, or {"error": text}."""
         try:
-            if name == "browse":
-                return {"path": choose_iso()}
+            if name in ("browse", "browse-saves"):
+                return {"path": choose(folder=name == "browse-saves")}
             if name == "install":
                 self.install(str(body.get("iso", "")))
             elif name == "play":
@@ -436,7 +461,7 @@ class Launcher:
             elif name == "select":
                 self.select(str(body.get("profile", "")))
             elif name == "new-profile":
-                self.new_profile(str(body.get("name", "")))
+                self.new_profile(str(body.get("name", "")), str(body.get("saves", "")))
             elif name == "open-profile":
                 self.open_profile(str(body.get("profile", "")))
             elif name == "settings":
@@ -460,6 +485,12 @@ def handler(app: Launcher, port: int):
 
         def log_message(self, *arguments) -> None:  # pythonw has no stderr
             pass
+
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except ConnectionError:
+                pass  # the page closed: nothing to report in the terminal
 
         def allowed(self, token: str) -> bool:
             # Only this machine's launcher page: the address must be ours (a web page elsewhere

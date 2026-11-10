@@ -52,6 +52,21 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(text, SETTINGS.replace("aspect = 4:3", "aspect = 16:9").replace("volume = 20", "volume = 55"))
         self.assertEqual(launcher.apply_settings(SETTINGS, {}), SETTINGS)
 
+    def test_settings_saved_at_the_same_moment_are_all_kept(self):
+        # The page saves each change with a request of its own, and the server answers requests in parallel.
+        with tempfile.TemporaryDirectory() as temp:
+            file = Path(temp) / "settings.ini"
+            keys = [f"key{number}" for number in range(24)]
+            file.write_text("".join(f"{key} = old\n" for key in keys), encoding="utf-8")
+            with mock.patch.object(launcher, "SETTINGS", file):
+                app = launcher.Launcher("token")
+                threads = [threading.Thread(target=app.save_settings, args=({key: "new"},)) for key in keys]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+            self.assertEqual(file.read_text(encoding="utf-8"), "".join(f"{key} = new\n" for key in keys))
+
     def test_update_shows_the_changelog_entries_the_installed_version_lacks(self):
         local = "# Changelog\n\n## 1.0.0 (November 10, 2026)\n\n- The launcher.\n"
         remote = "# Changelog\n\n## 1.1.0 (December 1, 2026)\n\n- Faster.\n- Nicer.\n\n## 1.0.0 (November 10, 2026)\n\n- The launcher.\n"
@@ -71,6 +86,35 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(project.save_dir("Second run"), project.LOCAL / "profiles" / "Second run" / "saves")
         with self.assertRaises(RuntimeError):
             project.save_dir("../elsewhere")
+
+    def test_a_new_profile_can_start_with_a_copy_of_saves(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            save = temp / "elsewhere" / "local" / "saves" / "BESLES-54627-BD"
+            save.mkdir(parents=True)
+            (save / "icon.sys").write_bytes(b"icon")
+            (save / "BESLES-54627-BD").write_bytes(b"progress")
+            (temp / "elsewhere" / "local" / "states").mkdir()
+            (temp / "elsewhere" / "local" / "states" / "quick.bdrstate").write_bytes(b"state")
+            # What a player may point at: another installation's local folder, a memory card folder, one save.
+            for number, source in enumerate((save.parents[1], save.parent, save)):
+                launcher.copy_saves(source, temp / f"profile{number}")
+                self.assertEqual((temp / f"profile{number}" / "saves" / "BESLES-54627-BD" / "BESLES-54627-BD").read_bytes(), b"progress")
+            self.assertTrue((temp / "profile0" / "states" / "quick.bdrstate").is_file())
+            self.assertFalse((temp / "profile1" / "states").exists())
+            with self.assertRaises(ValueError):
+                launcher.copy_saves(temp / "elsewhere", temp / "profile9")
+            self.assertTrue((save / "icon.sys").is_file())  # copied, not moved
+
+            app = launcher.Launcher("token")
+            app.local = temp / "local"
+            app.local.mkdir()
+            app.new_profile("Imported", f'"{save.parent}"')  # as Explorer's "Copy as path" gives it
+            self.assertEqual(app.profile(), "Imported")
+            self.assertTrue((app.local / "profiles" / "Imported" / "saves" / "BESLES-54627-BD" / "icon.sys").is_file())
+            with self.assertRaises(ValueError):
+                app.new_profile("Broken", str(temp / "nowhere"))
+            self.assertEqual(launcher.profiles(app.local), ["Default", "Imported"])
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     def test_update_check_reads_a_real_git_remote(self):
