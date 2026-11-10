@@ -2,6 +2,10 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.1.2 (November 10, 2026)
+
+- **Browse buttons fixed**: the window to choose the ISO or a folder of saves opened behind the launcher, so nothing seemed to happen. It now opens in front of it.
+
 ## 1.1.1 (November 10, 2026)
 
 - **Settings tab redone**: the settings are grouped by subject, with switches, sliders and choices, and a line that says what each one does. A change is saved at once. To change a key, press + and then the key.

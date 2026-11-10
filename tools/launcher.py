@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
+import ctypes
 import hashlib
 import io
 import json
@@ -223,9 +224,16 @@ def console_python() -> str:
 def choose(folder: bool = False) -> str:
     """A native dialog for the ISO, or for a folder of saves; "" when cancelled or when the system has none we know."""
     if os.name == "nt":
+        # The dialog belongs to the launcher's window, where the click just came from: without an owner it
+        # opens behind that window. Another program's window in front is left alone.
+        user32, title = ctypes.windll.user32, ctypes.create_unicode_buffer(64)
+        owner = user32.GetForegroundWindow()
+        user32.GetWindowTextW(owner, title, 64)
+        owner = owner if title.value.startswith("Burnout Dominator Reversed") else 0
         kind, setup, picked = (("FolderBrowserDialog", "$dialog.Description = 'The folder that holds your saves'", "SelectedPath") if folder else
                                ("OpenFileDialog", "$dialog.Title = 'Burnout Dominator ISO'; $dialog.Filter = 'ISO image (*.iso)|*.iso|All files|*.*'", "FileName"))
-        script = ("Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form -Property @{TopMost=$true};"
+        script = ("Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.NativeWindow;"
+                  f"$owner.AssignHandle([IntPtr]{owner});"
                   f"$dialog = New-Object System.Windows.Forms.{kind}; {setup};"
                   f"if ($dialog.ShowDialog($owner) -eq 'OK') {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.{picked} }}")
         command = ["powershell", "-NoProfile", "-Command", script]
