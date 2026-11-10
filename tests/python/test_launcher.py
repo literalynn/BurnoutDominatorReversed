@@ -176,7 +176,8 @@ class LauncherTests(unittest.TestCase):
             with mock.patch.object(launcher, "ROOT", source), mock.patch.object(launcher, "CHANGELOG", source / "CHANGELOG.md"), \
                     mock.patch.object(launcher, "PORTABLE", portable):
                 self.assertEqual(launcher.update_state(pages.__getitem__),
-                                 {"behind": True, "new": [("1.1.0", "- Second.")], "zip": "https://example.invalid/source.zip"})
+                                 {"behind": True, "new": [("1.1.0", "- Second.")], "zip": "https://example.invalid/source.zip",
+                                  "exe": "https://example.invalid/exe"})
                 pages[launcher.LATEST_RELEASE] = json.dumps({"tag_name": "v1.0.0", "assets": []}).encode()
                 self.assertEqual(launcher.update_state(pages.__getitem__), {"behind": False, "new": []})
                 self.assertIn("error", launcher.update_state(lambda url: (_ for _ in ()).throw(OSError("offline"))))
@@ -199,6 +200,38 @@ class LauncherTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 launcher.sync_zip(archive({"../outside.txt": "no"}), target)
             self.assertFalse((Path(temp) / "outside.txt").exists())
+
+    def test_a_portable_update_replaces_the_program_and_the_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            portable = Path(temp).resolve()
+            source, exe = portable / "source", portable / "BurnoutDominator.exe"
+            source.mkdir()
+            exe.write_bytes(b"MZ old")
+            pages = {"https://example.invalid/source.zip": archive({"CHANGELOG.md": "## 1.1.0\n"}), "https://example.invalid/exe": b"MZ new"}
+            app = launcher.Launcher("token")
+            app.updates = {"behind": True, "zip": "https://example.invalid/source.zip", "exe": "https://example.invalid/exe"}
+            downloads = threading.Event()  # held until the test has looked at the state during the download
+            with mock.patch.object(launcher, "ROOT", source), mock.patch.object(launcher, "launcher_exe", lambda: exe), \
+                    mock.patch.object(launcher, "fetch", lambda url: downloads.wait(10) and pages[url]), \
+                    mock.patch.object(launcher, "install_status", lambda work, project: {"ISO found": False}):
+                app.update()
+                self.assertEqual(app.state()["running"], "Update")  # the launcher does not quit while it downloads
+                with self.assertRaises(ValueError):
+                    app.start("Game", ["no command"])
+                downloads.set()
+                for _ in range(200):
+                    if not app.updating:
+                        break
+                    threading.Event().wait(0.05)
+            self.assertEqual(app.busy(), "")
+            self.assertEqual(app.restart, [])
+            self.assertEqual((source / "CHANGELOG.md").read_text(), "## 1.1.0\n")
+            self.assertEqual(exe.read_bytes(), b"MZ new")
+            self.assertEqual(exe.with_name("BurnoutDominator.exe.old").read_bytes(), b"MZ old")
+            # A download that is not a program changes nothing.
+            with self.assertRaises(ValueError):
+                launcher.replace_exe(b"<html>", exe)
+            self.assertEqual(exe.read_bytes(), b"MZ new")
 
     def test_the_one_file_downloads_the_project_next_to_itself_and_starts_its_launcher(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -259,9 +292,17 @@ class LauncherTests(unittest.TestCase):
         status, state = post("state", "secret", {})
         self.assertEqual(status, 200)
         self.assertEqual(list(state["steps"]), ["ISO found", "Disc files extracted", "Game code generated", "Game built"])
+        # Both windows draw the Settings tab from launcher_settings.json, which comes with the state.
+        self.assertEqual(state["table"]["buttons"][0], ["up", "Up", "menus"])
+        rows = [row for column in state["table"]["columns"] for group in column for row in group["rows"]]
+        self.assertTrue(all(row["key"] and row["label"] for row in rows))
+        self.assertNotIn(b"const SETTINGS", page)
         self.assertIn("error", post("play", "secret", {"profile": "no such profile"})[1])
         self.assertIn("error", post("new-profile", "secret", {"name": "../x"})[1])
         self.assertIn("error", post("no-such-command", "secret", {})[1])
+        # A second start of the window asks the open one to come to the front.
+        self.assertEqual(state["front"], 0)
+        self.assertEqual(post("front", "secret", {})[1]["front"], 1)
 
 
 if __name__ == "__main__":

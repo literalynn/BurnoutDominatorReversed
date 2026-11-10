@@ -85,7 +85,7 @@ sudo apt install git python3 cmake ninja-build g++ pkg-config libgl-dev libx11-d
   libxcursor-dev libxi-dev libasound2-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
 ```
 
-Then download [`BurnoutDominator.py`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.py) into an empty folder and run `python3 BurnoutDominator.py`. It works like the Windows file; the launcher opens in your browser.
+Then download [`BurnoutDominator.py`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.py) into an empty folder and run `python3 BurnoutDominator.py`. It works like the Windows file; at its first start and after each update it builds the launcher's window (a few minutes the first time). If that cannot be done, it says why and the launcher opens in your browser instead.
 
 ### From a Git checkout
 
@@ -98,6 +98,8 @@ python tools/launcher.py        # Windows: Launcher.bat
 The game's files then go to a work directory outside the checkout (`C:\bdr-work` on Windows, `~/bdr-work` elsewhere). Without the launcher: `python tools/install.py --iso <ISO>`, then `python tools/project.py run`. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the details.
 
 ## The launcher
+
+A window of its own ([tools/launcher/](tools/launcher/), drawn with raylib like the game) over [tools/launcher.py](tools/launcher.py), which does the work. Closing the window does not stop a running game; starting the launcher while its window is open brings that window to the front. From a Git checkout, `python tools/launcher.py` shows the same tabs as a page ([tools/launcher.html](tools/launcher.html)).
 
 | Tab | |
 |---|---|

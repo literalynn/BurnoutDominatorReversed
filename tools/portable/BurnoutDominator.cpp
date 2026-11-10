@@ -2,12 +2,12 @@
 //
 // Put it in an empty folder and start it. It brings into that folder a Python and a Git
 // (official builds, checked against the SHA-256 below) and the project's latest release, then
-// starts the project's launcher (source\tools\launcher.py), which does everything else: the
-// ISO, the build, the game, updates. Nothing is written outside the folder, so it can be moved.
+// opens the launcher's window (tools/launcher/launcher.cpp), whose program, the project's
+// source\tools\launcher.py, does everything else: the ISO, the build, the game, updates.
+// Nothing is written outside the folder, so it can be moved.
 //
-// Build (the release workflow does it):
-//   rc /nologo /fo BurnoutDominator.res BurnoutDominator.rc
-//   cl /nologo /std:c++20 /O2 /EHsc /MT /DUNICODE /D_UNICODE BurnoutDominator.cpp BurnoutDominator.res /link /SUBSYSTEM:WINDOWS
+// Build (the release workflow does it), with the window and raylib:
+//   cmake -S tools/launcher -B build/launcher && cmake --build build/launcher --config Release
 #include <windows.h>
 #include <bcrypt.h>
 #include <urlmon.h>
@@ -26,6 +26,8 @@
 #pragma comment(lib, "gdi32.lib")
 
 namespace fs = std::filesystem;
+
+int launcherMain(int argc, char **argv); // the launcher's window: ../launcher/launcher.cpp
 
 namespace
 {
@@ -56,7 +58,7 @@ namespace
     std::wstring g_status = L"Starting...";
     std::wstring g_error;
 
-    fs::path folder()
+    fs::path program()
     {
         std::wstring path(MAX_PATH, L'\0');
         for (;;)
@@ -65,10 +67,21 @@ namespace
             if (length < path.size())
             {
                 path.resize(length);
-                return fs::path(path).parent_path();
+                return path;
             }
             path.resize(path.size() * 2);
         }
+    }
+
+    fs::path folder()
+    {
+        return program().parent_path();
+    }
+
+    std::string utf8(const fs::path &path)
+    {
+        const std::u8string text = path.u8string();
+        return std::string(text.begin(), text.end());
     }
 
     std::string sha256(const fs::path &file)
@@ -259,7 +272,9 @@ namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
-    const fs::path root = folder();
+    const fs::path exe = program(), root = exe.parent_path();
+    std::error_code ignored;
+    fs::remove(exe.wstring() + L".old", ignored); // the program an update replaced
     if (!prepared(root))
     {
         WNDCLASSW type{};
@@ -289,10 +304,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     // The launcher reads this to keep everything inside the folder. A Python configured on the
     // PC must not leak into ours.
     SetEnvironmentVariableW(L"BDR_PORTABLE", root.c_str());
+    SetEnvironmentVariableW(L"BDR_LAUNCHER_EXE", exe.c_str()); // an update puts the release's program in its place
     SetEnvironmentVariableW(L"PYTHONHOME", nullptr);
     SetEnvironmentVariableW(L"PYTHONPATH", nullptr);
-    const std::wstring command = L"\"" + (root / L"python" / L"pythonw.exe").wstring() + L"\" \"" + (root / L"source" / L"tools" / L"launcher.py").wstring() + L"\"";
-    if (run(command, root, false) == -1)
+    const fs::path python = root / L"python" / L"pythonw.exe", script = root / L"source" / L"tools" / L"launcher.py";
+    std::string arguments[] = {"BurnoutDominator", "--python", utf8(python), "--script", utf8(script)};
+    char *argv[] = {arguments[0].data(), arguments[1].data(), arguments[2].data(), arguments[3].data(), arguments[4].data()};
+    const int code = launcherMain(5, argv);
+    if (code == 3) // an update replaced this program: the new one takes over
+        run(L"\"" + exe.wstring() + L"\"", root, false);
+    if (code == 2) // no window could open (no OpenGL 3.3): the launcher as a page, in an Edge window
+        run(L"\"" + python.wstring() + L"\" \"" + script.wstring() + L"\"", root, false);
+    if (code == 1)
     {
         MessageBoxW(nullptr, L"The launcher could not be started. Delete the python and source folders next to this file, then start again.",
                     L"Burnout Dominator Reversed", MB_ICONERROR);

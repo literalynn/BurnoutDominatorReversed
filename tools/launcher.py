@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The launcher: the ISO, the installation, save profiles, the game with its console,
-the settings and updates, on a local page shown in an app window.
+the settings and updates. It answers the commands of the launcher's window (tools/launcher/, which a portable
+installation starts) and serves the same thing as a local page (launcher.html), shown in an app window or a browser.
 
 Usage: BurnoutDominator.exe (portable installation), Launcher.bat, or  python3 tools/launcher.py
 Python's standard library only: a portable installation runs it with the embeddable Python.
@@ -161,8 +162,8 @@ def fetch(url: str) -> bytes:
 
 
 def update_state(download=fetch) -> dict:
-    """{"error": text}, or {"behind": whether GitHub has something newer, "new": its changelog
-    entries, "zip": the release's source archive when there is no Git copy to pull into}."""
+    """{"error": text}, or {"behind": whether GitHub has something newer, "new": its changelog entries,
+    "zip" and "exe": the release's source archive and Windows program when there is no Git copy to pull into}."""
     local = CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.is_file() else ""
     if (ROOT / ".git").exists():
         try:
@@ -182,10 +183,11 @@ def update_state(download=fetch) -> dict:
         if version_key(tag) <= version_key(installed_version()):
             return {"behind": False, "new": []}
         archive = next(asset["browser_download_url"] for asset in release["assets"] if asset["name"] == "source.zip")
+        program = next((asset["browser_download_url"] for asset in release["assets"] if asset["name"] == "BurnoutDominator.exe"), "")
         remote = download(f"https://raw.githubusercontent.com/{REPOSITORY}/{tag}/CHANGELOG.md").decode("utf-8")
     except (OSError, ValueError, KeyError, StopIteration) as error:
         return {"error": f"GitHub could not be read: {error}"}
-    return {"behind": True, "new": new_entries(local, remote), "zip": archive}
+    return {"behind": True, "new": new_entries(local, remote), "zip": archive, "exe": program}
 
 
 def sync_zip(data: bytes, target: Path) -> tuple[int, int]:
@@ -213,6 +215,26 @@ def sync_zip(data: bytes, target: Path) -> tuple[int, int]:
     return written, len(stale)
 
 
+def launcher_exe() -> Path | None:
+    """BurnoutDominator.exe of a portable installation on Windows: an update replaces it with the release's."""
+    if not PORTABLE or os.name != "nt":
+        return None
+    exe = Path(os.environ.get("BDR_LAUNCHER_EXE") or PORTABLE / "BurnoutDominator.exe")  # older ones did not name themselves
+    return exe if exe.is_file() else None
+
+
+def replace_exe(data: bytes, exe: Path) -> None:
+    """Put a new program in place of `exe`, which may be running: Windows lets a running program be renamed, not
+    overwritten. The old one stays as <name>.old until the new one deletes it."""
+    if not data.startswith(b"MZ"):
+        raise ValueError("the downloaded BurnoutDominator.exe is not a program")
+    new, old = exe.with_name(exe.name + ".new"), exe.with_name(exe.name + ".old")
+    new.write_bytes(data)
+    old.unlink(missing_ok=True)
+    exe.replace(old)
+    new.replace(exe)
+
+
 def console_python() -> str:
     """python.exe next to the pythonw.exe that runs the launcher: children need their output."""
     exe = Path(sys.executable)
@@ -236,9 +258,15 @@ def choose(folder: bool = False) -> str:
                   f"$dialog = New-Object System.Windows.Forms.{kind}; {setup};"
                   f"if ($dialog.ShowDialog($owner) -eq 'OK') {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.{picked} }}")
         command = ["powershell", "-NoProfile", "-Command", script]
+    elif sys.platform == "darwin":
+        command = ["osascript", "-e", 'POSIX path of (choose folder with prompt "The folder that holds your saves")' if folder else
+                   'POSIX path of (choose file with prompt "Burnout Dominator ISO")']
     elif shutil.which("zenity"):
         command = ["zenity", "--file-selection"] + (["--directory", "--title=The folder that holds your saves"] if folder else
                                                     ["--title=Burnout Dominator ISO", "--file-filter=*.iso"])
+    elif shutil.which("kdialog"):
+        command = ["kdialog", "--title", "The folder that holds your saves", "--getexistingdirectory", str(Path.home())] if folder else \
+                  ["kdialog", "--title", "Burnout Dominator ISO", "--getopenfilename", str(Path.home()), "*.iso"]
     else:
         return ""
     result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
@@ -278,11 +306,13 @@ class Launcher:
         self.revision = 0  # bumped whenever the page should read the state again
         self.process: subprocess.Popen | None = None
         self.running = ""  # what self.process is, for the page
+        self.updating = False  # a portable update is downloading: the launcher must not quit in the middle
         self.phase = ""  # the installer's last "==> ..." line: the step it is at
         self.updates: dict = {"note": "Not checked yet.", "behind": False, "new": []}
         self.clients = 0
         self.client_seen = time.monotonic()
         self.restart: list[str] | None = None  # set to the new launcher's arguments after an update
+        self.front = 0  # bumped when the launcher's window is started again: the open one comes to the front
         try:
             install.check_prerequisites(self.work, self.work / "build", 0)
             self.missing = ""
@@ -321,6 +351,10 @@ class Launcher:
         name = self.saved().get("profile", DEFAULT_PROFILE)
         return name if name in self.profiles() else DEFAULT_PROFILE
 
+    def busy(self) -> str:
+        """What runs, for the page; "" when nothing does."""
+        return "Update" if self.updating else self.running if self.process else ""
+
     def state(self) -> dict:
         status = install_status(self.work, self.project)
         recorded = install.recorded_iso(self.local)
@@ -329,19 +363,19 @@ class Launcher:
             item.pop("closed", None)
         entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8")) if CHANGELOG.is_file() else []
         return {"iso": str(recorded or ""), "steps": status, "ready": all(status.values()),
-                "running": self.running if self.process else "", "phase": self.phase if self.process else "",
+                "running": self.busy(), "phase": self.phase if self.process else "",
                 "work": str(self.work),
                 "profiles": self.profiles(), "profile": self.profile(), "saves": str(self.root or ""),
-                "settings": settings, "settings_stamp": SETTINGS.stat().st_mtime_ns if SETTINGS.is_file() else 0,
+                "settings": settings, "settings_stamp": SETTINGS.stat().st_mtime_ns if SETTINGS.is_file() else 0, "table": SETTINGS_TABLE,
                 "version": installed_version(), "changelog": entries, "updates": self.updates,
-                "missing": self.missing, "build": BUILD}
+                "missing": self.missing, "build": BUILD, "front": self.front}
 
     # --- Commands -----------------------------------------------------------
 
     def start(self, title: str, command: list[str], done=None) -> None:
         """Run one command at a time, its output in the console; done(exit code) follows."""
-        if self.process:
-            raise ValueError(f"{self.running} is still running.")
+        if self.busy():
+            raise ValueError(f"{self.busy()} is still running.")
         self.write(f"\n=== {title} ===\n")
         process = subprocess.Popen(command, cwd=ROOT, env=dict(os.environ, PYTHONUTF8="1"), stdin=subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace",
@@ -428,31 +462,51 @@ class Launcher:
             self.updates = {"note": "Up to date.", "behind": False, "new": []}
         else:
             entries = found["new"] or [("Technical changes", "Nothing a player would notice.")]
-            self.updates = {"note": "An update is available.", "behind": True, "new": entries, "zip": found.get("zip", "")}
+            self.updates = {"note": "An update is available.", "behind": True, "new": entries, "zip": found.get("zip", ""),
+                            "exe": found.get("exe", "")}
         self.touch()
 
     def update(self) -> None:
         """Bring the project up to date, then let a new launcher (this file may have changed) rebuild the game."""
-        if self.process:
-            raise ValueError(f"{self.running} is still running.")
+        if self.busy():
+            raise ValueError(f"{self.busy()} is still running.")
         if (ROOT / ".git").exists():
             self.start("Update", ["git", "pull", "--ff-only"], lambda code: self.updated(code == 0))
             return
-        archive = self.updates.get("zip")
+        archive, exe = self.updates.get("zip"), launcher_exe()
         if not archive:
             raise ValueError("Check for updates first.")
+        program = self.updates.get("exe", "") if exe else ""
 
         def download() -> None:
-            self.write(f"\n=== Update ===\nDownloading {archive}\n")
+            self.write(f"\n=== Update ===\nDownloading {archive}\n" + (f"Downloading {program}\n" if program else ""))
             try:
-                written, removed = sync_zip(fetch(archive), ROOT)
+                source, new_exe = fetch(archive), fetch(program) if program else b""  # both before anything changes
+                if new_exe:
+                    replace_exe(new_exe, exe)  # first: it checks the download before it touches anything
+                    self.write(f"{exe.name} replaced.\n")
+                written, removed = sync_zip(source, ROOT)
                 self.write(f"{written} files changed, {removed} removed.\n")
                 self.updated(True)
             except (OSError, ValueError, zipfile.BadZipFile) as error:
                 self.write(f"The update did not go through: {error}\n")
+            finally:
+                self.updating = False
             self.touch()
 
+        self.updating = True
         threading.Thread(target=download, daemon=True).start()
+        self.touch()
+
+    def replace_old_exe(self) -> None:
+        """A BurnoutDominator.exe from before the launcher had a window of its own started this version: put this
+        version's in place, as an update now does."""
+        url = f"https://github.com/{REPOSITORY}/releases/download/v{installed_version()}/BurnoutDominator.exe"
+        try:
+            replace_exe(fetch(url), launcher_exe())
+            self.write("BurnoutDominator.exe was updated: from its next start, the launcher opens in a window of its own.\n")
+        except (OSError, ValueError) as error:
+            self.write(f"BurnoutDominator.exe could not be updated: {error}\n")
 
     def updated(self, success: bool) -> None:
         if success:
@@ -470,6 +524,9 @@ class Launcher:
                 self.install(str(body.get("iso", "")))
             elif name == "play":
                 self.play(str(body.get("profile", "")))
+            elif name == "front":
+                self.front += 1
+                self.touch()
             elif name == "stop":
                 self.stop()
             elif name == "select":
@@ -601,6 +658,8 @@ def serve(arguments: list[str]) -> int:
         return 0
     token = arguments[arguments.index("--token") + 1] if "--token" in arguments else None
     wanted = [int(arguments[arguments.index("--port") + 1])] if "--port" in arguments else list(PORTS) + [0]
+    # The launcher's window names its own file: it finds this launcher there when it opens again while the game runs.
+    session = Path(arguments[arguments.index("--session") + 1]) if "--session" in arguments else session_file()
     app = Launcher(token)
     server = None
     for port in wanted:
@@ -617,13 +676,15 @@ def serve(arguments: list[str]) -> int:
     port = server.server_address[1]
     server.RequestHandlerClass = handler(app, port)
     server.daemon_threads = True
-    session_file().write_text(json.dumps({"port": port, "token": app.token}), encoding="utf-8")
+    session.write_text(json.dumps({"port": port, "token": app.token}), encoding="utf-8")
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/?t={app.token}"
     print(url, flush=True)
     if "--no-window" not in arguments and "--token" not in arguments:
         open_window(url)
     threading.Thread(target=app.check_updates, daemon=True).start()
+    if launcher_exe() and not os.environ.get("BDR_LAUNCHER_EXE") and installed_version():
+        threading.Thread(target=app.replace_old_exe, daemon=True).start()
     if "--install" in arguments and install_status(app.work, app.project)["ISO found"]:
         app.install()
     started = time.monotonic()
@@ -634,19 +695,25 @@ def serve(arguments: list[str]) -> int:
             # so the open page just carries on (it reloads itself when it sees the new build).
             server.shutdown()
             server.server_close()
-            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--token", app.token, *app.restart],
-                             cwd=ROOT, creationflags=NO_WINDOW)
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--token", app.token,
+                              "--session", str(session), *app.restart], cwd=ROOT, creationflags=NO_WINDOW)
             return 0
         idle = time.monotonic() - max(app.client_seen, started)
         seen = app.client_seen > started or app.clients
-        if "--no-window" not in arguments and not app.clients and not app.process and idle > (4 if seen else 90):
-            session_file().unlink(missing_ok=True)
+        if "--no-window" not in arguments and not app.clients and not app.busy() and idle > (4 if seen else 90):
+            session.unlink(missing_ok=True)
             return 0  # the window was closed
 
 
 PAGE = Path(__file__).with_name("launcher.html").read_text(encoding="utf-8").replace(
     "__ICON__", base64.b64encode(Path(__file__).with_name("launcher.png").read_bytes()).decode("ascii"))
-BUILD = hashlib.sha256((PAGE + Path(__file__).read_text(encoding="utf-8")).encode("utf-8")).hexdigest()[:12]
+# The Settings tab of the page and of the launcher's window (tools/launcher/): "columns" of cards, one row per line of
+# settings.ini. A row without a control named (choice, range, select, number, text) is an on/off switch; "and" is a
+# second number on the same row. A setting the table does not name appears under "Other", as text. The limits are the
+# game's own. "buttons": the PS2 buttons in the order of settings.ini (key_up...), with what the game uses them for.
+TABLE = Path(__file__).with_name("launcher_settings.json").read_text(encoding="utf-8")
+SETTINGS_TABLE = json.loads(TABLE)
+BUILD = hashlib.sha256((PAGE + TABLE + Path(__file__).read_text(encoding="utf-8")).encode("utf-8")).hexdigest()[:12]
 
 
 def main() -> int:
@@ -657,7 +724,7 @@ def main() -> int:
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, str(error), "Burnout Dominator Reversed", 0x10)
         print(error, file=sys.stderr)
-        return 1
+        return 2  # BurnoutDominator.exe: already reported
 
 
 if __name__ == "__main__":
