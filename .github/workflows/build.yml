@@ -44,6 +44,13 @@ jobs:
           ./build/burnout_overrides_tests
           ./build/vu1_native_tests
 
+      - name: Launcher window
+        # What BurnoutDominator.py builds on Linux, with the raylib the build above fetched.
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then export CC=gcc CXX=g++; else export CC=clang CXX=clang++; fi
+          cmake -S tools/launcher -B build/launcher -G Ninja -DFETCHCONTENT_SOURCE_DIR_RAYLIB=$PWD/build/_deps/raylib-src
+          cmake --build build/launcher
+
   windows-msvc:
     strategy:
       fail-fast: false
@@ -81,6 +88,13 @@ jobs:
           .\build\ps2xIOP\Release\ps2_spu2_tests.exe || exit /b 1
           .\build\Release\burnout_overrides_tests.exe || exit /b 1
           .\build\Release\vu1_native_tests.exe || exit /b 1
+
+      - name: Launcher window
+        # BurnoutDominator.exe as the release workflow builds it.
+        shell: cmd
+        run: |
+          cmake -S tools/launcher -B build/launcher -A x64 -DFETCHCONTENT_SOURCE_DIR_RAYLIB=%CD:\=/%/build/_deps/raylib-src || exit /b 1
+          cmake --build build/launcher --config Release || exit /b 1
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:

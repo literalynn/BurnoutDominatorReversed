@@ -1,0 +1,40 @@
+{
+  "columns": [
+    [
+      {"title": "Display", "rows": [
+        {"key": "aspect", "label": "Picture shape", "help": "16:9 is real widescreen: the game draws a wider view, nothing is stretched.", "choice": ["4:3", "16:9", "stretch"]},
+        {"key": "fullscreen", "label": "Start in full screen", "help": "F11 or Alt+Enter switches while you play."},
+        {"key": "window_width", "and": "window_height", "label": "Window size", "help": "In pixels, when the game starts in a window.", "number": [320, 16384]},
+        {"key": "refresh_rate", "label": "Frame rate", "help": "60 is the original. From 120 the whole game runs that many frames a second: smoother, same speed, more work for the processor.",
+         "select": ["50", "60", "120", "144", "165", "240", "300", "360", "500"], "unit": " fps"},
+        {"key": "vsync", "label": "Vertical sync", "help": "Waits for the monitor: no tearing."},
+        {"key": "fps_limit", "label": "Display limit", "help": "The most frames a second the window shows. 0: no limit.", "number": [0, 10000]},
+        {"key": "show_fps", "label": "Frame counter", "help": "Frames a second, in the window's corner."}]},
+      {"title": "Sound", "rows": [
+        {"key": "volume", "label": "Volume", "range": [0, 100], "unit": "%"}]},
+      {"title": "Gamepad", "rows": [
+        {"key": "vibration", "label": "Vibration"},
+        {"key": "stick_deadzone", "label": "Stick dead zone", "help": "How far a stick moves before it counts.", "range": [0, 90], "unit": "%"},
+        {"key": "gamepad_mappings", "label": "Extra mappings file", "help": "A gamecontrollerdb.txt for a pad the game does not recognise. Usually empty.", "text": true}]}
+    ],
+    [
+      {"title": "Picture quality", "rows": [
+        {"key": "high_resolution", "label": "High resolution", "help": "Twice the PS2's resolution with 4 or 8 samples, four times with 16."},
+        {"key": "super_sampling", "label": "Samples per pixel", "help": "More samples: smoother edges, more work for the graphics card.", "choice": ["1", "2", "4", "8", "16"]},
+        {"key": "fxaa", "label": "FXAA", "help": "Smooths the edges of the finished picture."},
+        {"key": "hud_smoothing", "label": "Smooth HUD", "help": "The race display and the menu art smooth instead of blocky in high resolution."},
+        {"key": "progressive_scan", "label": "Progressive scan", "help": "Whole frames instead of interlaced fields: no combed lines."},
+        {"key": "smooth_scaling", "label": "Smooth enlargement", "help": "Off: sharp pixels."}]},
+      {"title": "Performance", "rows": [
+        {"key": "gs_thread", "label": "Graphics on a second core", "help": "The PS2's graphics units run on a processor core of their own."},
+        {"key": "fast_loading", "label": "Fast loading", "help": "Loading screens run faster than real time."},
+        {"key": "keep_speed", "label": "Keep the game's speed", "help": "When the graphics cannot keep up, the game draws fewer frames instead of slowing down."}]}
+    ]
+  ],
+  "buttons": [
+    ["up", "Up", "menus"], ["down", "Down", "menus"], ["left", "Left", "steer"], ["right", "Right", "steer"],
+    ["cross", "✕ Cross", "accelerate, select"], ["circle", "○ Circle"], ["square", "□ Square", "brake"],
+    ["triangle", "△ Triangle", "back"], ["l1", "L1"], ["r1", "R1", "boost, Impact Time"], ["l2", "L2"], ["r2", "R2"],
+    ["start", "Start"], ["select", "Select"], ["l3", "L3"], ["r3", "R3"]
+  ]
+}

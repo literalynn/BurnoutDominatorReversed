@@ -1,5 +1,6 @@
 // The icon and the description Windows shows for BurnoutDominator.exe.
 1 ICON "BurnoutDominator.ico"
+GLFW_ICON ICON "BurnoutDominator.ico" // the launcher's window (GLFW looks for this name)
 
 1 VERSIONINFO
 FILEVERSION 1, 1, 0, 0
