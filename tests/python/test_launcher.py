@@ -77,15 +77,39 @@ class LauncherTests(unittest.TestCase):
     def test_profiles_have_their_own_save_folders(self):
         with tempfile.TemporaryDirectory() as temp:
             local = Path(temp)
-            self.assertEqual(launcher.profiles(local), ["Default"])
+            self.assertEqual(launcher.profiles(local / "profiles"), ["Default"])
             (local / "profiles" / "Second run" / "saves").mkdir(parents=True)
             (local / "profiles" / "bad;name").mkdir()
-            self.assertEqual(launcher.profiles(local), ["Default", "Second run"])
+            self.assertEqual(launcher.profiles(local / "profiles"), ["Default", "Second run"])
         self.assertEqual(project.save_dir(None), project.LOCAL / "saves")
         self.assertEqual(project.save_dir("Default"), project.LOCAL / "saves")
         self.assertEqual(project.save_dir("Second run"), project.LOCAL / "profiles" / "Second run" / "saves")
         with self.assertRaises(RuntimeError):
             project.save_dir("../elsewhere")
+
+    def test_a_portable_installation_keeps_its_saves_in_its_save_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp).resolve()
+            local, root = folder / "work" / "local", folder / "save"
+            with mock.patch.dict("os.environ", {"BDR_PORTABLE": str(folder)}):
+                self.assertEqual(project.profiles_root(), root)
+                self.assertEqual(project.save_dir(None), root / "Default" / "saves")
+                self.assertEqual(project.save_dir("Second run"), root / "Second run" / "saves")
+            # Saves from before the save folder existed move into it, once; what is already there stays.
+            for name in ("saves/BESLES-54627-BD/progress", "states/quick.bdrstate", "profiles/Second run/saves/BESLES-54627-BD/progress"):
+                (local / name).parent.mkdir(parents=True, exist_ok=True)
+                (local / name).write_text(name, encoding="utf-8")
+            (root / "Second run").mkdir(parents=True)
+            project.adopt_saves(local, root)
+            self.assertEqual((root / "Default" / "saves" / "BESLES-54627-BD" / "progress").read_text(encoding="utf-8"),
+                             "saves/BESLES-54627-BD/progress")
+            self.assertTrue((root / "Default" / "states" / "quick.bdrstate").is_file())
+            self.assertFalse((local / "saves").exists())
+            self.assertTrue((local / "profiles" / "Second run" / "saves" / "BESLES-54627-BD" / "progress").is_file())
+            self.assertEqual(launcher.profiles(root), ["Default", "Second run"])
+            project.adopt_saves(local, root)
+            project.adopt_saves(local, None)  # a Git checkout: nothing moves
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["Default", "Second run"])
 
     def test_a_new_profile_can_start_with_a_copy_of_saves(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -114,7 +138,7 @@ class LauncherTests(unittest.TestCase):
             self.assertTrue((app.local / "profiles" / "Imported" / "saves" / "BESLES-54627-BD" / "icon.sys").is_file())
             with self.assertRaises(ValueError):
                 app.new_profile("Broken", str(temp / "nowhere"))
-            self.assertEqual(launcher.profiles(app.local), ["Default", "Imported"])
+            self.assertEqual(app.profiles(), ["Default", "Imported"])
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     def test_update_check_reads_a_real_git_remote(self):

@@ -35,6 +35,12 @@ if(BDR_BUILD_GAME)
             "${BDR_GENERATED_DIR}/ps2_recompiled_stubs.h")
     endif()
     set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME burnout_dominator)
+    if(WIN32)
+        # The icon of the executable and, through the "GLFW_ICON" resource that GLFW looks for, of its window.
+        file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/burnout_icon.rc"
+             CONTENT "GLFW_ICON ICON \"${PROJECT_SOURCE_DIR}/tools/portable/BurnoutDominator.ico\"\n")
+        target_sources(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/burnout_icon.rc")
+    endif()
     # Unity builds amortize heavy R5900 headers across generated functions.
     set_target_properties(ps2EntryRunner PROPERTIES UNITY_BUILD_BATCH_SIZE "${BDR_UNITY_BATCH_SIZE}")
     if(MSVC)

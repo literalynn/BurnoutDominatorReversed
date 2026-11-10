@@ -76,7 +76,7 @@ The first installation translates and compiles the game on your PC: 30 to 90 min
 
 <img src="docs/screenshots/launcher.jpg" width="80%" alt="The launcher: ISO, installation steps, save profile, Play">
 
-Everything stays in that one folder: the project (`source`), the game's files and your saves (`work`) and `settings.ini`. The folder can be moved or copied to another drive; the first update after a move builds everything again. To uninstall, delete the folder. Keep the ISO where it is: the game reads it at every launch.
+Everything stays in that one folder: the project (`source`), the game's files (`work`), your saves (`save`) and `settings.ini`. The folder can be moved or copied to another drive; the first update after a move builds everything again. To uninstall, delete the folder. Keep the ISO where it is: the game reads it at every launch.
 
 ### Linux
 
@@ -106,7 +106,7 @@ The game's files then go to a work directory outside the checkout (`C:\bdr-work`
 | **Settings** | picture, sound, gamepad, keys. Changes are saved at once. |
 | **Updates** | checks GitHub, shows what a new version brings ([CHANGELOG.md](CHANGELOG.md)) and installs it; only what changed is built again. |
 
-**Save profiles** each have their own memory card and save states; the first one is *Default*. *New* creates one, empty or with a copy of the saves in another folder (another installation's, for example).
+**Save profiles** each have their own memory card and save states; the first one is *Default*. They are the folders of `save` in the installation folder (in a Git checkout, of the work directory's `local`). *New* creates one, empty or with a copy of the saves in another folder (another installation's, for example).
 
 ## Controls
 

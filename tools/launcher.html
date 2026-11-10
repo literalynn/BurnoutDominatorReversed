@@ -191,11 +191,11 @@ code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
               <input type="text" class="wide" id="new-saves" placeholder="Optional: a folder of saves to copy into it" spellcheck="false">
               <button class="btn" id="browse-saves">Browse</button>
             </div>
-            <p class="hint">To bring saves from elsewhere, give their folder: a save folder (it holds icon.sys), the folder above it, or another
-              installation's <code>work\local</code> folder. They are copied; the originals stay where they are.</p>
+            <p class="hint">To bring saves from elsewhere, give their folder: a save folder (it holds icon.sys), the folder above it, or a profile's
+              folder (another installation's <code>save\Default</code>, or its <code>work\local</code>). They are copied; the originals stay where they are.</p>
             <div class="row" style="margin-top:10px"><button class="btn primary" id="create-profile">Create the profile</button></div>
           </div>
-          <p class="hint">Each profile has its own memory card and save states.</p>
+          <p class="hint" id="profile-hint">Each profile has its own memory card and save states.</p>
         </div>
       </div>
       <div class="card launch">
@@ -541,6 +541,7 @@ function render(s) {
     select.textContent = "";
     for (const name of s.profiles) select.add(new Option(name, name, false, name === s.profile));
   }
+  $("profile-hint").textContent = "Each profile has its own memory card and save states" + (s.saves ? ", in " + s.saves + "." : ".");
   $("install").disabled = busy;
   $("go").disabled = busy || !s.ready;
   $("stop").disabled = $("stop2").disabled = !busy;

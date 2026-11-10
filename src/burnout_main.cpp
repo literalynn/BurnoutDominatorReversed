@@ -473,7 +473,7 @@ int main(int argc, char** argv) {
         if (options.headless) {
             if (!runtime.memory().initialize() || !runtime.syncCoreSubsystems())
                 throw std::runtime_error("Memory/core initialization failed");
-        } else if (!runtime.initialize("Burnout Dominator - recompilation experiment"))
+        } else if (!runtime.initialize("Burnout Dominator"))
             throw std::runtime_error("Graphics/audio initialization failed");
         if (!runtime.loadELF(options.elf.string()))
             throw std::runtime_error("ELF loading failed");

@@ -2,6 +2,11 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.1.3 (November 10, 2026)
+
+- **A `save` folder**: in an installation made with `BurnoutDominator.exe`, your saves are now in the `save` folder next to it, one folder per profile (`save\Default`...). The saves you already have move there by themselves at the launcher's next start.
+- The game's window and its executable carry the game's icon, and the window is titled "Burnout Dominator".
+
 ## 1.1.2 (November 10, 2026)
 
 - **Browse buttons fixed**: the window to choose the ISO or a folder of saves opened behind the launcher, so nothing seemed to happen. It now opens in front of it.

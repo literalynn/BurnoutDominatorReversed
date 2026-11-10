@@ -39,7 +39,7 @@ if PORTABLE:
         os.environ["PATH"] = str(PORTABLE / "git" / "cmd") + os.pathsep + os.environ.get("PATH", "")
 sys.path.insert(0, str(ROOT / "tools"))
 import install  # noqa: E402
-from project import DEFAULT_PROFILE, PROFILE_NAME, settings_file  # noqa: E402
+from project import DEFAULT_PROFILE, PROFILE_NAME, adopt_saves, profile_dir, profiles_root, settings_file  # noqa: E402
 
 SETTINGS = settings_file()
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -67,9 +67,8 @@ def install_status(work: Path, lock: dict) -> dict[str, bool]:
             "Game built": install.find_game(work / "build") is not None}
 
 
-def profiles(local: Path) -> list[str]:
-    """Save profiles: the default one, then the folders of <work>/local/profiles."""
-    folder = local / "profiles"
+def profiles(folder: Path) -> list[str]:
+    """Save profiles: the default one, then the folders of `folder`."""
     names = sorted(p.name for p in folder.iterdir() if p.is_dir() and PROFILE_NAME.fullmatch(p.name)) if folder.is_dir() else []
     return [DEFAULT_PROFILE] + [name for name in names if name != DEFAULT_PROFILE]
 
@@ -270,6 +269,8 @@ class Launcher:
         self.project = install.read_json(ROOT / "project.json")
         self.work = work_dir()
         self.local = self.work / "local"
+        self.root = profiles_root()  # <folder>/save in a portable installation, None in a Git checkout
+        adopt_saves()
         self.token = token or secrets.token_hex(16)
         self.changed = threading.Condition()
         self.lines: list[str] = []  # the console; line number = first + index
@@ -313,9 +314,12 @@ class Launcher:
         except (OSError, ValueError):
             return {}  # no choice remembered yet, or an unreadable file: the default profile
 
+    def profiles(self) -> list[str]:
+        return profiles(self.root or self.local / "profiles")
+
     def profile(self) -> str:
         name = self.saved().get("profile", DEFAULT_PROFILE)
-        return name if name in profiles(self.local) else DEFAULT_PROFILE
+        return name if name in self.profiles() else DEFAULT_PROFILE
 
     def state(self) -> dict:
         status = install_status(self.work, self.project)
@@ -327,7 +331,7 @@ class Launcher:
         return {"iso": str(recorded or ""), "steps": status, "ready": all(status.values()),
                 "running": self.running if self.process else "", "phase": self.phase if self.process else "",
                 "work": str(self.work),
-                "profiles": profiles(self.local), "profile": self.profile(),
+                "profiles": self.profiles(), "profile": self.profile(), "saves": str(self.root or ""),
                 "settings": settings, "settings_stamp": SETTINGS.stat().st_mtime_ns if SETTINGS.is_file() else 0,
                 "version": installed_version(), "changelog": entries, "updates": self.updates,
                 "missing": self.missing, "build": BUILD}
@@ -371,22 +375,22 @@ class Launcher:
         self.start("Installation", [console_python(), "-u", str(ROOT / "tools" / "install.py"), "--iso", iso.strip()])
 
     def play(self, profile: str) -> None:
-        if profile not in profiles(self.local):
+        if profile not in self.profiles():
             raise ValueError("Unknown save profile.")
         self.select(profile)
         self.start("Game", [console_python(), "-u", str(ROOT / "tools" / "project.py"), "run", "--echo", "--status-ms", "5000",
                             "--profile", profile])
 
     def select(self, profile: str) -> None:
-        if profile in profiles(self.local) and self.local.is_dir():
+        if profile in self.profiles() and self.local.is_dir():
             (self.local / "launcher.json").write_text(json.dumps({"profile": profile}, indent=2) + "\n", encoding="utf-8")
 
     def new_profile(self, name: str, saves: str = "") -> None:
         """A new profile, empty or holding a copy of the saves in the folder `saves`."""
         name = name.strip()
-        if not PROFILE_NAME.fullmatch(name) or name in profiles(self.local):
+        if not PROFILE_NAME.fullmatch(name) or name in self.profiles():
             raise ValueError("Use a new name made of letters, digits, spaces, - and _ (40 at most).")
-        target = self.local / "profiles" / name
+        target = profile_dir(name, self.local, self.root)
         if saves.strip():
             try:
                 copy_saves(Path(saves.strip().strip('"')), target)
@@ -397,9 +401,11 @@ class Launcher:
         self.select(name)
 
     def open_profile(self, profile: str) -> None:
-        if profile not in profiles(self.local):
+        if profile not in self.profiles():
             raise ValueError("Unknown save profile.")
-        folder = self.local / "saves" if profile == DEFAULT_PROFILE else self.local / "profiles" / profile
+        folder = profile_dir(profile, self.local, self.root)
+        if folder == self.local:  # a Git checkout's default profile shares its folder with the work files
+            folder = folder / "saves"
         folder.mkdir(parents=True, exist_ok=True)
         if os.name == "nt":
             os.startfile(folder)

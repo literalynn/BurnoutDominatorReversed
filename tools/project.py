@@ -417,14 +417,43 @@ def settings_file() -> Path:
     return Path(os.environ["BDR_SETTINGS"]) if os.environ.get("BDR_SETTINGS") else ROOT / "settings.ini"
 
 
+def profiles_root() -> Path | None:
+    """Where a portable installation keeps its save profiles: <folder>/save, in sight next to the program.
+    None in a Git checkout, whose saves are in the work directory."""
+    portable = os.environ.get("BDR_PORTABLE")
+    return Path(portable) / "save" if portable else None
+
+
+def profile_dir(profile: str | None, local: Path | None = None, root: Path | None = None) -> Path:
+    """A save profile's folder: its memory cards ("saves", "saves_slot1") and its save states ("states").
+    <folder>/save/<profile> in a portable installation. In a Git checkout the default profile is
+    <work>/local, where saves were before profiles existed, and the others <work>/local/profiles/<profile>."""
+    name = profile or DEFAULT_PROFILE
+    if not PROFILE_NAME.fullmatch(name):
+        raise RuntimeError(f"Profile name {name!r}: use letters, digits, spaces, - and _ (40 at most)")
+    local, root = local or LOCAL, root or profiles_root()
+    if root:
+        return root / name
+    return local if name == DEFAULT_PROFILE else local / "profiles" / name
+
+
 def save_dir(profile: str | None) -> Path:
-    """The memory card folder of a save profile; the game keeps its save states next to it.
-    The default profile is <work>/local/saves, where saves were before profiles existed."""
-    if not profile or profile == DEFAULT_PROFILE:
-        return LOCAL / "saves"
-    if not PROFILE_NAME.fullmatch(profile):
-        raise RuntimeError(f"Profile name {profile!r}: use letters, digits, spaces, - and _ (40 at most)")
-    return LOCAL / "profiles" / profile / "saves"
+    """The memory card folder of a save profile; the game keeps its save states next to it."""
+    return profile_dir(profile) / "saves"
+
+
+def adopt_saves(local: Path | None = None, root: Path | None = None) -> None:
+    """Move the saves of a portable installation made before version 1.1.3, which kept them in the work
+    directory, to <folder>/save. Nothing is replaced: a folder that is already there stays."""
+    local, root = local or LOCAL, root or profiles_root()
+    if not root:
+        return
+    moves = [(local / part, root / DEFAULT_PROFILE / part) for part in ("saves", "saves_slot1", "states")]
+    moves += [(folder, root / folder.name) for folder in sorted((local / "profiles").glob("*"))]
+    for source, target in moves:
+        if source.is_dir() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
 
 
 def launch(args) -> None:
@@ -549,8 +578,9 @@ def main() -> int:
     p.add_argument("--tail", default=40, type=int, help="Log lines printed after the run")
     p.add_argument("--trace-calls", type=hex_list, help="Log calls and returns of these guest functions (0xADDR,...)")
     p.add_argument("--trace-watch", type=hex_list, help="32-bit guest words printed with each trace line (0xADDR,...)")
-    p.add_argument("--profile", help="Save profile: its own memory card and save states under "
-                                     "<work>/local/profiles/<name> (default: <work>/local/saves)")
+    p.add_argument("--profile", help="Save profile: its own memory card and save states, under "
+                                     "<work>/local/profiles/<name> (default: <work>/local/saves), "
+                                     "or <folder>/save/<name> in a portable installation")
     p.add_argument("--echo", action="store_true", help="Print the game's output as it comes, not the log's tail")
     p.add_argument("--state", type=Path,
                    help="Save state slot: F5 saves it, F7 loads it (default <work>/local/states/quick.bdrstate)")
