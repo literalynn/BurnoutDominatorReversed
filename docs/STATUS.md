@@ -99,10 +99,10 @@ These goals assume the game reaches the races; they come after boot. Leads alrea
 - **Real 16:9.** Done (November 10): with `aspect = 16:9` the console reports a 16:9 screen and the game sets its cameras to 16/9 by itself (CHANGES, same date).
 - **Loading times.** Disc reads (simulated CDVD latency: 128 IOP cycles) and memory card (host files) are already nearly instant. What remains are waits coded in the game (minimum loading screen duration, save delays), to find once those screens are reached.
 
-## Work in progress and remaining criteria
+## What is left
 
-The Ghidra/R5900 analysis refines function boundaries. Logs and the translation audit must be checked before any claim of full coverage. Building the runtime and running the exact binary are separate steps.
-
-Still to establish: indirect code and executed data, VU and IOP overlays, real boot, menu, races, physics, collisions, input, graphics, DMA/VIF/GIF synchronisation, sound, videos and saves. Observed behaviour must be compared with PS2/PCSX2 execution. Linux and macOS must be built and tested on their own systems.
-
-The upstream runtime is still experimental: partial hardware support, limited VU/GS performance and incomplete audio. A successful Windows build only establishes a native executable made of the translated functions.
+- **Speed on smaller PCs.** Measured on one PC (Ryzen 7 9800X3D, RTX 5090) and reported on one other (RTX 5070 Ti: 60 in races). The game thread and the GS worker each need a fast core ([NATIVE_RENDERER.md](NATIVE_RENDERER.md)).
+- **Known glitches.** Players reported a sky that flickers or changes colour for a moment in some races, and brief changes of speed; at 2x and 4x a faint line can show where a menu picture is made of several textures (CHANGES, November 10).
+- **Accuracy left to check against a console.** ADD.S, SUB.S and MUL.S differ in the last bit in part of the cases (FINDINGS E024); the VUs' arithmetic and the SPU2's reverb are not compared yet.
+- **Other systems.** Linux builds in CI (GCC, Clang) and is played by contributors; the launcher's window there is compiled in CI but was not run by the maintainers. macOS and Android have no game build.
+- **Modding.** File mods through `disc_patches.cpp` and code mods through native overrides, as described above; no mod loader yet.
