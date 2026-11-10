@@ -59,17 +59,20 @@ namespace
         int previousRounding = std::fegetround();
 #if defined(_M_X64) || defined(__x86_64__)
         unsigned previousDaz = _MM_GET_DENORMALS_ZERO_MODE();
+        unsigned previousFtz = _MM_GET_FLUSH_ZERO_MODE();
 #endif
         GameThreadFloatModes()
         {
             std::fesetround(FE_TOWARDZERO);
 #if defined(_M_X64) || defined(__x86_64__)
             _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+            _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
 #endif
         }
         ~GameThreadFloatModes()
         {
 #if defined(_M_X64) || defined(__x86_64__)
+            _MM_SET_FLUSH_ZERO_MODE(previousFtz);
             _MM_SET_DENORMALS_ZERO_MODE(previousDaz);
 #endif
             std::fesetround(previousRounding);
@@ -366,10 +369,96 @@ void register_ps2_runtime_expansion_tests()
             t.IsTrue(FPU_MUL_S(INFINITY, 0.0f) == 0.0f, "an exponent-255 operand is a finite value");
             t.IsTrue(FPU_SQRT_S(-4.0f) == 2.0f, "sqrt uses the absolute value");
             t.IsTrue(ps2_frsqrt(2.0f, 4.0f) == 1.0f && ps2_frsqrt(-1.0f, 0.0f) == -fmax, "RSQRT is fs / sqrt(ft)");
+            t.IsTrue(FPU_RSQRT_S(2.0f, 4.0f) == 1.0f && FPU_RSQRT_S(-1.0f, 0.0f) == -fmax && FPU_RSQRT_S(-1.0f, -0.0f) == -fmax,
+                     "RSQRT.S is fs / sqrt(ft), and a zero ft gives the sign of fs");
+            t.IsTrue(ps2_float_bits(FPU_SQRT_S(-0.0f)) == 0u, "SQRT.S of -0 is +0");
             t.IsTrue(FPU_MUL_S(1e-30f, 1e-30f) == 0.0f, "denormal results flush to zero");
             alignas(16) float lanes[4];
             _mm_store_ps(lanes, PS2_VMUL(_mm_set_ps(1.0f, INFINITY, 0.0f, 2.0f), _mm_set_ps(1.0f, 0.0f, NAN, fmax)));
             t.IsTrue(lanes[0] == fmax && lanes[1] == 0.0f && lanes[2] == 0.0f && lanes[3] == 1.0f, "VU multiply clamps lanes");
+        });
+
+        tc.Run("EE float results are the ones a console printed (ps2autotests)", [](TestCase &t)
+        {
+            struct HardwareVector
+            {
+                const char *op;
+                uint32_t fs, ft, result;
+                int upstreamKnown; // upstream's note on its own helpers; not used here
+            };
+            static const HardwareVector vectors[] = {
+#include "ps2_float_hw_vectors.inc"
+            };
+            const GameThreadFloatModes modes;
+            const auto ordinary = [](uint32_t bits) { return (bits & 0x7F800000u) != 0x7F800000u; };
+            uint32_t checked = 0u, multiplierRows = 0u, wrong = 0u;
+            std::string first;
+            for (const HardwareVector &v : vectors)
+            {
+                const std::string op = v.op;
+                const bool divider = op == "div" || op == "sqrt" || op == "rsqrt";
+                // Add, subtract and multiply clamp an operand with exponent 255 to +-FLT_MAX (PCSX2's
+                // model); the console computes with it. The divider's functions, called here whatever
+                // PS2X_EE_EXACT_DIVIDER selects for the generated code, read it as the console does.
+                if (!divider && !(ordinary(v.fs) && ordinary(v.ft)))
+                    continue;
+                // Every result that needs exponent 255 is given as +-FLT_MAX.
+                const uint32_t want = ordinary(v.result) ? v.result : ((v.result & 0x80000000u) | 0x7F7FFFFFu);
+                const float fs = ps2_bits_float(v.fs), ft = ps2_bits_float(v.ft);
+                const uint32_t got = ps2_float_bits(op == "add" ? FPU_ADD_S(fs, ft) : op == "sub" ? FPU_SUB_S(fs, ft) : op == "mul" ? FPU_MUL_S(fs, ft)
+                                                    : op == "div" ? ps2_ee_divider_div(fs, ft) : op == "sqrt" ? ps2_ee_divider_sqrt(fs)
+                                                                                                             : ps2_ee_divider_rsqrt(fs, ft));
+                ++checked;
+                // The console's multiplier drops a carry in its adder tree: 1.0 * 0x3FFFFFFF is
+                // 0x3FFFFFFE there. Not reproduced (about one product in a thousand): one row.
+                if (op == "mul" && got == want + 1u)
+                {
+                    ++multiplierRows;
+                    continue;
+                }
+                if (got != want && wrong++ == 0u)
+                {
+                    char text[96];
+                    std::snprintf(text, sizeof(text), "%s %08x %08x: %08x, not %08x", v.op, v.fs, v.ft, got, want);
+                    first = text;
+                }
+            }
+            t.IsTrue(wrong == 0u, "a float result differs from the console's: " + first);
+            t.IsTrue(checked == 129u && multiplierRows == 1u, "rows checked: " + std::to_string(checked) + ", multiplier rows: " + std::to_string(multiplierRows));
+        });
+
+        tc.Run("EE float compares, MAX.S, MIN.S and conversions give a console's results (ps2autotests)", [](TestCase &t)
+        {
+            struct HardwareRow
+            {
+                const char *op;
+                uint32_t fs, ft, result;
+            };
+            static const HardwareRow rows[] = {
+#include "ps2_float_hw_compare.inc"
+            };
+            const GameThreadFloatModes modes;
+            uint32_t checked = 0u, wrong = 0u;
+            std::string first;
+            for (const HardwareRow &row : rows)
+            {
+                const std::string op = row.op;
+                const float fs = ps2_bits_float(row.fs), ft = ps2_bits_float(row.ft);
+                const uint32_t got = op == "eq" ? (FPU_C_EQ_S(fs, ft) ? 1u : 0u) : op == "lt" ? (FPU_C_OLT_S(fs, ft) ? 1u : 0u)
+                                     : op == "le" ? (FPU_C_OLE_S(fs, ft) ? 1u : 0u)
+                                     : op == "cvtws" ? static_cast<uint32_t>(FPU_CVT_W_S(fs))
+                                     : op == "cvtsw" ? ps2_float_bits(FPU_CVT_S_W(static_cast<int32_t>(row.fs)))
+                                     : ps2_float_bits(op == "max" ? FPU_MAX_S(fs, ft) : FPU_MIN_S(fs, ft));
+                ++checked;
+                if (got != row.result && wrong++ == 0u)
+                {
+                    char text[96];
+                    std::snprintf(text, sizeof(text), "%s %08x %08x: %08x, not %08x", row.op, row.fs, row.ft, got, row.result);
+                    first = text;
+                }
+            }
+            t.IsTrue(wrong == 0u, "a result differs from the console's: " + first);
+            t.IsTrue(checked == 256u, "rows checked: " + std::to_string(checked));
         });
 
         tc.Run("EE float add, subtract and multiply give the clamping formulas' bits", [](TestCase &t)

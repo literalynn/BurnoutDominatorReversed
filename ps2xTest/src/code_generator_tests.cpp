@@ -1063,6 +1063,21 @@ void register_code_generator_tests()
             printGeneratedCode("SQRT.S reads its operand from ft", code);
             t.IsTrue(code.find("ctx->f[2] = FPU_SQRT_S(ctx->f[6])") != std::string::npos, "SQRT.S fd, ft must read f[ft]");
             t.IsTrue(code.find("ctx->f[0]") == std::string::npos, "SQRT.S must not read the fs field");
+
+            Instruction rsqrt{};
+            rsqrt.opcode = OPCODE_COP1;
+            rsqrt.rs = COP1_S;
+            rsqrt.function = COP1_S_RSQRT;
+            rsqrt.rt = 4;
+            rsqrt.rd = 3;
+            rsqrt.sa = 2;
+            code = gen.translateInstruction(rsqrt);
+            t.IsTrue(code.find("ctx->f[2] = FPU_RSQRT_S(ctx->f[3], ctx->f[4])") != std::string::npos, "RSQRT.S fd, fs, ft is fs / sqrt(ft) by the EE's divider");
+
+            Instruction max = rsqrt;
+            max.function = COP1_S_MAX;
+            code = gen.translateInstruction(max);
+            t.IsTrue(code.find("ctx->f[2] = FPU_MAX_S(ctx->f[3], ctx->f[4])") != std::string::npos, "MAX.S compares patterns, not host floats");
         });
 
         tc.Run("VU CFC2/CTC2 access VI registers directly", [](TestCase& t)

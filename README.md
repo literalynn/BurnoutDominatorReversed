@@ -198,6 +198,6 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) first: no faked success, evidence for ev
 
 ## Credits and license
 
-Built on [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors (GPLv3, like this project), with [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) by Arntzen Software (LGPLv3). Game files and the code derived from them are never committed and stay on your machine.
+Built on [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors (GPLv3, like this project), with [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) by Arntzen Software (LGPLv3). The EE's float instructions are checked against results that [ps2autotests](https://github.com/unknownbrackets/ps2autotests) (ISC license) printed on a console, and the EE divider follows [PCSX2](https://github.com/PCSX2/pcsx2)'s soft-float work (GPLv3 or later). Game files and the code derived from them are never committed and stay on your machine.
 
 Burnout Dominator is a trademark of Electronic Arts. This project is not affiliated with or endorsed by Electronic Arts, Criterion Games or Sony Interactive Entertainment. Screenshots are of the game running in this project.

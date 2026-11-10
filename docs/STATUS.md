@@ -28,6 +28,7 @@ Kept evidence: `local/disc_inventory.json`, `local/analysis/`, `local/analysis_v
 - After run 11 (Windows, MSVC): `ps2x_tests` 443/443, the five ps2xIOP suites, `ps2_spu2_tests` and `burnout_overrides_tests` (29 bindings) pass.
 - After run 18 (Windows, MSVC): `ps2x_tests` 452/452 and all IOP, SPU2, ISO9660 and Burnout binding suites pass; the RPC test really waits on DelayThread and an alarm, then repeats 128 calls without running out of stacks. The 43 Python tests pass. The IPU and 64-bit branch commits also passed the Windows/GCC/Clang CI.
 - Linux (Ubuntu 24.04, GCC 13, Ninja): `ps2_recomp`, `ps2_analyzer`, the runtime and every test build; 438/438 engine tests, the 5 ps2xIOP suites and `burnout_overrides_tests` pass. The game also builds and starts on Linux (cloud session, `-O1`, from the `tools/cloud_bundle.py` bundle, without the ISO).
+- November 10, 2026: the EE's float results compared with a console's (430 rows of ps2autotests, FINDINGS E024). The three compares, MAX.S, MIN.S, the conversions and the zeros of SQRT.S and RSQRT.S reproduce them; DIV.S, SQRT.S and RSQRT.S do with `PS2X_EE_EXACT_DIVIDER=1` (off by default: its cost); ADD.S, SUB.S and MUL.S differ by one unit in the last place in part of the cases, and the VUs' arithmetic is unchecked. `ps2x_tests` 532/532 on Windows.
 
 ## Game boot
 
