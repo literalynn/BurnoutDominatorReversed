@@ -38,7 +38,7 @@ if(BDR_BUILD_GAME)
     if(WIN32)
         # The icon of the executable and, through the "GLFW_ICON" resource that GLFW looks for, of its window.
         file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/burnout_icon.rc"
-             CONTENT "GLFW_ICON ICON \"${PROJECT_SOURCE_DIR}/tools/portable/BurnoutDominator.ico\"\n")
+             CONTENT "GLFW_ICON ICON \"${PROJECT_SOURCE_DIR}/src/burnout.ico\"\n")
         target_sources(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/burnout_icon.rc")
     endif()
     # Unity builds amortize heavy R5900 headers across generated functions.
