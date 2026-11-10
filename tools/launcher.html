@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Burnout Dominator Reversed</title>
+<link rel="icon" href="data:image/png;base64,__ICON__">
+<style>
+:root { --bg: #0a0a0b; --surface: #111113; --raised: #18181b; --line: #232327; --text: #ececee; --mute: #8a8a93;
+        --red: #e5202e; --red-hover: #f0303d; --red-soft: rgba(229, 32, 46, .14); }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+       overflow: hidden; display: flex; flex-direction: column; user-select: none; -webkit-font-smoothing: antialiased; }
+
+/* A thin line under the header moves while something runs. */
+.progress { flex: none; height: 2px; background: var(--line); overflow: hidden; }
+.progress::after { content: ""; display: block; height: 100%; width: 30%; background: var(--red); transform: translateX(-100%); }
+body.busy .progress::after { animation: run 1.4s ease-in-out infinite; }
+@keyframes run { to { transform: translateX(340%); } }
+
+header { display: flex; align-items: center; gap: 12px; padding: 18px 28px 0; }
+.mark { width: 32px; height: 32px; }
+.name { font-size: 16px; font-weight: 600; letter-spacing: .01em; }
+.name span { color: var(--mute); font-weight: 400; }
+.grow { flex: 1; }
+.version { font-size: 12px; color: var(--mute); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+
+nav { display: flex; gap: 4px; padding: 14px 28px 0; }
+nav button { position: relative; font: inherit; font-weight: 500; color: var(--mute); background: none; border: 0; padding: 8px 14px 12px; cursor: pointer;
+             transition: color .15s; }
+nav button:hover { color: var(--text); }
+nav button.on { color: var(--text); }
+nav button.on::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: 0; height: 2px; background: var(--red); border-radius: 2px; }
+nav .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--red); margin-left: 7px; vertical-align: middle; }
+
+main { flex: 1; overflow: auto; padding: 22px 28px 26px; }
+.page { display: none; max-width: 1180px; margin: 0 auto; }
+.page.on { display: block; }
+footer { flex: none; display: flex; gap: 18px; padding: 7px 28px; font-size: 12px; color: var(--mute); border-top: 1px solid var(--line); }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px 18px; margin-bottom: 14px; }
+.card h2 { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--mute); margin: 0 0 12px; }
+.card.alert { border-color: rgba(229, 32, 46, .45); }
+.card.alert h2 { color: var(--red); }
+.card.alert pre { margin: 0; white-space: pre-wrap; font: inherit; color: var(--text); user-select: text; }
+.hint { color: var(--mute); font-size: 12.5px; margin: 10px 0 0; }
+.row { display: flex; gap: 8px; align-items: center; }
+
+input[type=text], select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; font: inherit;
+                           outline: none; min-width: 0; transition: border-color .15s, box-shadow .15s; }
+input[type=text]:focus, select:focus { border-color: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+input.wide { flex: 1; }
+::placeholder { color: #55555d; }
+
+.btn { font: inherit; font-weight: 500; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+       cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s, opacity .15s; }
+.btn:hover:not(:disabled) { background: #202024; border-color: #303036; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.primary { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.primary:hover:not(:disabled) { background: var(--red-hover); border-color: var(--red-hover); }
+.btn.quiet { background: none; border-color: transparent; color: var(--mute); }
+.btn.quiet:hover:not(:disabled) { background: var(--raised); border-color: var(--line); color: var(--text); }
+
+/* Play page */
+.columns { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+@media (max-width: 940px) { .columns { grid-template-columns: 1fr; } }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.steps li { display: flex; align-items: center; gap: 10px; color: var(--mute); }
+.steps li::before { content: ""; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid rgba(229, 32, 46, .7); flex: none; }
+.steps li.ok { color: var(--text); }
+.steps li.ok::before { border-color: #3a3a41; background: #3a3a41 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.3 8.3l2.4 2.4 5-5.4' fill='none' stroke='%23ececee' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px no-repeat; }
+.launch { position: sticky; top: 0; text-align: center; padding: 22px 18px 18px; }
+.go { width: 100%; font: inherit; font-size: 17px; font-weight: 600; letter-spacing: .02em; color: #fff; background: var(--red); border: 0; border-radius: 10px;
+      padding: 15px 0; cursor: pointer; transition: background .15s, transform .08s, opacity .15s; }
+.go:hover:not(:disabled) { background: var(--red-hover); }
+.go:active:not(:disabled) { transform: translateY(1px); }
+.go:disabled { background: var(--raised); color: #5d5d66; cursor: not-allowed; }
+.state { margin: 14px 0 10px; min-height: 21px; color: var(--mute); font-size: 13px; }
+body.busy .state { color: var(--text); }
+
+/* Console */
+.bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.note { color: var(--mute); font-size: 13px; margin-left: 6px; }
+#log { margin: 0; height: calc(100vh - 248px); min-height: 160px; overflow: auto; background: #070708; border: 1px solid var(--line); border-radius: 12px;
+       color: #c9c9cf; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; padding: 14px 16px; white-space: pre-wrap; word-break: break-all; user-select: text; }
+
+/* Settings */
+.settings .hint { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); max-width: 860px; }
+.settings .hint:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.setting { display: flex; align-items: center; gap: 14px; padding: 5px 0; }
+.setting label.name { width: 190px; font: 12.5px "Cascadia Mono", Consolas, monospace; font-weight: 400; color: var(--text); }
+.setting input[type=text] { width: 320px; padding: 6px 10px; }
+.setting select { width: 130px; padding: 6px 10px; }
+.switch { position: relative; width: 38px; height: 22px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.switch i { position: absolute; inset: 0; background: #2a2a30; border-radius: 999px; transition: background .15s; }
+.switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #8a8a93; transition: left .15s, background .15s; }
+.switch input:checked + i { background: var(--red); }
+.switch input:checked + i::after { left: 19px; background: #fff; }
+
+/* Updates */
+.entry h2 { font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text); }
+.entry ul { margin: 0; padding-left: 18px; color: #c9c9cf; }
+.entry li { margin: 6px 0; user-select: text; }
+.entry li b { color: var(--text); font-weight: 600; }
+.entry code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font: 12.5px "Cascadia Mono", Consolas, monospace; }
+
+#toast { position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); background: var(--raised); color: var(--text); border: 1px solid var(--line);
+         border-left: 3px solid var(--red); border-radius: 10px; padding: 10px 16px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80%; }
+#toast.on { opacity: 1; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 999px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: #3a3a41; }
+</style>
+</head>
+<body>
+<header>
+  <img class="mark" alt="" src="data:image/png;base64,__ICON__">
+  <div class="name">Burnout Dominator <span>Reversed</span></div>
+  <div class="grow"></div>
+  <div class="version" id="version" hidden></div>
+</header>
+<nav>
+  <button data-page="play" class="on">Play</button>
+  <button data-page="console">Console</button>
+  <button data-page="settings">Settings</button>
+  <button data-page="updates">Updates<i class="dot" id="update-dot" hidden></i></button>
+</nav>
+<div class="progress"></div>
+<main>
+  <section id="play" class="page on">
+    <div class="card alert" id="missing" hidden><h2>Before the first installation</h2><pre id="missing-text"></pre></div>
+    <div class="columns">
+      <div>
+        <div class="card">
+          <h2>Game disc</h2>
+          <div class="row">
+            <input type="text" class="wide" id="iso" placeholder="Path of your Burnout Dominator ISO" spellcheck="false">
+            <button class="btn" id="browse">Browse</button>
+          </div>
+          <p class="hint">Your own Burnout Dominator ISO, European version (SLES-54627). Keep it where it is: the game reads it at every launch.</p>
+        </div>
+        <div class="card">
+          <h2>Installation</h2>
+          <ul class="steps" id="steps"></ul>
+          <div class="row" style="margin-top:16px">
+            <button class="btn" id="install">Generate the code and build the game</button>
+            <span class="note">30 to 90 minutes the first time, a few minutes after an update.</span>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Save profile</h2>
+          <div class="row">
+            <select id="profile" style="width:260px"></select>
+            <button class="btn" id="new-profile">New</button>
+            <button class="btn quiet" id="open-profile">Open its folder</button>
+          </div>
+          <div class="row" id="new-row" hidden style="margin-top:10px">
+            <input type="text" id="new-name" placeholder="Name of the new profile" maxlength="40" style="width:260px">
+            <button class="btn primary" id="create-profile">Create</button>
+          </div>
+          <p class="hint">Each profile has its own memory card and save states.</p>
+        </div>
+      </div>
+      <div class="card launch">
+        <button class="go" id="go" disabled>Play</button>
+        <div class="state" id="state"></div>
+        <button class="btn quiet" id="stop" disabled>Stop</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="console" class="page">
+    <div class="bar">
+      <button class="btn" id="stop2" disabled>Stop</button>
+      <button class="btn quiet" id="copy">Copy all</button>
+      <button class="btn quiet" id="clear">Clear</button>
+      <span class="note" id="console-note"></span>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <section id="settings" class="page">
+    <div class="bar">
+      <button class="btn primary" id="save">Save</button>
+      <span class="note" id="settings-note"></span>
+    </div>
+    <div class="card settings" id="settings-list"></div>
+  </section>
+
+  <section id="updates" class="page">
+    <div class="bar">
+      <button class="btn" id="check">Check for updates</button>
+      <button class="btn primary" id="update" disabled>Update now</button>
+      <span class="note" id="update-note"></span>
+    </div>
+    <div id="entries"></div>
+  </section>
+</main>
+<footer><span id="work"></span><span class="grow"></span><span id="foot"></span></footer>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const TOKEN = "__TOKEN__";
+const $ = id => document.getElementById(id);
+let state = null, build = null, settingsStamp = null, toastTimer = 0;
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
+// The changelog's Markdown, as far as it goes: bullets, **bold** and `code`. The text is escaped first.
+function entryHtml(heading, body) {
+  const inline = text => escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>");
+  const items = body.split("\n").filter(line => line.trim()).map(line => "<li>" + inline(line.replace(/^\s*-\s*/, "")) + "</li>").join("");
+  return '<div class="card entry"><h2>' + escapeHtml(heading) + "</h2><ul>" + items + "</ul></div>";
+}
+function toast(text) {
+  $("toast").textContent = text;
+  $("toast").classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.remove("on"), 5000);
+}
+async function api(name, body) {
+  const response = await fetch("/api/" + name, {method: "POST", headers: {"X-BDR-Token": TOKEN, "Content-Type": "application/json"},
+                                               body: JSON.stringify(body || {})});
+  const answer = await response.json();
+  if (answer.error) { toast(answer.error); return null; }
+  return answer;
+}
+async function act(name, body) {
+  const answer = await api(name, body);
+  if (answer && answer.steps) render(answer);
+  return answer;
+}
+
+function show(page) {
+  document.querySelectorAll("nav button").forEach(button => button.classList.toggle("on", button.dataset.page === page));
+  document.querySelectorAll(".page").forEach(section => section.classList.toggle("on", section.id === page));
+  if (page === "console") $("log").scrollTop = $("log").scrollHeight;
+}
+
+function renderSettings(items) {
+  const list = $("settings-list");
+  list.textContent = "";
+  for (const item of items) {
+    if (item.comment !== undefined) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = item.comment;
+      list.append(hint);
+      continue;
+    }
+    const row = document.createElement("div");
+    row.className = "setting";
+    const name = document.createElement("label");
+    name.className = "name";
+    name.textContent = item.key;
+    row.append(name);
+    let control;
+    if (item.value === "true" || item.value === "false") {
+      const wrap = document.createElement("label");
+      wrap.className = "switch";
+      control = document.createElement("input");
+      control.type = "checkbox";
+      control.checked = item.value === "true";
+      wrap.append(control, document.createElement("i"));
+      row.append(wrap);
+    } else if (item.choices && item.key !== "refresh_rate") {
+      control = document.createElement("select");
+      for (const choice of item.choices) control.add(new Option(choice, choice, false, choice === item.value));
+      row.append(control);
+    } else {
+      control = document.createElement("input");
+      control.type = "text";
+      control.value = item.value;
+      control.spellcheck = false;
+      if (item.choices) {
+        const options = document.createElement("datalist");
+        options.id = "choices-" + item.key;
+        for (const choice of item.choices) options.append(new Option(choice));
+        control.setAttribute("list", options.id);
+        control.style.width = "130px";
+        row.append(options);
+      }
+      row.append(control);
+    }
+    control.dataset.key = item.key;
+    list.append(row);
+  }
+  if (!items.length) list.textContent = "The game writes its settings file at its first launch; the settings appear here afterwards.";
+}
+
+function render(s) {
+  if (build === null) build = s.build;
+  if (s.build !== build) { location.reload(); return; }  // the launcher was updated under this page
+  state = s;
+  const busy = !!s.running;
+  document.body.classList.toggle("busy", busy);
+  $("version").hidden = !s.version;
+  $("version").textContent = "v" + s.version;
+  $("work").textContent = "Work folder: " + s.work;
+  $("foot").textContent = busy ? s.running + " running" : "";
+  if (document.activeElement !== $("iso") && !$("iso").dataset.edited) $("iso").value = s.iso;
+  $("missing").hidden = !s.missing;
+  $("missing-text").textContent = s.missing;
+  $("steps").innerHTML = Object.entries(s.steps).map(([name, done]) => '<li class="' + (done ? "ok" : "") + '">' + escapeHtml(name) + "</li>").join("");
+  const select = $("profile");
+  if (document.activeElement !== select) {
+    select.textContent = "";
+    for (const name of s.profiles) select.add(new Option(name, name, false, name === s.profile));
+  }
+  $("install").disabled = busy;
+  $("go").disabled = busy || !s.ready;
+  $("stop").disabled = $("stop2").disabled = !busy;
+  $("state").textContent = busy ? (s.phase || s.running + " running") : s.ready ? "Ready." : "Give the ISO, then generate the code and build the game.";
+  $("console-note").textContent = busy ? s.running + " running." : "";
+  if (s.settings_stamp !== settingsStamp) {
+    settingsStamp = s.settings_stamp;
+    renderSettings(s.settings);
+    $("settings-note").textContent = "F1 in the game changes the same settings. Changes apply at the next launch.";
+  }
+  const updates = s.updates;
+  $("update-note").textContent = updates.note;
+  $("update").disabled = !updates.behind || busy;
+  $("update-dot").hidden = !updates.behind;
+  const entries = updates.behind ? updates.new : s.changelog;
+  $("entries").innerHTML = (updates.behind ? '<p class="hint" style="margin:0 0 12px">What the update brings</p>' : "")
+    + entries.map(([heading, body]) => entryHtml(heading, body)).join("");
+}
+
+function appendLog(text) {
+  const log = $("log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.append(text);
+  if (log.childNodes.length > 4000) { log.textContent = log.textContent.slice(-400000); }
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+
+document.querySelectorAll("nav button").forEach(button => button.addEventListener("click", () => show(button.dataset.page)));
+$("iso").addEventListener("input", () => { $("iso").dataset.edited = "1"; });
+$("browse").addEventListener("click", async () => {
+  const answer = await api("browse");
+  if (answer && answer.path) { $("iso").value = answer.path; $("iso").dataset.edited = "1"; }
+});
+$("install").addEventListener("click", async () => { if (await act("install", {iso: $("iso").value})) { delete $("iso").dataset.edited; show("console"); } });
+$("go").addEventListener("click", async () => { if (await act("play", {profile: $("profile").value})) show("console"); });
+$("stop").addEventListener("click", () => act("stop"));
+$("stop2").addEventListener("click", () => act("stop"));
+$("profile").addEventListener("change", () => act("select", {profile: $("profile").value}));
+$("new-profile").addEventListener("click", () => { $("new-row").hidden = !$("new-row").hidden; if (!$("new-row").hidden) $("new-name").focus(); });
+$("create-profile").addEventListener("click", async () => {
+  if (await act("new-profile", {name: $("new-name").value})) { $("new-name").value = ""; $("new-row").hidden = true; }
+});
+$("new-name").addEventListener("keydown", event => { if (event.key === "Enter") $("create-profile").click(); });
+$("open-profile").addEventListener("click", () => api("open-profile", {profile: $("profile").value}));
+$("copy").addEventListener("click", () => navigator.clipboard.writeText($("log").textContent));
+$("clear").addEventListener("click", () => { $("log").textContent = ""; });
+$("save").addEventListener("click", async () => {
+  const values = {};
+  document.querySelectorAll("#settings-list [data-key]").forEach(control => {
+    values[control.dataset.key] = control.type === "checkbox" ? (control.checked ? "true" : "false") : control.value;
+  });
+  if (await act("settings", {values})) $("settings-note").textContent = "Saved. Changes apply at the next launch of the game.";
+});
+$("check").addEventListener("click", () => { $("update-note").textContent = "Checking..."; api("check-updates"); });
+$("update").addEventListener("click", async () => { if (await act("update")) show("console"); });
+
+// Console lines and state changes come over one stream; a reconnection sends the console again.
+const events = new EventSource("/events?t=" + TOKEN);
+events.onopen = () => { $("log").textContent = ""; };
+events.onmessage = event => {
+  const message = JSON.parse(event.data);
+  if (message.lines.length) appendLog(message.lines.join(""));
+  if (message.state) act("state");
+};
+act("state");
+</script>
+</body>
+</html>

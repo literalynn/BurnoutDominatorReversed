@@ -76,7 +76,7 @@ def read_json(path: Path) -> dict:
 
 
 def default_jobs(cpu_count: int | None) -> int:
-    # scripts/Invoke-MSBuild.ps1 accepts at most 64 jobs.
+    # project.py gives MSBuild at most 64 jobs.
     return min(cpu_count or 4, 64)
 
 
@@ -128,17 +128,6 @@ def find_visual_studio() -> tuple[int, Path] | None:
     if not instances:
         return None
     return int(instances[0]["installationVersion"].split(".")[0]), Path(instances[0]["installationPath"])
-
-
-def find_pwsh() -> Path | None:
-    found = shutil.which("pwsh")
-    if found:
-        return Path(found)
-    for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramW6432", "")):
-        candidate = Path(base) / "PowerShell" / "7" / "pwsh.exe" if base else None
-        if candidate and candidate.is_file():
-            return candidate
-    return None
 
 
 def cache_entry(build_dir: Path, key: str) -> str | None:
@@ -193,8 +182,10 @@ def check_prerequisites(work: Path, build_dir: Path, needed: int) -> dict:
     if windows:
         studio = find_visual_studio()
         if not studio or studio[0] not in GENERATORS:
-            problems.append("Visual Studio 2026 (or 2022) Community with the "
-                            "\"Desktop development with C++\" workload: https://visualstudio.microsoft.com/downloads/")
+            problems.append("The C++ compiler: Visual Studio 2026 or 2022 (Community or Build Tools) with the "
+                            "\"Desktop development with C++\" workload, from https://visualstudio.microsoft.com/downloads/ "
+                            "or, in a terminal:  winget install Microsoft.VisualStudio.2022.BuildTools --override "
+                            "\"--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"")
         else:
             major, location = studio
             if not toolchain["cmake"]:
@@ -203,11 +194,6 @@ def check_prerequisites(work: Path, build_dir: Path, needed: int) -> dict:
                 if not toolchain["cmake"]:
                     problems.append("CMake: tick \"C++ CMake tools for Windows\" in the Visual Studio Installer.")
             toolchain["generator"] = ["--generator", GENERATORS[major], "--arch", "x64"]
-        pwsh = find_pwsh()
-        if not pwsh:
-            problems.append("PowerShell 7: in a terminal, type  winget install Microsoft.PowerShell")
-        else:
-            toolchain["path"].append(str(pwsh.parent))
     else:
         if not toolchain["cmake"]:
             toolchain["cmake"] = shutil.which("cmake")
@@ -232,8 +218,10 @@ def check_prerequisites(work: Path, build_dir: Path, needed: int) -> dict:
         problems.append(f"At least {needed / GIB:.0f} GB free for {work} "
                         f"({free / GIB:.1f} GB left). Free some space or choose another drive with --work-dir.")
     if problems:
-        raise SetupError("Missing:\n  - " + "\n  - ".join(problems)
-                         + "\nInstall them, close and reopen the terminal, then run the same command again.")
+        error = SetupError("Missing:\n  - " + "\n  - ".join(problems)
+                           + "\nInstall them, close and reopen the terminal, then run the same command again.")
+        error.problems = problems  # for the launcher, which has no terminal to reopen
+        raise error
     return toolchain
 
 
@@ -396,8 +384,12 @@ def project(env: dict, *arguments: str) -> None:
 
 
 def final_message(windows: bool) -> list[str]:
-    launch = ("To start the game: Play in the launcher (Launcher.bat), or double-click Play.bat."
-              if windows else "To start the game: python3 tools/launcher.py, or python3 tools/project.py run")
+    if os.environ.get("BDR_PORTABLE"):
+        launch = "To start the game: Play, in the launcher."
+    elif windows:
+        launch = "To start the game: Play in the launcher (Launcher.bat), or double-click Play.bat."
+    else:
+        launch = "To start the game: python3 tools/launcher.py, or python3 tools/project.py run"
     return [launch, "Keep the ISO where it is: the game reads it at every launch."]
 
 

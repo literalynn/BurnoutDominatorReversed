@@ -50,7 +50,7 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 | ✅ Game | boot, intro videos, menus, World Tour, car select, events, results |
 | ✅ Races | cars, traffic, damage, crashes and Impact Time, reflections, HUD |
 | ✅ Saves | memory card (your profile is saved after every event), save states on F5 / F7, save profiles kept apart |
-| ✅ Launcher | one window to install, pick a save profile, play, read the console, change the settings and update |
+| ✅ Launcher | one file to download: it installs into its own folder, which can be moved; pick a save profile, play, read the console, change the settings and update |
 | ✅ Controls | Xbox, PlayStation and SDL pads with vibration, keyboard and mouse |
 | ✅ Graphics | up to 4x resolution, supersampling, FXAA, real 16:9 |
 | ✅ Sound | music, engines, crashes, menus, the races' reverb |
@@ -59,20 +59,21 @@ The whole game runs natively on PC, from the intro videos to the last World Tour
 
 ## Install (Windows)
 
-You need your European Burnout Dominator ISO (keep it where it is: the game reads it at every launch), a Vulkan graphics card, 20 GB free, and **Visual Studio 2026 or 2022 Community** with *Desktop development with C++*. Its optional component *C++ Clang Compiler for Windows* makes the PS2's graphics programs run about 5% faster: the build uses it when it is installed.
+You need your European Burnout Dominator ISO (keep it where it is: the game reads it at every launch), a Vulkan graphics card, 25 GB free, and the C++ compiler: **Visual Studio 2026 or 2022** (Community or Build Tools) with *Desktop development with C++*. In a terminal:
 
 ```powershell
-winget install Python.Python.3.12 Git.Git Microsoft.PowerShell
-git clone https://github.com/literalynn/BurnoutDominatorReversed.git
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
 
-Double-click **`Launcher.bat`** in the cloned folder, choose your ISO and press *Generate the code and build the game* (30 to 90 minutes the first time), then *Play*.
+Then download **[`BurnoutDominator.exe`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.exe)**, put it in an empty folder and start it. The first start downloads the project into that folder, with a Python and a Git of its own (official builds, checked by SHA-256). The file is not signed: if Windows SmartScreen stops it, choose *More info*, then *Run anyway*. In the launcher, choose your ISO and press *Generate the code and build the game* (30 to 90 minutes the first time), then *Play*.
 
-<img src="docs/screenshots/launcher.png" width="70%" alt="The launcher: ISO, installation steps, save profile, Play">
+<img src="docs/screenshots/launcher.jpg" width="80%" alt="The launcher: ISO, installation steps, save profile, Play">
 
-The launcher also keeps **save profiles** apart (each has its own memory card and save states; the saves you already have are the profile *Default*), shows the game's **console** in a tab instead of a console window, edits the **settings**, and **updates** the project from GitHub after showing what the new version brings ([CHANGELOG.md](CHANGELOG.md)).
+Everything stays in that one folder (the project in `source`, the game's files and saves in `work`, `settings.ini`), so the folder can be moved or copied to another drive; the first update after a move builds everything again. The launcher also keeps **save profiles** apart (each has its own memory card and save states; the first one is *Default*), shows the game's **console** in a tab instead of a console window, edits the **settings**, and **updates** the project from GitHub after showing what the new version brings ([CHANGELOG.md](CHANGELOG.md)).
 
-Without the launcher: drop your ISO onto `Installer.bat`, play with `Play.bat`, and update with `git pull`, then `Installer.bat` again.
+Visual Studio's optional component *C++ Clang Compiler for Windows* makes the PS2's graphics programs run about 5% faster: the build uses it when it is installed.
+
+Developers can work from a Git copy instead: `winget install Python.Python.3.12 Git.Git`, `git clone https://github.com/literalynn/BurnoutDominatorReversed.git`, then `Launcher.bat` (the same launcher; the work directory is `C:\bdr-work`), or `Installer.bat` with the ISO dropped on it and `Play.bat`.
 
 <details>
 <summary><b>Linux</b></summary>
@@ -83,6 +84,8 @@ sudo apt install git python3 python3-tk cmake ninja-build g++ pkg-config libgl-d
 git clone https://github.com/literalynn/BurnoutDominatorReversed.git && cd BurnoutDominatorReversed
 python3 tools/launcher.py   # or: python3 tools/install.py --iso "/path/to/Burnout Dominator.iso", then python3 tools/project.py run
 ```
+
+Or, without Git: download [`BurnoutDominator.py`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.py) into an empty folder and run `python3 BurnoutDominator.py`; it downloads the project next to itself and keeps everything in that folder. The launcher opens in your browser.
 
 macOS is not verified yet.
 </details>

@@ -248,6 +248,8 @@ class InstallTests(unittest.TestCase):
         linux = "\n".join(install.final_message(False))
         self.assertNotIn("Play.bat", linux)
         self.assertIn("python3 tools/project.py run", linux)
+        with mock.patch.dict(os.environ, {"BDR_PORTABLE": "folder"}):
+            self.assertNotIn(".bat", "\n".join(install.final_message(True)))
 
     def test_errors_are_reported_without_traceback(self):
         failures = [install.SetupError("x"), OSError(28, "No space left on device"), KeyError("work_dir"),

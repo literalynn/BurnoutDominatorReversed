@@ -68,7 +68,7 @@ def checked_elf() -> Path:
     return elf
 
 
-def run(command: list[str], log_name: str, *, timeout: int | None = None) -> None:
+def run(command: list[str], log_name: str, *, timeout: int | None = None, extra_env: dict | None = None) -> None:
     log = LOCAL / "logs" / log_name
     log.parent.mkdir(parents=True, exist_ok=True)
     # Windows environment names are case-insensitive; inherited duplicate
@@ -77,6 +77,7 @@ def run(command: list[str], log_name: str, *, timeout: int | None = None) -> Non
     if os.name == "nt":
         count = int(env.get("GIT_CONFIG_COUNT", "0"))
         env.update({"GIT_CONFIG_COUNT": str(count + 1), f"GIT_CONFIG_KEY_{count}": "core.longpaths", f"GIT_CONFIG_VALUE_{count}": "true"})
+    env.update(extra_env or {})
     print("Running:", subprocess.list2cmdline(command), flush=True)
     with log.open("w", encoding="utf-8") as f:
         result = subprocess.run(command, cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT, timeout=timeout)
@@ -295,7 +296,10 @@ def configure(args) -> None:
                # LTO turns the link of ~49k generated functions into a very long
                # single step; keep it for distribution builds only.
                "-DPS2X_ENABLE_LTO=" + ("ON" if args.lto else "OFF"),
-               "-DPS2X_SHOW_WINDOWS_CONSOLE=ON"]
+               "-DPS2X_SHOW_WINDOWS_CONSOLE=ON",
+               # The interpreter that runs this script also runs the build's Python steps: a
+               # portable installation has no other one.
+               "-DPython3_EXECUTABLE=" + Path(sys.executable).as_posix()]
     # paraLLEl-GS (Vulkan) for the game; the CPU rasterizer stays as the
     # run-time fallback and for the tests.
     gs_backend = "PARALLEL_GS" if args.game and args.gs == "parallel" else "CPU"
@@ -333,6 +337,31 @@ def set_work_dir(args) -> None:
     print(f"Work directory: {target}")
 
 
+def find_msbuild() -> str:
+    vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if not vswhere.is_file():
+        raise RuntimeError("vswhere.exe was not found: install Visual Studio with the C++ workload")
+    # An instance left incomplete by an interrupted update is skipped by -latest, although its
+    # MSBuild and compiler still work.
+    for scope in ("-latest", "-all"):
+        found = subprocess.run([str(vswhere), scope, "-products", "*", "-requires", "Microsoft.Component.MSBuild",
+                                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-find", "MSBuild/**/Bin/MSBuild.exe"],
+                               capture_output=True, text=True).stdout.split("\n")
+        if found[0].strip():
+            return found[0].strip()
+    raise RuntimeError("MSBuild.exe was not found in an installed Visual Studio instance")
+
+
+def msbuild(build_dir: Path, target: str, jobs: int) -> None:
+    projects = list(build_dir.rglob(target + ".vcxproj"))
+    if len(projects) != 1:
+        raise RuntimeError(f"Expected one Visual Studio project for {target}; found {len(projects)}. Run configure first.")
+    # run() gives MSBuild an environment without Path/PATH duplicates, which stop it before the compiler starts.
+    run([find_msbuild(), str(projects[0]), "/p:Configuration=Release", "/p:Platform=x64", "/p:MultiProcessorCompilation=true",
+         f"/m:{jobs}", "/nr:false", "/verbosity:minimal"], "native-build-" + target + ".log",
+        extra_env={"_CL_": (os.environ.get("_CL_", "") + f" /MP{jobs}").strip()})
+
+
 def build(args) -> None:
     foreign = foreign_build_tree(args.build_dir)
     if foreign:
@@ -341,18 +370,12 @@ def build(args) -> None:
                            "Run configure first (tools/install.py does it).")
     cache = args.build_dir / "CMakeCache.txt"
     if os.name == "nt" and cache.is_file() and "CMAKE_GENERATOR:INTERNAL=Visual Studio" in cache.read_text(encoding="utf-8", errors="replace"):
-        pwsh = shutil.which("pwsh")
-        if not pwsh:
-            raise RuntimeError("PowerShell 7 is required for the MSBuild environment wrapper (scripts/Invoke-MSBuild.ps1)")
         follow_visual_studio_update(args.build_dir)
         targets = ["ps2EntryRunner"] if args.game else [
             "ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests",
             "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests", "vu1_native_tests"]
         for target in targets:
-            # A checkout from GitHub's ZIP marks the scripts as downloaded, and RemoteSigned refuses them unsigned.
-            run([pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts" / "Invoke-MSBuild.ps1"),
-                 "-BuildDirectory", str(args.build_dir.resolve()), "-Target", target,
-                 "-Jobs", str(args.jobs), "-LogPath", str(LOCAL / "logs" / ("msbuild-" + target + ".log"))], "native-build-" + target + ".log")
+            msbuild(args.build_dir.resolve(), target, min(args.jobs, 64))
         return
     command = [args.cmake, "--build", str(args.build_dir.resolve()), "--config", "Release", "--parallel", str(args.jobs), "--target"]
     command += ["ps2EntryRunner"] if args.game else ["ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests", "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests", "vu1_native_tests"]
@@ -388,6 +411,12 @@ def default_exe() -> Path:
     raise RuntimeError("Game executable not found; build it with: project.py build --game")
 
 
+def settings_file() -> Path:
+    """Player settings: next to Play.bat, or where the launcher of a portable installation says
+    (the project's folder is replaced by updates there). The game writes the defaults on first launch."""
+    return Path(os.environ["BDR_SETTINGS"]) if os.environ.get("BDR_SETTINGS") else ROOT / "settings.ini"
+
+
 def save_dir(profile: str | None) -> Path:
     """The memory card folder of a save profile; the game keeps its save states next to it.
     The default profile is <work>/local/saves, where saves were before profiles existed."""
@@ -409,8 +438,7 @@ def launch(args) -> None:
     saves = save_dir(args.profile)
     saves.mkdir(parents=True, exist_ok=True)
     command += ["--disc", str(LOCAL / "disc"), "--save", str(saves)]
-    # Player settings next to Play.bat; the game writes the defaults on first launch.
-    command += ["--settings", str(ROOT / "settings.ini")]
+    command += ["--settings", str(settings_file())]
     seconds = args.seconds or args.smoke_seconds
     if args.headless or args.smoke_seconds:
         command.append("--headless")

@@ -1,41 +1,56 @@
 #!/usr/bin/env python3
-"""Launcher window: the ISO, save profiles, installation, the game with its console,
-the settings and updates from GitHub.
+"""The launcher: the ISO, the installation, save profiles, the game with its console,
+the settings and updates, on a local page shown in an app window.
 
-Usage: Launcher.bat on Windows, or  python3 tools/launcher.py
+Usage: BurnoutDominator.exe (portable installation), Launcher.bat, or  python3 tools/launcher.py
+Python's standard library only: a portable installation runs it with the embeddable Python.
 """
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import base64
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
-import queue
 import re
+import secrets
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
-import traceback
-
-try:
-    import tkinter as tk
-    from tkinter import filedialog, messagebox, simpledialog, ttk
-except ImportError:  # the helpers below work, and are tested, without Tk
-    tk = None
+import time
+import urllib.request
+import webbrowser
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+# A portable installation: one folder holds the launcher's file, this project (source/), the work
+# directory and the settings, so that the folder can be moved. BurnoutDominator.exe/.py sets it.
+PORTABLE = Path(os.environ["BDR_PORTABLE"]).resolve() if os.environ.get("BDR_PORTABLE") else None
+if PORTABLE:
+    os.environ["BDR_WORK_DIR"] = str(PORTABLE / "work")
+    os.environ["BDR_SETTINGS"] = str(PORTABLE / "settings.ini")
+    if (PORTABLE / "git" / "cmd").is_dir():  # the Git the Windows file brought, for the build's dependencies
+        os.environ["PATH"] = str(PORTABLE / "git" / "cmd") + os.pathsep + os.environ.get("PATH", "")
 sys.path.insert(0, str(ROOT / "tools"))
 import install  # noqa: E402
-from project import DEFAULT_PROFILE, PROFILE_NAME  # noqa: E402
+from project import DEFAULT_PROFILE, PROFILE_NAME, settings_file  # noqa: E402
 
-SETTINGS = ROOT / "settings.ini"
+SETTINGS = settings_file()
 CHANGELOG = ROOT / "CHANGELOG.md"
+REPOSITORY = "literalynn/BurnoutDominatorReversed"
+LATEST_RELEASE = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # children never open a console window
 SETTING_LINE = re.compile(r"\s*([a-z0-9_]+)\s*=\s*(.*?)\s*$")
 # Settings with a fixed list of values; refresh_rate also takes any number typed in.
 CHOICES = {"aspect": ("4:3", "16:9", "stretch"), "super_sampling": ("1", "2", "4", "8", "16"),
            "refresh_rate": ("50", "60", "120", "144", "165", "240", "300", "360", "500")}
 CONSOLE_LINES = 5000
+PORTS = range(47800, 47810)  # a fixed first choice: the app window remembers its size per address
 
 
 def work_dir() -> Path:
@@ -107,25 +122,79 @@ def new_entries(local: str, remote: str) -> list[tuple[str, str]]:
     return [entry for entry in changelog_entries(remote) if entry[0] not in known]
 
 
+def installed_version() -> str:
+    """The version at the top of the installed CHANGELOG.md, "" without one."""
+    entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8")) if CHANGELOG.is_file() else []
+    match = re.match(r"\d+(\.\d+)*", entries[0][0]) if entries else None
+    return match.group(0) if match else ""
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", version))
+
+
 def git(*arguments: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *arguments], cwd=ROOT, capture_output=True, encoding="utf-8", errors="replace",
                           timeout=120, creationflags=NO_WINDOW)
 
 
-def update_state() -> dict:
-    """{"error": text}, or {"behind": commits the GitHub branch is ahead by, "new": their changelog entries}."""
-    if not (ROOT / ".git").exists():
-        return {"error": "Updates need the Git copy of the project (git clone, see the README)."}
-    try:
-        fetch = git("fetch", "--quiet")
-        if fetch.returncode:
-            return {"error": fetch.stderr.strip() or "git fetch failed"}
-        behind = int(git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or 0)
-        remote = git("show", "@{u}:CHANGELOG.md").stdout if behind else ""
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        return {"error": f"git: {error}"}
+def fetch(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": "BurnoutDominatorReversed-launcher"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+
+def update_state(download=fetch) -> dict:
+    """{"error": text}, or {"behind": whether GitHub has something newer, "new": its changelog
+    entries, "zip": the release's source archive when there is no Git copy to pull into}."""
     local = CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.is_file() else ""
-    return {"behind": behind, "new": new_entries(local, remote)}
+    if (ROOT / ".git").exists():
+        try:
+            fetched = git("fetch", "--quiet")
+            if fetched.returncode:
+                return {"error": fetched.stderr.strip() or "git fetch failed"}
+            behind = int(git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or 0)
+            remote = git("show", "@{u}:CHANGELOG.md").stdout if behind else ""
+        except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+            return {"error": f"git: {error}"}
+        return {"behind": behind > 0, "new": new_entries(local, remote)}
+    if not PORTABLE or ROOT != PORTABLE / "source":
+        return {"error": "Updates need the portable launcher (BurnoutDominator.exe) or a Git copy of the project."}
+    try:
+        release = json.loads(download(LATEST_RELEASE))
+        tag = release["tag_name"]
+        if version_key(tag) <= version_key(installed_version()):
+            return {"behind": False, "new": []}
+        archive = next(asset["browser_download_url"] for asset in release["assets"] if asset["name"] == "source.zip")
+        remote = download(f"https://raw.githubusercontent.com/{REPOSITORY}/{tag}/CHANGELOG.md").decode("utf-8")
+    except (OSError, ValueError, KeyError, StopIteration) as error:
+        return {"error": f"GitHub could not be read: {error}"}
+    return {"behind": True, "new": new_entries(local, remote), "zip": archive}
+
+
+def sync_zip(data: bytes, target: Path) -> tuple[int, int]:
+    """Make `target` hold exactly the archive's files; return (files written, files removed).
+    A file whose bytes did not change is left alone, so that the build only compiles what changed.
+    Everything else in `target` is deleted: only for a folder that holds nothing but the project."""
+    target = target.resolve()
+    written, wanted = 0, set()
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for entry in archive.infolist():
+            if entry.is_dir():
+                continue
+            path = (target / entry.filename).resolve()
+            if target not in path.parents:
+                raise ValueError(f"unsafe path in the archive: {entry.filename}")
+            wanted.add(path)
+            content = archive.read(entry)
+            if not path.is_file() or path.read_bytes() != content:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                written += 1
+    stale = [path for path in target.rglob("*") if path.is_file() and path not in wanted and "__pycache__" not in path.parts]
+    for path in stale:
+        path.unlink()
+    return written, len(stale)
 
 
 def console_python() -> str:
@@ -135,385 +204,415 @@ def console_python() -> str:
     return str(console if console.is_file() else exe)
 
 
+def choose_iso() -> str:
+    """A native file dialog; "" when cancelled or when the system has none we know."""
+    if os.name == "nt":
+        script = ("Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form -Property @{TopMost=$true};"
+                  "$dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = 'Burnout Dominator ISO';"
+                  "$dialog.Filter = 'ISO image (*.iso)|*.iso|All files|*.*';"
+                  "if ($dialog.ShowDialog($owner) -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.FileName }")
+        command = ["powershell", "-NoProfile", "-Command", script]
+    elif shutil.which("zenity"):
+        command = ["zenity", "--file-selection", "--title=Burnout Dominator ISO", "--file-filter=*.iso"]
+    else:
+        return ""
+    result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+    return result.stdout.strip()
+
+
+def find_edge() -> str | None:
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LocalAppData")):
+        candidate = Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe" if base else None
+        if candidate and candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def open_window(url: str) -> None:
+    """An app window without browser controls where Edge offers one, else a browser tab."""
+    edge = find_edge() if os.name == "nt" else None
+    if edge:
+        subprocess.Popen([edge, f"--app={url}", "--window-size=1240,820"])
+    else:
+        webbrowser.open(url)
+
+
 class Launcher:
-    def __init__(self, install_now: bool = False) -> None:
-        self.lock = install.read_json(ROOT / "project.json")
+    """The state behind the page. Worker threads change it under `changed` and notify the page's event streams."""
+
+    def __init__(self, token: str | None = None) -> None:
+        self.project = install.read_json(ROOT / "project.json")
         self.work = work_dir()
         self.local = self.work / "local"
-        self.root = tk.Tk()
-        self.root.title("Burnout Dominator Reversed")
-        self.root.geometry("940x660")
-        self.root.minsize(760, 520)
+        self.token = token or secrets.token_hex(16)
+        self.changed = threading.Condition()
+        self.lines: list[str] = []  # the console; line number = first + index
+        self.first = 0
+        self.revision = 0  # bumped whenever the page should read the state again
         self.process: subprocess.Popen | None = None
-        self.running = ""  # what self.process is, for the messages
-        self.events: queue.Queue = queue.Queue()
-        self.setting_vars: dict[str, tk.Variable] = {}
+        self.running = ""  # what self.process is, for the page
+        self.phase = ""  # the installer's last "==> ..." line: the step it is at
+        self.updates: dict = {"note": "Not checked yet.", "behind": False, "new": []}
+        self.clients = 0
+        self.client_seen = time.monotonic()
+        self.restart: list[str] | None = None  # set to the new launcher's arguments after an update
+        try:
+            install.check_prerequisites(self.work, self.work / "build", 0)
+            self.missing = ""
+        except install.SetupError as error:
+            self.missing = "\n".join(getattr(error, "problems", [str(error)])) + "\nInstall what is missing, then start the launcher again."
 
-        self.tabs = ttk.Notebook(self.root)
-        self.tabs.pack(fill="both", expand=True, padx=8, pady=8)
-        self.build_play()
-        self.build_console()
-        self.build_settings()
-        self.build_updates()
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
-        # pythonw has no stderr: an error in a handler goes to the console tab.
-        self.root.report_callback_exception = lambda *error: self.write("".join(traceback.format_exception(*error)))
-        self.refresh()
-        self.root.after(100, self.drain)
-        threading.Thread(target=self.check_updates, args=(True,), daemon=True).start()
-        if install_now and install_status(self.work, self.lock)["ISO found"]:
-            self.install()
+    # --- State --------------------------------------------------------------
 
-    # --- Play ---------------------------------------------------------------
+    def touch(self) -> None:
+        with self.changed:
+            self.revision += 1
+            self.changed.notify_all()
 
-    def build_play(self) -> None:
-        tab = ttk.Frame(self.tabs, padding=12)
-        self.tabs.add(tab, text="Play")
+    def write(self, text: str) -> None:
+        with self.changed:
+            self.lines.append(text)
+            if text.startswith("==> "):
+                self.phase = text[4:].strip()
+                self.revision += 1
+            if len(self.lines) > CONSOLE_LINES:
+                drop = CONSOLE_LINES // 5
+                del self.lines[:drop]
+                self.first += drop
+            self.changed.notify_all()
 
-        disc = ttk.LabelFrame(tab, text="Game disc", padding=10)
-        disc.pack(fill="x")
-        recorded = install.recorded_iso(self.local)
-        self.iso = tk.StringVar(value=str(recorded) if recorded else "")
-        ttk.Entry(disc, textvariable=self.iso).grid(row=0, column=0, sticky="ew")
-        ttk.Button(disc, text="Browse...", command=self.browse_iso).grid(row=0, column=1, padx=(8, 0))
-        ttk.Label(disc, foreground="#555", text="Your own Burnout Dominator ISO, European version (SLES-54627). "
-                                               "Keep it where it is: the game reads it at every launch.").grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        disc.columnconfigure(0, weight=1)
-
-        setup = ttk.LabelFrame(tab, text="Installation", padding=10)
-        setup.pack(fill="x", pady=12)
-        self.steps: dict[str, ttk.Label] = {}
-        for row, name in enumerate(install_status(self.work, self.lock)):
-            self.steps[name] = ttk.Label(setup)
-            self.steps[name].grid(row=row, column=0, sticky="w")
-        self.install_button = ttk.Button(setup, text="Generate the code and build the game", command=self.install)
-        self.install_button.grid(row=0, column=1, rowspan=2, padx=(24, 0), sticky="e")
-        ttk.Label(setup, foreground="#555", text="30 to 90 minutes the first time,\na few minutes after an update.").grid(
-            row=2, column=1, rowspan=2, padx=(24, 0), sticky="e")
-        ttk.Label(setup, foreground="#555", text=f"Work folder: {self.work}").grid(row=4, column=0, columnspan=2,
-                                                                                 sticky="w", pady=(6, 0))
-        setup.columnconfigure(0, weight=1)
-
-        saves = ttk.LabelFrame(tab, text="Save profile", padding=10)
-        saves.pack(fill="x")
-        self.profile = tk.StringVar(value=self.read_state().get("profile", DEFAULT_PROFILE))
-        self.profile_box = ttk.Combobox(saves, textvariable=self.profile, state="readonly", width=30)
-        self.profile_box.grid(row=0, column=0, sticky="w")
-        self.profile_box.bind("<<ComboboxSelected>>", lambda event: self.write_state())
-        ttk.Button(saves, text="New...", command=self.new_profile).grid(row=0, column=1, padx=8)
-        ttk.Button(saves, text="Open its folder", command=self.open_profile).grid(row=0, column=2)
-        ttk.Label(saves, foreground="#555", text="Each profile has its own memory card and save states.").grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
-
-        actions = ttk.Frame(tab)
-        actions.pack(fill="x", pady=16)
-        self.play_button = ttk.Button(actions, text="Play", command=self.play, width=18)
-        self.play_button.pack(side="left", ipady=8)
-        self.stop_button = ttk.Button(actions, text="Stop", command=self.stop)
-        self.stop_button.pack(side="left", padx=8, ipady=8)
-        self.state = ttk.Label(actions, foreground="#555")
-        self.state.pack(side="left", padx=8)
-
-    def browse_iso(self) -> None:
-        path = filedialog.askopenfilename(title="Burnout Dominator ISO", filetypes=[("ISO image", "*.iso"), ("All files", "*")])
-        if path:
-            self.iso.set(str(Path(path)))
-
-    def read_state(self) -> dict:
+    def saved(self) -> dict:
         try:
             return json.loads((self.local / "launcher.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}  # no choice remembered yet, or an unreadable file: the default profile
 
-    def write_state(self) -> None:
-        if self.local.is_dir():
-            (self.local / "launcher.json").write_text(json.dumps({"profile": self.profile.get()}, indent=2) + "\n", encoding="utf-8")
+    def profile(self) -> str:
+        name = self.saved().get("profile", DEFAULT_PROFILE)
+        return name if name in profiles(self.local) else DEFAULT_PROFILE
 
-    def profile_folder(self) -> Path:
-        name = self.profile.get()
-        return self.local / "saves" if name == DEFAULT_PROFILE else self.local / "profiles" / name
+    def state(self) -> dict:
+        status = install_status(self.work, self.project)
+        recorded = install.recorded_iso(self.local)
+        settings = parse_settings(SETTINGS.read_text(encoding="utf-8")) if SETTINGS.is_file() else []
+        for item in settings:
+            item.pop("closed", None)
+            if item.get("key") in CHOICES:
+                item["choices"] = CHOICES[item["key"]]
+        entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8")) if CHANGELOG.is_file() else []
+        return {"iso": str(recorded or ""), "steps": status, "ready": all(status.values()),
+                "running": self.running if self.process else "", "phase": self.phase if self.process else "",
+                "work": str(self.work),
+                "profiles": profiles(self.local), "profile": self.profile(),
+                "settings": settings, "settings_stamp": SETTINGS.stat().st_mtime_ns if SETTINGS.is_file() else 0,
+                "version": installed_version(), "changelog": entries, "updates": self.updates,
+                "missing": self.missing, "build": BUILD}
 
-    def new_profile(self) -> None:
-        name = simpledialog.askstring("New save profile", "Name of the profile:", parent=self.root)
-        if name is None:
+    # --- Commands -----------------------------------------------------------
+
+    def start(self, title: str, command: list[str], done=None) -> None:
+        """Run one command at a time, its output in the console; done(exit code) follows."""
+        if self.process:
+            raise ValueError(f"{self.running} is still running.")
+        self.write(f"\n=== {title} ===\n")
+        process = subprocess.Popen(command, cwd=ROOT, env=dict(os.environ, PYTHONUTF8="1"), stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace",
+                                   creationflags=NO_WINDOW, start_new_session=os.name != "nt")
+        self.process, self.running, self.phase = process, title, ""
+
+        def pump() -> None:
+            for line in process.stdout:
+                self.write(line)
+            code = process.wait()
+            self.write(f"=== finished, exit code {code} ===\n")
+            self.process = None
+            if done:
+                done(code)
+            self.touch()
+
+        threading.Thread(target=pump, daemon=True).start()
+        self.touch()
+
+    def stop(self) -> None:
+        """Stop the running command and everything it started (the game is a grandchild)."""
+        process = self.process
+        if not process or process.poll() is not None:
             return
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+
+    def install(self, iso: str = "") -> None:
+        self.start("Installation", [console_python(), "-u", str(ROOT / "tools" / "install.py"), "--iso", iso.strip()])
+
+    def play(self, profile: str) -> None:
+        if profile not in profiles(self.local):
+            raise ValueError("Unknown save profile.")
+        self.select(profile)
+        self.start("Game", [console_python(), "-u", str(ROOT / "tools" / "project.py"), "run", "--echo", "--status-ms", "5000",
+                            "--profile", profile])
+
+    def select(self, profile: str) -> None:
+        if profile in profiles(self.local) and self.local.is_dir():
+            (self.local / "launcher.json").write_text(json.dumps({"profile": profile}, indent=2) + "\n", encoding="utf-8")
+
+    def new_profile(self, name: str) -> None:
         name = name.strip()
         if not PROFILE_NAME.fullmatch(name) or name in profiles(self.local):
-            messagebox.showerror("New save profile", "Use a new name made of letters, digits, spaces, - and _ (40 at most).")
-            return
+            raise ValueError("Use a new name made of letters, digits, spaces, - and _ (40 at most).")
         (self.local / "profiles" / name / "saves").mkdir(parents=True)
-        self.profile.set(name)
-        self.write_state()
-        self.refresh()
+        self.select(name)
 
-    def open_profile(self) -> None:
-        folder = self.profile_folder()
+    def open_profile(self, profile: str) -> None:
+        if profile not in profiles(self.local):
+            raise ValueError("Unknown save profile.")
+        folder = self.local / "saves" if profile == DEFAULT_PROFILE else self.local / "profiles" / profile
         folder.mkdir(parents=True, exist_ok=True)
         if os.name == "nt":
             os.startfile(folder)
         else:
             subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(folder)])
 
-    def install(self) -> None:
-        command = [console_python(), "-u", str(ROOT / "tools" / "install.py"), "--iso", self.iso.get().strip()]
-        self.start("Installation", command)
-
-    def play(self) -> None:
-        self.write_state()
-        command = [console_python(), "-u", str(ROOT / "tools" / "project.py"), "run", "--echo", "--status-ms", "5000",
-                   "--profile", self.profile.get()]
-        self.start("Game", command, lambda code: self.load_settings())  # F1 in the game rewrites settings.ini
-
-    # --- Console ------------------------------------------------------------
-
-    def build_console(self) -> None:
-        tab = ttk.Frame(self.tabs, padding=8)
-        self.tabs.add(tab, text="Console")
-        self.console_tab = tab
-        bar = ttk.Frame(tab)
-        bar.pack(fill="x", pady=(0, 6))
-        ttk.Button(bar, text="Stop", command=self.stop).pack(side="left")
-        ttk.Button(bar, text="Copy all", command=self.copy_console).pack(side="left", padx=8)
-        ttk.Button(bar, text="Clear", command=lambda: self.set_text(self.console, "")).pack(side="left")
-        self.console = self.text_area(tab, font=("Consolas" if os.name == "nt" else "monospace", 9), wrap="none")
-
-    def text_area(self, parent, **options) -> tk.Text:
-        frame = ttk.Frame(parent)
-        frame.pack(fill="both", expand=True)
-        text = tk.Text(frame, state="disabled", **options)
-        scroll = ttk.Scrollbar(frame, command=text.yview)
-        text.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        text.pack(side="left", fill="both", expand=True)
-        return text
-
-    def set_text(self, widget: tk.Text, content: str) -> None:
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        widget.insert("end", content)
-        widget.configure(state="disabled")
-
-    def write(self, line: str) -> None:
-        self.console.configure(state="normal")
-        self.console.insert("end", line)
-        if int(self.console.index("end-1c").split(".")[0]) > CONSOLE_LINES:
-            self.console.delete("1.0", f"{CONSOLE_LINES // 5}.0")
-        self.console.configure(state="disabled")
-        self.console.see("end")
-
-    def copy_console(self) -> None:
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.console.get("1.0", "end"))
-
-    def start(self, title: str, command: list[str], done=None) -> None:
-        """Run one command at a time, its output in the console tab; done(exit code) follows."""
-        if self.process:
-            return
-        self.write(f"\n=== {title} ===\n")
-        self.tabs.select(self.console_tab)
-        env = dict(os.environ, PYTHONUTF8="1")
-        try:
-            self.process = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                            stderr=subprocess.STDOUT, encoding="utf-8", errors="replace",
-                                            creationflags=NO_WINDOW, start_new_session=os.name != "nt")
-        except OSError as error:
-            self.write(f"{command[0]}: {error}\n")
-            return
-        self.running = title
-        threading.Thread(target=self.pump, args=(self.process, done), daemon=True).start()
-        self.refresh()
-
-    def pump(self, process: subprocess.Popen, done) -> None:
-        for line in process.stdout:
-            self.events.put(line)
-        self.events.put(f"=== finished, exit code {process.wait()} ===\n")
-        self.events.put(("done", done, process.returncode))
-
-    def stop(self) -> None:
-        """Stop the running command and everything it started (the game is a grandchild)."""
-        if not self.process or self.process.poll() is not None:
-            return
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
-        else:
-            os.killpg(self.process.pid, signal.SIGTERM)
-
-    def drain(self) -> None:
-        """Events from the worker threads, handled on the Tk thread."""
-        try:
-            while True:
-                event = self.events.get_nowait()
-                if isinstance(event, str):
-                    self.write(event)
-                elif event[0] == "done":
-                    self.process = None
-                    self.refresh()
-                    if event[1]:
-                        event[1](event[2])
-                else:
-                    self.show_updates(event[1], event[2])
-        except queue.Empty:
-            pass
-        finally:
-            self.root.after(100, self.drain)  # also after an error in a handler
-
-    # --- Settings -----------------------------------------------------------
-
-    def build_settings(self) -> None:
-        tab = ttk.Frame(self.tabs, padding=8)
-        self.tabs.add(tab, text="Settings")
-        bar = ttk.Frame(tab)
-        bar.pack(fill="x", pady=(0, 6))
-        ttk.Button(bar, text="Save", command=self.save_settings).pack(side="left")
-        ttk.Button(bar, text="Reload", command=self.load_settings).pack(side="left", padx=8)
-        self.settings_note = ttk.Label(bar, foreground="#555")
-        self.settings_note.pack(side="left", padx=8)
-        canvas = tk.Canvas(tab, highlightthickness=0)
-        scroll = ttk.Scrollbar(tab, command=canvas.yview)
-        canvas.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        self.settings_frame = ttk.Frame(canvas)
-        window = canvas.create_window((0, 0), window=self.settings_frame, anchor="nw")
-        self.settings_frame.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
-        canvas.bind("<Enter>", lambda event: canvas.bind_all("<MouseWheel>", lambda wheel: canvas.yview_scroll(-wheel.delta // 120, "units")))
-        canvas.bind("<Leave>", lambda event: canvas.unbind_all("<MouseWheel>"))
-        self.load_settings()
-
-    def load_settings(self) -> None:
-        for child in self.settings_frame.winfo_children():
-            child.destroy()
-        self.setting_vars.clear()
-        if not SETTINGS.is_file():
-            self.settings_note.configure(text="The game writes settings.ini at its first launch; they appear here afterwards.")
-            return
-        self.settings_note.configure(text="F1 in the game changes the same settings. Changes apply at the next launch.")
-        for item in parse_settings(SETTINGS.read_text(encoding="utf-8")):
-            if "comment" in item:
-                ttk.Label(self.settings_frame, text=item["comment"], foreground="#555", wraplength=820, justify="left").pack(
-                    fill="x", anchor="w", pady=(12, 2))
-                continue
-            key, value = item["key"], item["value"]
-            row = ttk.Frame(self.settings_frame)
-            row.pack(fill="x", anchor="w", pady=1)
-            ttk.Label(row, text=key, width=22).pack(side="left")
-            if value in ("true", "false"):
-                var: tk.Variable = tk.BooleanVar(value=value == "true")
-                ttk.Checkbutton(row, variable=var).pack(side="left")
-            else:
-                var = tk.StringVar(value=value)
-                if key in CHOICES:
-                    ttk.Combobox(row, textvariable=var, values=CHOICES[key], width=12,
-                                 state="normal" if key == "refresh_rate" else "readonly").pack(side="left")
-                else:
-                    ttk.Entry(row, textvariable=var, width=44).pack(side="left")
-            self.setting_vars[key] = var
-
-    def save_settings(self) -> None:
-        if not self.setting_vars:
-            return
-        values = {key: ("true" if var.get() else "false") if isinstance(var, tk.BooleanVar) else str(var.get()).strip()
-                  for key, var in self.setting_vars.items()}
-        SETTINGS.write_text(apply_settings(SETTINGS.read_text(encoding="utf-8"), values), encoding="utf-8")
-        self.settings_note.configure(text="Saved. Changes apply at the next launch of the game.")
+    def save_settings(self, values: dict) -> None:
+        if SETTINGS.is_file():
+            clean = {str(key): str(value).replace("\n", " ").strip() for key, value in values.items()}
+            SETTINGS.write_text(apply_settings(SETTINGS.read_text(encoding="utf-8"), clean), encoding="utf-8")
 
     # --- Updates ------------------------------------------------------------
 
-    def build_updates(self) -> None:
-        tab = ttk.Frame(self.tabs, padding=8)
-        self.tabs.add(tab, text="Updates")
-        self.updates_tab = tab
-        bar = ttk.Frame(tab)
-        bar.pack(fill="x", pady=(0, 6))
-        ttk.Button(bar, text="Check for updates", command=lambda: threading.Thread(target=self.check_updates, daemon=True).start()).pack(side="left")
-        self.update_button = ttk.Button(bar, text="Update now", command=self.update, state="disabled")
-        self.update_button.pack(side="left", padx=8)
-        self.update_note = ttk.Label(bar, foreground="#555")
-        self.update_note.pack(side="left", padx=8)
-        family = "Segoe UI" if os.name == "nt" else "sans-serif"
-        self.changelog = self.text_area(tab, wrap="word", font=(family, 10), padx=10, pady=8, spacing1=3)
-        self.changelog.tag_configure("title", font=(family, 13, "bold"))
-        self.changelog.tag_configure("heading", font=(family, 10, "bold"))
-        self.show_changelog("Installed version", changelog_entries(CHANGELOG.read_text(encoding="utf-8")) if CHANGELOG.is_file() else [])
-
-    def show_changelog(self, title: str, entries: list[tuple[str, str]]) -> None:
-        text = self.changelog
-        text.configure(state="normal")
-        text.delete("1.0", "end")
-        text.insert("end", title + "\n", "title")
-        for heading, body in entries:
-            text.insert("end", f"\n{heading}\n", "heading")
-            text.insert("end", body.replace("**", "").replace("`", "") + "\n")  # Markdown marks are not rendered
-        text.configure(state="disabled")
-
-    def check_updates(self, quiet: bool = False) -> None:
-        self.events.put(("updates", update_state(), quiet))
-
-    def show_updates(self, state: dict, quiet: bool) -> None:
-        if "error" in state:
-            if not quiet:
-                self.update_note.configure(text=state["error"])
-            return
-        behind = state["behind"]
-        self.update_button.configure(state="normal" if behind and not self.process else "disabled")
-        self.tabs.tab(self.updates_tab, text="Updates (new)" if behind else "Updates")
-        if not behind:
-            self.update_note.configure(text="Up to date.")
-            return
-        self.update_note.configure(text=f"An update is available ({behind} change{'s' if behind > 1 else ''} on GitHub).")
-        self.show_changelog("What the update brings", state["new"] or [("Technical changes", "Nothing a player would notice.")])
+    def check_updates(self) -> None:
+        found = update_state()
+        if "error" in found:
+            self.updates = {"note": found["error"], "behind": False, "new": []}
+        elif not found["behind"]:
+            self.updates = {"note": "Up to date.", "behind": False, "new": []}
+        else:
+            entries = found["new"] or [("Technical changes", "Nothing a player would notice.")]
+            self.updates = {"note": "An update is available.", "behind": True, "new": entries, "zip": found.get("zip", "")}
+        self.touch()
 
     def update(self) -> None:
-        self.start("Update", ["git", "pull", "--ff-only"], self.updated)
-
-    def updated(self, code: int) -> None:
-        if code:
-            messagebox.showerror("Update", "The update did not go through; the console tab says why.")
+        """Bring the project up to date, then let a new launcher (this file may have changed) rebuild the game."""
+        if self.process:
+            raise ValueError(f"{self.running} is still running.")
+        if (ROOT / ".git").exists():
+            self.start("Update", ["git", "pull", "--ff-only"], lambda code: self.updated(code == 0))
             return
-        # The launcher itself may have changed: start the new one, which rebuilds the game.
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--install"], cwd=ROOT, creationflags=NO_WINDOW)
-        self.root.destroy()
+        archive = self.updates.get("zip")
+        if not archive:
+            raise ValueError("Check for updates first.")
 
-    # --- State --------------------------------------------------------------
+        def download() -> None:
+            self.write(f"\n=== Update ===\nDownloading {archive}\n")
+            try:
+                written, removed = sync_zip(fetch(archive), ROOT)
+                self.write(f"{written} files changed, {removed} removed.\n")
+                self.updated(True)
+            except (OSError, ValueError, zipfile.BadZipFile) as error:
+                self.write(f"The update did not go through: {error}\n")
+            self.touch()
 
-    def refresh(self) -> None:
-        status = install_status(self.work, self.lock)
-        for name, done in status.items():
-            self.steps[name].configure(text=("✔  " if done else "✖  ") + name, foreground="#1a7f37" if done else "#b42318")
-        names = profiles(self.local)
-        self.profile_box.configure(values=names)
-        if self.profile.get() not in names:
-            self.profile.set(DEFAULT_PROFILE)
-        busy = self.process is not None
-        self.install_button.configure(state="disabled" if busy else "normal")
-        self.play_button.configure(state="normal" if all(status.values()) and not busy else "disabled")
-        self.stop_button.configure(state="normal" if busy else "disabled")
-        self.state.configure(text=f"{self.running} running: see the Console tab." if busy
-                             else "Ready." if all(status.values()) else "Give the ISO, then generate the code and build the game.")
+        threading.Thread(target=download, daemon=True).start()
 
-    def close(self) -> None:
-        if self.process and self.process.poll() is None:
-            if not messagebox.askyesno("Quit", f"{self.running} is still running. Stop it and quit?"):
+    def updated(self, success: bool) -> None:
+        if success:
+            self.restart = ["--install"] if install_status(self.work, self.project)["ISO found"] else []
+            self.touch()
+
+    # --- Requests -----------------------------------------------------------
+
+    def command(self, name: str, body: dict) -> dict:
+        """One request of the page; the answer is the new state, or {"error": text}."""
+        try:
+            if name == "browse":
+                return {"path": choose_iso()}
+            if name == "install":
+                self.install(str(body.get("iso", "")))
+            elif name == "play":
+                self.play(str(body.get("profile", "")))
+            elif name == "stop":
+                self.stop()
+            elif name == "select":
+                self.select(str(body.get("profile", "")))
+            elif name == "new-profile":
+                self.new_profile(str(body.get("name", "")))
+            elif name == "open-profile":
+                self.open_profile(str(body.get("profile", "")))
+            elif name == "settings":
+                self.save_settings(dict(body.get("values", {})))
+            elif name == "check-updates":
+                threading.Thread(target=self.check_updates, daemon=True).start()
+            elif name == "update":
+                self.update()
+            elif name != "state":
+                return {"error": f"Unknown command: {name}"}
+        except (ValueError, OSError) as error:
+            return {"error": str(error)}
+        return self.state()
+
+
+def handler(app: Launcher, port: int):
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *arguments) -> None:  # pythonw has no stderr
+            pass
+
+        def allowed(self, token: str) -> bool:
+            # Only this machine's launcher page: the address must be ours (a web page elsewhere
+            # cannot name it through another host), and the token is only in the page we served.
+            return self.headers.get("Host") in hosts and secrets.compare_digest(token or "", app.token)
+
+        def send(self, status: int, body: bytes, content: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            path, _, query = self.path.partition("?")
+            token = dict(pair.partition("=")[::2] for pair in query.split("&")).get("t", "")
+            if path == "/ping":
+                self.send(200, json.dumps({"app": "bdr-launcher", "root": str(PORTABLE or ROOT)}).encode(), "application/json")
+            elif not self.allowed(token):
+                self.send(403, b"Open the launcher from its file.", "text/plain")
+            elif path == "/":
+                self.send(200, PAGE.replace("__TOKEN__", app.token).encode("utf-8"), "text/html; charset=utf-8")
+            elif path == "/events":
+                self.events()
+            else:
+                self.send(404, b"Not found.", "text/plain")
+
+        def do_POST(self) -> None:
+            if not self.allowed(self.headers.get("X-BDR-Token", "")):
+                self.send(403, b"Forbidden.", "text/plain")
                 return
-            self.stop()
-        self.root.destroy()
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0") or 0)) or b"{}")
+            except ValueError:
+                body = {}
+            answer = app.command(self.path.removeprefix("/api/"), body if isinstance(body, dict) else {})
+            self.send(200, json.dumps(answer).encode("utf-8"), "application/json")
+
+        def events(self) -> None:
+            """Server-sent events: console lines as they come, and a word when the state changed."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            line, revision = app.first, -1
+            with app.changed:
+                app.clients += 1
+            try:
+                while True:
+                    with app.changed:
+                        if line >= app.first + len(app.lines) and revision == app.revision:
+                            app.changed.wait(2)
+                        line = max(line, app.first)
+                        fresh = app.lines[line - app.first:]
+                        line += len(fresh)
+                        state, revision = revision != app.revision, app.revision
+                    message = {"lines": fresh, "state": state} if fresh or state else None
+                    # A comment line keeps the connection checked: writing to a closed page fails.
+                    self.wfile.write((f"data: {json.dumps(message)}\n\n" if message else ": waiting\n\n").encode("utf-8"))
+                    self.wfile.flush()
+            except OSError:
+                pass
+            finally:
+                with app.changed:
+                    app.clients -= 1
+                    app.client_seen = time.monotonic()
+
+    return Handler
+
+
+def session_file() -> Path:
+    """Where a running launcher of this folder says how to reach it."""
+    name = hashlib.sha256(str(PORTABLE or ROOT).encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"bdr-launcher-{name}.json"
+
+
+def running_instance() -> str | None:
+    """The page address of a launcher already running for this folder."""
+    try:
+        session = json.loads(session_file().read_text(encoding="utf-8"))
+        with urllib.request.urlopen(f"http://127.0.0.1:{session['port']}/ping", timeout=2) as response:
+            if json.loads(response.read()).get("root") == str(PORTABLE or ROOT):
+                return f"http://127.0.0.1:{session['port']}/?t={session['token']}"
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
+def serve(arguments: list[str]) -> int:
+    existing = running_instance()
+    if existing and "--no-window" not in arguments and "--token" not in arguments:
+        open_window(existing)
+        return 0
+    token = arguments[arguments.index("--token") + 1] if "--token" in arguments else None
+    wanted = [int(arguments[arguments.index("--port") + 1])] if "--port" in arguments else list(PORTS) + [0]
+    app = Launcher(token)
+    server = None
+    for port in wanted:
+        for _ in range(20 if "--token" in arguments else 1):  # after an update the old launcher is still closing
+            try:
+                server = ThreadingHTTPServer(("127.0.0.1", port), BaseHTTPRequestHandler)
+                break
+            except OSError:
+                time.sleep(0.25)
+        if server:
+            break
+    if not server:
+        return 1
+    port = server.server_address[1]
+    server.RequestHandlerClass = handler(app, port)
+    server.daemon_threads = True
+    session_file().write_text(json.dumps({"port": port, "token": app.token}), encoding="utf-8")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{port}/?t={app.token}"
+    print(url, flush=True)
+    if "--no-window" not in arguments and "--token" not in arguments:
+        open_window(url)
+    threading.Thread(target=app.check_updates, daemon=True).start()
+    if "--install" in arguments and install_status(app.work, app.project)["ISO found"]:
+        app.install()
+    started = time.monotonic()
+    while True:
+        time.sleep(0.5)
+        if app.restart is not None:
+            # The project changed under us: a new launcher takes over the same address and token,
+            # so the open page just carries on (it reloads itself when it sees the new build).
+            server.shutdown()
+            server.server_close()
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--token", app.token, *app.restart],
+                             cwd=ROOT, creationflags=NO_WINDOW)
+            return 0
+        idle = time.monotonic() - max(app.client_seen, started)
+        seen = app.client_seen > started or app.clients
+        if "--no-window" not in arguments and not app.clients and not app.process and idle > (4 if seen else 90):
+            session_file().unlink(missing_ok=True)
+            return 0  # the window was closed
+
+
+PAGE = Path(__file__).with_name("launcher.html").read_text(encoding="utf-8").replace(
+    "__ICON__", base64.b64encode(Path(__file__).with_name("launcher.png").read_bytes()).decode("ascii"))
+BUILD = hashlib.sha256((PAGE + Path(__file__).read_text(encoding="utf-8")).encode("utf-8")).hexdigest()[:12]
 
 
 def main() -> int:
-    if tk is None:
-        print("Tk is missing: install it (Linux: sudo apt install python3-tk) or use tools/install.py and tools/project.py run.",
-              file=sys.stderr)
-        return 1
     try:
-        app = Launcher(install_now="--install" in sys.argv[1:])
+        return serve(sys.argv[1:])
     except install.SetupError as error:  # a work directory the installer refuses, an unreadable project file
-        tk.Tk().withdraw()
-        messagebox.showerror("Burnout Dominator Reversed", str(error))
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, str(error), "Burnout Dominator Reversed", 0x10)
+        print(error, file=sys.stderr)
         return 1
-    app.root.mainloop()
-    return 0
 
 
 if __name__ == "__main__":
