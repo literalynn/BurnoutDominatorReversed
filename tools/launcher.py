@@ -256,7 +256,9 @@ def choose(folder: bool = False) -> str:
         script = ("Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.NativeWindow;"
                   f"$owner.AssignHandle([IntPtr]{owner});"
                   f"$dialog = New-Object System.Windows.Forms.{kind}; {setup};"
-                  f"if ($dialog.ShowDialog($owner) -eq 'OK') {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.{picked} }}")
+                  # ReleaseHandle: else .NET posts WM_CLOSE to the borrowed window as PowerShell ends (issue 10)
+                  f"$answer = $dialog.ShowDialog($owner); $owner.ReleaseHandle();"
+                  f"if ($answer -eq 'OK') {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.{picked} }}")
         command = ["powershell", "-NoProfile", "-Command", script]
     elif sys.platform == "darwin":
         command = ["osascript", "-e", 'POSIX path of (choose folder with prompt "The folder that holds your saves")' if folder else

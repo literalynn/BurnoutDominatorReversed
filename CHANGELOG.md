@@ -2,6 +2,10 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.2.3 (November 11, 2026)
+
+- **Browse no longer closes the launcher**: choosing the ISO, or a folder of saves, in the Browse window closed the launcher's window as soon as the choice was made.
+
 ## 1.2.2 (November 10, 2026)
 
 - Linux: the launcher's window also builds with the Clang compiler (it fell back to the page).
