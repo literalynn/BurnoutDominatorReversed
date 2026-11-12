@@ -22,6 +22,7 @@ namespace ps2x
         bool highResolution = true;  // 2x the PS2 resolution from 4 or 8 samples a pixel, 4x from 16
         bool fxaa = false;           // FXAA on the frame before it is scaled to the window
         bool hudSmoothing = true;    // the HUD's bilinear art interpolated per sample at 2x and 4x (no menu row)
+        int carLights = 100;         // brightness of the cars' light glows in percent: 100 (original), 150 or 200
         bool gsThread = true;        // VIF1, VU1 and GS submission on a second thread
         bool fastLoading = true;     // run faster than real time while the game is silent and idle
         bool keepSpeed = true;       // COP0 Count runs: the game steps more when frames come late

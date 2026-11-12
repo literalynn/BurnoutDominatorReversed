@@ -132,6 +132,8 @@ namespace ps2x
                 return parseBool(value, s.fxaa);
             if (key == "hud_smoothing")
                 return parseBool(value, s.hudSmoothing);
+            if (key == "car_lights")
+                return parseInt(value, 100, 200, s.carLights);
             if (key == "gs_thread")
                 return parseBool(value, s.gsThread);
             if (key == "fast_loading")
@@ -286,6 +288,9 @@ namespace ps2x
                 "# smooth instead of blocky at 2x and 4x.\n"
                 "fxaa = " << (s.fxaa ? "true" : "false") << "\n"
                 "hud_smoothing = " << (s.hudSmoothing ? "true" : "false") << "\n"
+                "# car_lights makes the glow of every car's headlights, tail lights and indicators\n"
+                "# brighter, in percent: 100 is the original, 150 and 200 show traffic from further away.\n"
+                "car_lights = " << s.carLights << "\n"
                 "\n"
                 "# gs_thread runs the PS2 graphics units (VIF1, VU1, GS) on a second CPU core.\n"
                 "gs_thread = " << (s.gsThread ? "true" : "false") << "\n"

@@ -39,6 +39,7 @@ namespace
         RowFps,
         RowFullscreen,
         RowSmooth,
+        RowCarLights,
         RowVibration,
         RowFastLoading,
         RowKeepSpeed,
@@ -217,6 +218,7 @@ namespace
         case RowFps: return "Show FPS";
         case RowFullscreen: return "Full screen (F11)";
         case RowSmooth: return "Smooth scaling";
+        case RowCarLights: return "Car lights";
         case RowVibration: return "Gamepad vibration";
         case RowFastLoading: return "Fast loading";
         case RowKeepSpeed: return "Keep speed when slow (next race)";
@@ -263,6 +265,7 @@ namespace
         case RowFps: return onOff(s.showFps);
         case RowFullscreen: return onOff(IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
         case RowSmooth: return onOff(s.smoothScaling);
+        case RowCarLights: return s.carLights == 100 ? "Original" : std::to_string(s.carLights) + "%";
         case RowVibration: return onOff(s.vibration);
         case RowFastLoading: return onOff(s.fastLoading);
         case RowKeepSpeed: return onOff(s.keepSpeed);
@@ -345,6 +348,15 @@ namespace
         case RowSmooth:
             s.smoothScaling = !s.smoothScaling;
             break;
+        case RowCarLights:
+        {
+            static const int kLevels[] = {100, 150, 200};
+            int index = 0;
+            while (index < 3 && s.carLights != kLevels[index])
+                ++index;
+            s.carLights = kLevels[(index % 3 + (step < 0 ? 2 : 1)) % 3];
+            break;
+        }
         case RowVibration:
             s.vibration = !s.vibration;
             break;

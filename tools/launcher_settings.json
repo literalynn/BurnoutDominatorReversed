@@ -24,6 +24,7 @@
         {"key": "super_sampling", "label": "Samples per pixel", "help": "More samples: smoother edges, more work for the graphics card.", "choice": ["1", "2", "4", "8", "16"]},
         {"key": "fxaa", "label": "FXAA", "help": "Smooths the edges of the finished picture."},
         {"key": "hud_smoothing", "label": "Smooth HUD", "help": "The race display and the menu art smooth instead of blocky in high resolution."},
+        {"key": "car_lights", "label": "Car lights", "help": "Brighter headlight and tail light glows: oncoming traffic shows from further away. 100% is the original.", "select": ["100", "150", "200"], "unit": "%"},
         {"key": "progressive_scan", "label": "Progressive scan", "help": "Whole frames instead of interlaced fields: no combed lines."},
         {"key": "smooth_scaling", "label": "Smooth enlargement", "help": "Off: sharp pixels."}]},
       {"title": "Performance", "rows": [
