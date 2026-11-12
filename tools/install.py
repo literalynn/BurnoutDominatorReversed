@@ -447,6 +447,39 @@ def find_game(build_dir: Path) -> Path | None:
     return None
 
 
+def purge(work: Path) -> None:
+    """Free the space only building needs: the translated C++, the backups of earlier translations and the build
+    tree, except the game and the libraries next to it. The game stays playable; the next installation or update
+    translates and builds it all again."""
+    build = work / "build"
+    game = find_game(build)
+    # The runner keeps saves in <work>/local/saves; mc0 and mc1 are the runtime's fallback memory cards, kept in case.
+    keep = {game, game.parent / "mc0", game.parent / "mc1",
+            *(p for p in game.parent.iterdir() if p.suffix.lower() in (".dll", ".dylib") or ".so" in p.suffixes)} if game else set()
+
+    def prune(folder: Path) -> None:
+        for entry in folder.iterdir():
+            if entry in keep:
+                continue
+            if entry.is_symlink() or entry.is_file():
+                entry.unlink()
+            elif any(entry in path.parents for path in keep):
+                prune(entry)
+            else:
+                remove_inside(entry, work)
+
+    before = shutil.disk_usage(existing_parent(work)).free
+    for folder in (work / "generated", work / "local" / "backups"):
+        if folder.is_dir():
+            say(f"Deleting {folder}")
+            remove_inside(folder, work)
+    if build.is_dir():
+        say(f"Deleting {build}" + (f", except the game and its libraries in {game.parent}" if game else ""))
+        prune(build)
+    freed = max(shutil.disk_usage(existing_parent(work)).free - before, 0)
+    say(f"{freed / GIB:.1f} GB freed. The game stays playable; the next update translates and builds it all again.")
+
+
 def project(env: dict, *arguments: str) -> None:
     command = [sys.executable, str(PROJECT), *arguments]
     if subprocess.run(command, cwd=ROOT, env=env).returncode:
@@ -475,7 +508,7 @@ def setup(args: argparse.Namespace) -> int:
     say(f"Work directory: {work}")
     lock = read_json(ROOT / "project.json")
     disc = disc_state(local, lock)
-    needed = required_space(disc == "ok", find_game(build_dir) is not None)
+    needed = required_space(disc == "ok", find_game(build_dir) is not None and (build_dir / "CMakeCache.txt").is_file())
     try:
         toolchain = check_prerequisites(work, build_dir, needed, args.download_compiler)
     except SetupError as error:
@@ -583,8 +616,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--download-compiler", action="store_true",
                         help="Windows without Visual Studio: download Microsoft's C++ Build Tools, CMake and Ninja into "
                              "<work>/toolchain, accepting Microsoft's licence terms for the Build Tools")
+    parser.add_argument("--purge", action="store_true",
+                        help="Delete the translated code and the build files to free disk space; the game stays playable "
+                             "and the next update translates and builds it all again")
     args = parser.parse_args(argv)
     try:
+        if args.purge:
+            purge(choose_work_dir(args.work_dir, dict(os.environ), ROOT, Path.home())[0])
+            return 0
         return setup(args)
     except KeyboardInterrupt:
         print("\nInstallation interrupted. Run the same command again to resume.", file=sys.stderr)

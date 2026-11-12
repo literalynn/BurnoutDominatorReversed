@@ -881,6 +881,7 @@ namespace
         Field iso, newName, newSaves;
         std::deque<std::pair<std::string, Field>> fields; // a deque: g_focus points into it
         bool newOpen = false;
+        bool purgeOpen = false; // the warning before the build files are deleted
         std::string profile, note;
         std::vector<std::pair<std::string, std::string>> values; // settings.ini, in file order
         long long settingsStamp = -1;
@@ -1491,7 +1492,30 @@ namespace
                 });
             for (size_t k = 0; k < note.size(); ++k)
                 print(F(fNote), note[k], cx + install + u(6), row + (height - u(19.5f) * float(note.size())) / 2 + u(19.5f) * (float(k) + 0.5f), kMute);
-            return row - cy + height;
+            row += height;
+            if (s["purge"].text.empty()) // nothing to delete, or no game to keep
+                g.purgeOpen = false;
+            else
+            {
+                row += u(6);
+                if (button(cx, row, "Free up disk space", kQuiet, !busy()))
+                    g.purgeOpen = !g.purgeOpen;
+                row += u(39);
+                if (g.purgeOpen)
+                {
+                    row += u(10) + paragraph(F(fSmall), s["purge"].text, cx, row + u(10), cw, u(18.75f), kMute) + u(12);
+                    const std::string go = "Delete the build files";
+                    if (button(cx, row, go, kPrimary, !busy()))
+                        act("purge", "{}", [](const Json &) {
+                            g.purgeOpen = false;
+                            g.nextPage = kConsole;
+                        });
+                    if (button(cx + buttonWidth(go) + u(8), row, "Cancel", kQuiet))
+                        g.purgeOpen = false;
+                    row += u(39);
+                }
+            }
+            return row - cy;
         }) + u(14);
         left += card(x, left, leftW, "Save profile", [&](float cx, float cy, float cw) {
             std::vector<std::string> names;

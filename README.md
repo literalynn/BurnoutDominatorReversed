@@ -77,7 +77,7 @@ The game is complete and playable from start to finish. The project is a work in
 | **Processor** | x86-64, four threads or more; single-thread speed matters most. FMA3 (Intel since 2013, AMD since 2012) is used when present. |
 | **Graphics** | a card with Vulkan. Two and four times the PS2's resolution need a dedicated card. |
 | **Memory** | 16 GB or more to build the game: a few of its files take up to 8 GB each to compile. With less memory the build compiles fewer of them at once. |
-| **Disk** | 25 GB free. |
+| **Disk** | 25 GB free. Once the game is built, *Free up disk space* in the launcher deletes the build files (about 12 GB); the game still plays, but the next update then builds it all again (30 to 90 minutes). |
 | **Build tools** | the game is compiled on your PC. Windows: nothing to install. Without Visual Studio, the launcher downloads Microsoft's C++ Build Tools, CMake and Ninja into its folder (a 500 MB download, 1.25 GB on disk); Visual Studio 2022 or 2026 with *Desktop development with C++* is used when it is there. Linux: the packages below. |
 
 ## Installation

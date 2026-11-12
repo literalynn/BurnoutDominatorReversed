@@ -390,7 +390,15 @@ class Launcher:
         for item in settings:
             item.pop("closed", None)
         entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8")) if CHANGELOG.is_file() else []
-        return {"iso": str(recorded or ""), "steps": status, "ready": all(status.values()),
+        # After a purge the game plays without its translated code; the next update makes it again.
+        ready = all(done for step, done in status.items() if step != "Game code generated")
+        purge = ""
+        if status.get("Game built") and ((self.work / "generated").is_dir() or (self.work / "build" / "CMakeCache.txt").is_file()):
+            purge = (f"Deletes the translated game code and the build files in {self.work} (about "
+                     f"{(install.TRANSLATION_BYTES + install.BUILD_BYTES) // install.GIB} GB). The game stays playable, but "
+                     "the next update has to translate and build the whole game again (30 to 90 minutes) instead of "
+                     "only what changed.")
+        return {"iso": str(recorded or ""), "steps": status, "ready": ready, "purge": purge,
                 "running": self.busy(), "phase": self.phase if self.process else "",
                 "work": str(self.work),
                 "profiles": self.profiles(), "profile": self.profile(), "saves": str(self.root or ""),
@@ -559,6 +567,8 @@ class Launcher:
                     webbrowser.open(self.compiler["licence"])
                 else:
                     self.install(str(body.get("iso", "")), download_compiler=True)
+            elif name == "purge":
+                self.start("Freeing disk space", [console_python(), "-u", str(ROOT / "tools" / "install.py"), "--purge"])
             elif name == "play":
                 self.play(str(body.get("profile", "")))
             elif name == "front":

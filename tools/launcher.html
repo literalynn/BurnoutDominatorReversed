@@ -185,6 +185,16 @@ code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
             <button class="btn" id="install">Generate the code and build the game</button>
             <span class="note">30 to 90 minutes the first time, a few minutes after an update.</span>
           </div>
+          <div id="purge" hidden>
+            <div class="row" style="margin-top:6px"><button class="btn quiet" id="purge-ask">Free up disk space</button></div>
+            <div id="purge-confirm" hidden>
+              <p class="hint" id="purge-text" style="margin:8px 0 10px"></p>
+              <div class="row">
+                <button class="btn primary" id="purge-go">Delete the build files</button>
+                <button class="btn quiet" id="purge-cancel">Cancel</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="card">
           <h2>Save profile</h2>
@@ -524,6 +534,9 @@ function render(s) {
   if (offer.licence) $("licence").href = offer.licence;
   $("download-compiler").disabled = busy || !offer.licence;
   $("install").disabled = busy || !!offer.text;
+  $("purge").hidden = !s.purge;
+  $("purge-text").textContent = s.purge;
+  $("purge-ask").disabled = $("purge-go").disabled = busy;
   $("go").disabled = busy || !s.ready;
   $("stop").disabled = $("stop2").disabled = !busy;
   $("state").textContent = busy ? (s.phase || s.running + " running") : s.ready ? "Ready." : "Give the ISO, then generate the code and build the game.";
@@ -578,6 +591,9 @@ $("browse-saves").addEventListener("click", async () => {
 });
 $("new-name").addEventListener("keydown", event => { if (event.key === "Enter") $("create-profile").click(); });
 $("open-profile").addEventListener("click", () => api("open-profile", {profile: $("profile").value}));
+$("purge-ask").addEventListener("click", () => { $("purge-confirm").hidden = !$("purge-confirm").hidden; });
+$("purge-cancel").addEventListener("click", () => { $("purge-confirm").hidden = true; });
+$("purge-go").addEventListener("click", async () => { if (await act("purge")) { $("purge-confirm").hidden = true; show("console"); } });
 $("copy").addEventListener("click", () => navigator.clipboard.writeText($("log").textContent));
 $("clear").addEventListener("click", () => { $("log").textContent = ""; });
 $("check").addEventListener("click", () => { $("update-note").textContent = "Checking..."; api("check-updates"); });

@@ -226,6 +226,22 @@ class InstallTests(unittest.TestCase):
                 install.remove_inside(path, self.work)
         self.assertTrue(outside.is_dir() and self.work.is_dir())
 
+    def test_purge_keeps_the_game_and_its_libraries(self):
+        release = self.work / "build" / "ps2xRuntime" / "Release"
+        kept = [release / "burnout_dominator.exe", release / "SDL2.dll", release / "mc0" / "card.bin", self.local / "saves" / "card.bin",
+                self.local / "disc" / "SLES_546.27"]
+        gone = [release / "ps2_runtime.lib", release / "burnout_dominator.dir" / "a.obj", self.work / "build" / "CMakeCache.txt",
+                self.work / "build" / "ps2xRuntime" / "CMakeFiles" / "a.obj", self.work / "generated" / "a.cpp",
+                self.local / "backups" / "generated-20261001-090000-000001" / "a.cpp"]
+        for path in kept + gone:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x")
+        install.purge(self.work)
+        self.assertEqual([p for p in kept if not p.is_file()], [])
+        self.assertEqual([p for p in gone if p.exists()], [])
+        self.assertFalse((self.work / "generated").exists() or (self.local / "backups").exists())
+        install.purge(self.work)  # nothing left to delete
+
     def test_build_tree_helpers(self):
         build = self.root / "build"
         self.assertIsNone(install.cache_entry(build, "CMAKE_GENERATOR"))

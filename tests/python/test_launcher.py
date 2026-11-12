@@ -257,6 +257,18 @@ class LauncherTests(unittest.TestCase):
             (work / "generated" / "generation.json").write_text("{}", encoding="utf-8")
             self.assertEqual(launcher.install_status(work, lock)["Game code generated"], True)
 
+    def test_the_purge_is_offered_while_build_files_remain_and_the_game_stays_playable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = launcher.Launcher("token")
+            app.work = Path(temp)
+            done = {"ISO found": True, "Disc files extracted": True, "Game code generated": False, "Game built": True}
+            with mock.patch.object(launcher, "install_status", lambda work, project: done):
+                self.assertEqual((app.state()["ready"], app.state()["purge"]), (True, ""))
+                (app.work / "generated").mkdir()
+                self.assertIn("translate and build the whole game again", app.state()["purge"])
+                done["Game built"] = False
+                self.assertEqual((app.state()["ready"], app.state()["purge"]), (False, ""))
+
     def test_the_page_and_its_commands_need_the_token_and_our_address(self):
         app = launcher.Launcher("secret")
         server = ThreadingHTTPServer(("127.0.0.1", 0), launcher.BaseHTTPRequestHandler)
