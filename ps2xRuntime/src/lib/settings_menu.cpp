@@ -130,7 +130,6 @@ namespace
     bool g_artChanged = false;
     enum Cue
     {
-        CueMove,
         CueLeft,
         CueRight,
         CueSelect,
@@ -140,7 +139,7 @@ namespace
     {
         Texture2D font{}, stripes{}, arrow{}, arrowSelected{}, stepEmpty{}, stepFull{};
         Texture2D playStation[3]{}, xbox[3]{};
-        Sound cues[5]{};
+        Sound cues[4]{};
     };
 
     Texture2D toTexture(const ps2x::MenuImage &image)
@@ -222,8 +221,8 @@ namespace
             loaded.playStation[i] = toTexture(g_art.playStation[i]);
             loaded.xbox[i] = toTexture(g_art.xbox[i]);
         }
-        const ps2x::MenuSound *sounds[] = {&g_art.move, &g_art.left, &g_art.right, &g_art.select, &g_art.back};
-        for (int i = 0; i < 5; ++i)
+        const ps2x::MenuSound *sounds[] = {&g_art.left, &g_art.right, &g_art.select, &g_art.back};
+        for (int i = 0; i < 4; ++i)
             loaded.cues[i] = toSound(*sounds[i]);
         return loaded;
     }
@@ -1395,7 +1394,7 @@ namespace ps2x
 
         const bool wasOpen = g_menu.open, wasAsking = g_quitQuestion;
         const Page page = g_menu.page;
-        const int row = g_menu.row, column = g_menu.column, capturing = g_menu.capturing;
+        const int capturing = g_menu.capturing;
         const bool busy = cardBusy(now);
         if (g_waitingForSave)
         {
@@ -1431,8 +1430,6 @@ namespace ps2x
             cue(g_menu.open ? CueSelect : CueBack);
         else if (g_menu.open && g_menu.page != page)
             cue(g_menu.page == Page::Controls ? CueSelect : CueBack);
-        else if (g_menu.open && (g_menu.row != row || g_menu.column != column))
-            cue(CueMove);
         else if (g_menu.capturing >= 0 && capturing < 0)
             cue(CueSelect);
         if (!g_menu.open && g_menu.releasing && !menuKeyHeld())

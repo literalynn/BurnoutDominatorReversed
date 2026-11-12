@@ -359,7 +359,6 @@ ps2x::MenuArt loadMenuArt(const std::filesystem::path &disc)
             missing += " " + std::string(name);
         return decoded ? std::move(*decoded) : ps2x::MenuSound{};
     };
-    art.move = sound("menuvscrlL");
     art.left = sound("hscrollL");
     art.right = sound("hscrollR");
     art.select = sound("selectL");

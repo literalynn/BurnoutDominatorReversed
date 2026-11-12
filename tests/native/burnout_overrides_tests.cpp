@@ -553,11 +553,11 @@ void testMenuArt() {
         const ps2x::MenuArt art = burnout::loadMenuArt(disc);
         check(art.font.glyphs.size() == 163 && art.font.atlas.width == 256 && art.stripes.width == 198 &&
                   art.arrow.width == 32 && art.stepFull.width == 32 && art.playStation[2].width == 32 &&
-                  !art.move.samples.empty() && !art.back.samples.empty(),
+                  !art.left.samples.empty() && !art.back.samples.empty(),
               "the disc's font, images and sounds load");
     }
     const ps2x::MenuArt none = burnout::loadMenuArt(std::filesystem::path("no such disc"));
-    check(none.font.glyphs.empty() && none.stripes.rgba.empty() && none.move.samples.empty() && none.xbox[0].width == 32,
+    check(none.font.glyphs.empty() && none.stripes.rgba.empty() && none.left.samples.empty() && none.xbox[0].width == 32,
           "without a disc only the drawn Xbox symbols are there");
 }
 } // namespace

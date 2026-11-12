@@ -71,7 +71,7 @@ struct MenuArt
     MenuImage arrow, arrowSelected;    // a chevron pointing right
     MenuImage stepEmpty, stepFull;     // one step of the volume bar
     MenuImage playStation[3], xbox[3]; // the pad's cross, circle and square (A, B and X)
-    MenuSound move, left, right, select, back;
+    MenuSound left, right, select, back; // no sound for moving between rows
 };
 // Before the window loop starts, or on the window thread.
 void setMenuArt(MenuArt art);
