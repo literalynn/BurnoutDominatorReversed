@@ -79,6 +79,8 @@ input.wide { flex: 1; }
 .go:active:not(:disabled) { transform: translateY(1px); }
 .go:disabled { background: var(--raised); color: #5d5d66; cursor: not-allowed; }
 .state { margin: 14px 0 10px; min-height: 21px; color: var(--mute); font-size: 13px; }
+.offer { margin: 16px 0 12px; padding-top: 14px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+a.btn { text-decoration: none; }
 body.busy .state { color: var(--text); }
 
 /* Console */
@@ -171,6 +173,14 @@ code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
         <div class="card">
           <h2>Installation</h2>
           <ul class="steps" id="steps"></ul>
+          <div id="compiler" hidden>
+            <p class="offer" id="compiler-text"></p>
+            <div class="row">
+              <button class="btn primary" id="download-compiler">Accept the licence and download</button>
+              <a class="btn quiet" id="licence" target="_blank" rel="noopener">Licence terms</a>
+            </div>
+            <p class="hint" id="compiler-hint"></p>
+          </div>
           <div class="row" style="margin-top:16px">
             <button class="btn" id="install">Generate the code and build the game</button>
             <span class="note">30 to 90 minutes the first time, a few minutes after an update.</span>
@@ -506,7 +516,14 @@ function render(s) {
     for (const name of s.profiles) select.add(new Option(name, name, false, name === s.profile));
   }
   $("profile-hint").textContent = "Each profile has its own memory card and save states" + (s.saves ? ", in " + s.saves + "." : ".");
-  $("install").disabled = busy;
+  const offer = s.compiler;
+  $("compiler").hidden = !offer.text;
+  $("compiler-text").textContent = offer.text || "";
+  $("compiler-hint").textContent = offer.hint || "";
+  $("licence").hidden = !offer.licence;
+  if (offer.licence) $("licence").href = offer.licence;
+  $("download-compiler").disabled = busy || !offer.licence;
+  $("install").disabled = busy || !!offer.text;
   $("go").disabled = busy || !s.ready;
   $("stop").disabled = $("stop2").disabled = !busy;
   $("state").textContent = busy ? (s.phase || s.running + " running") : s.ready ? "Ready." : "Give the ISO, then generate the code and build the game.";
@@ -540,6 +557,9 @@ $("browse").addEventListener("click", async () => {
   if (answer && answer.path) { $("iso").value = answer.path; $("iso").dataset.edited = "1"; }
 });
 $("install").addEventListener("click", async () => { if (await act("install", {iso: $("iso").value})) { delete $("iso").dataset.edited; show("console"); } });
+$("download-compiler").addEventListener("click", async () => {
+  if (await act("download-compiler", {iso: $("iso").value})) { delete $("iso").dataset.edited; show("console"); }
+});
 $("go").addEventListener("click", async () => { if (await act("play", {profile: $("profile").value})) show("console"); });
 $("stop").addEventListener("click", () => act("stop"));
 $("stop2").addEventListener("click", () => act("stop"));

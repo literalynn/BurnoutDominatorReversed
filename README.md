@@ -77,7 +77,7 @@ The game is complete and playable from start to finish. The project is a work in
 | **Processor** | x86-64, four threads or more; single-thread speed matters most. FMA3 (Intel since 2013, AMD since 2012) is used when present. |
 | **Graphics** | a card with Vulkan. Two and four times the PS2's resolution need a dedicated card. |
 | **Disk** | 25 GB free. |
-| **Build tools** | the game is compiled on your PC. Windows: Visual Studio 2022 or 2026 (Community or Build Tools) with *Desktop development with C++*. Linux: the packages below. |
+| **Build tools** | the game is compiled on your PC. Windows: nothing to install. Without Visual Studio, the launcher downloads Microsoft's C++ Build Tools, CMake and Ninja into its folder (a 500 MB download, 1.25 GB on disk); Visual Studio 2022 or 2026 with *Desktop development with C++* is used when it is there. Linux: the packages below. |
 
 ## Installation
 
@@ -85,16 +85,11 @@ The first installation translates and compiles the game on your PC: 30 to 90 min
 
 ### Windows
 
-1. Install the C++ build tools, if Visual Studio is not there yet:
+1. Download **[`BurnoutDominator.exe`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.exe)** into an empty folder and start it. It downloads the project into that folder, with a Python and a Git of its own (official builds, checked by SHA-256), then opens the launcher. The file is not signed: if Windows SmartScreen stops it, choose *More info*, then *Run anyway*.
+2. In the launcher, choose your ISO. Without Visual Studio, the launcher offers to download Microsoft's C++ Build Tools (the compiler and the parts of the Windows SDK the build needs, from Microsoft's servers, checked by SHA-256), CMake and Ninja into `work\toolchain`: read Microsoft's licence terms, then press **Accept the licence and download**, which goes on with the installation. Nothing is installed on the system. With Visual Studio 2022 or 2026 and *Desktop development with C++*, the launcher uses it instead: press **Generate the code and build the game**.
+3. Press **Play**.
 
-   ```powershell
-   winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-   ```
-
-2. Download **[`BurnoutDominator.exe`](https://github.com/literalynn/BurnoutDominatorReversed/releases/latest/download/BurnoutDominator.exe)** into an empty folder and start it. It downloads the project into that folder, with a Python and a Git of its own (official builds, checked by SHA-256), then opens the launcher. The file is not signed: if Windows SmartScreen stops it, choose *More info*, then *Run anyway*.
-3. In the launcher, choose your ISO, press **Generate the code and build the game**, then **Play**.
-
-Everything stays in that one folder: the project (`source`), the game's files (`work`), your saves (`save`) and `settings.ini`. The folder can be moved or copied to another drive; the first update after a move builds everything again. To uninstall, delete the folder. Keep the ISO where it is: the game reads it at every launch.
+Everything stays in that one folder: the project (`source`), the game's files (`work`, with the downloaded compiler), your saves (`save`) and `settings.ini`. The folder can be moved or copied to another drive; the first update after a move builds everything again. To uninstall, delete the folder. Keep the ISO where it is: the game reads it at every launch.
 
 ### Linux
 
@@ -113,7 +108,7 @@ cd BurnoutDominatorReversed
 python tools/launcher.py        # Windows: Launcher.bat
 ```
 
-The launcher then opens as a page in a browser window, and the game's files go to a work directory outside the checkout (`C:\bdr-work` on Windows, `~/bdr-work` elsewhere). Without the launcher: `python tools/install.py --iso <ISO>`, then `python tools/project.py run`. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the details.
+The launcher then opens as a page in a browser window, and the game's files go to a work directory outside the checkout (`C:\bdr-work` on Windows, `~/bdr-work` elsewhere). Without the launcher: `python tools/install.py --iso <ISO>` (on Windows without Visual Studio it offers the C++ Build Tools download; `--download-compiler` accepts it), then `python tools/project.py run`. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the details.
 
 ## The launcher
 

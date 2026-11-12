@@ -1,6 +1,6 @@
 # Development
 
-`tools/install.py` chains the steps below. Running them by hand is useful when working on the recompiler, the runtime or the game integration. Requirements: Python 3.11+, CMake 3.21+, a C++20 compiler (MSVC x64 with the Windows SDK on Windows). The tools install no global configuration.
+`tools/install.py` chains the steps below. Running them by hand is useful when working on the recompiler, the runtime or the game integration. Requirements: Python 3.11+, CMake 3.21+, a C++20 compiler (MSVC x64 with the Windows SDK on Windows). The tools install no global configuration. On Windows without Visual Studio, `tools/install.py --download-compiler` puts Microsoft's compiler and the Windows SDK pieces the build needs (from the Visual Studio channel manifest, [tools/portable_toolchain.py](../tools/portable_toolchain.py)), CMake and Ninja in `<work>/toolchain` and builds with the Ninja generator; it sets the compiler's environment (`PATH`, `INCLUDE`, `LIB`) for each step, so run the steps below through `install.py` then.
 
 ## Work directory
 
