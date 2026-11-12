@@ -1,5 +1,6 @@
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_cpu_backend.h"
+#include "runtime/gs/gif_packet_filter.h"
 #include "ps2_log.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/transfer_buffers.h"
@@ -16,6 +17,7 @@
 namespace
 {
     static constexpr uint32_t kHostFrameWidth = 640u;
+    std::atomic<ps2x::GifPacketFilter> g_gifPacketFilter{nullptr};
 
     void tracePresentation(const GSPresentationRequest &request, const PresentationFrame &frame)
     {
@@ -173,6 +175,7 @@ void GS::init(uint8_t *vram, uint32_t vramSize, GSRegisters *privRegs)
 void GS::reset()
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    ps2x::resetGifPacketFilter();
     std::memset(m_ctx, 0, sizeof(m_ctx));
     m_prim = {};
     m_primRegister = {};
@@ -714,11 +717,25 @@ bool GS::usesRawCommands() const
     return m_backend && m_backend->UsesRawCommands();
 }
 
+void ps2x::setGifPacketFilter(GifPacketFilter filter)
+{
+    g_gifPacketFilter = filter;
+}
+
+void ps2x::resetGifPacketFilter()
+{
+    uint32_t size = 0;
+    if (const GifPacketFilter filter = g_gifPacketFilter.load())
+        filter(0, nullptr, size);
+}
+
 void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t path)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!data || sizeBytes < 16 || !m_backend)
         return;
+    if (const ps2x::GifPacketFilter filter = g_gifPacketFilter.load())
+        data = filter(path, data, sizeBytes);
     if (m_backend->UsesRawCommands())
     {
         m_backend->ProcessGIF(path, data, sizeBytes & ~15u);

@@ -32,6 +32,7 @@ namespace
         RowKeepSpeed,
         RowRefresh,
         RowDeadzone,
+        RowPrompts,
         RowControls,
         RowClose,
         MainRowCount,
@@ -127,6 +128,7 @@ namespace
         case RowKeepSpeed: return "Keep speed when slow (next race)";
         case RowRefresh: return "Frame rate (next menu page)";
         case RowDeadzone: return "Stick dead zone";
+        case RowPrompts: return "Button prompts";
         case RowControls: return "Keyboard and mouse controls";
         default: return "Close (F1)";
         }
@@ -171,6 +173,11 @@ namespace
         case RowKeepSpeed: return onOff(s.keepSpeed);
         case RowRefresh: return s.refreshRate + " Hz";
         case RowDeadzone: return std::to_string(int(s.stickDeadzone * 100.0f + 0.5f)) + "%";
+        case RowPrompts:
+            return s.buttonPrompts == "playstation" ? "PlayStation"
+                   : s.buttonPrompts == "xbox"      ? "Xbox"
+                   : s.buttonPrompts == "keyboard"  ? "Keyboard"
+                                                    : "Auto";
         case RowControls: return ">";
         default: return "";
         }
@@ -248,6 +255,15 @@ namespace
         case RowDeadzone:
             s.stickDeadzone = std::clamp(s.stickDeadzone + 0.02f * float(step == 0 ? 1 : step), 0.0f, 0.5f);
             break;
+        case RowPrompts:
+        {
+            static const char *kPrompts[] = {"auto", "playstation", "xbox", "keyboard"};
+            int index = 0;
+            while (index < 4 && s.buttonPrompts != kPrompts[index])
+                ++index;
+            s.buttonPrompts = kPrompts[(index % 4 + (step < 0 ? 3 : 1)) % 4];
+            break;
+        }
         case RowControls:
             if (activate || step > 0)
             {

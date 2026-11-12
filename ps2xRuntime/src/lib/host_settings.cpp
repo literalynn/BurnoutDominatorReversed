@@ -147,6 +147,9 @@ namespace ps2x
             }
             if (key == "gamepad_mappings")
                 return s.gamepadMappings = value, true;
+            if (key == "button_prompts")
+                return (value == "auto" || value == "playstation" || value == "xbox" || value == "keyboard") &&
+                       (s.buttonPrompts = value, true);
             if (key == "volume")
                 return parseInt(value, 0, 100, s.volume);
             if (key == "refresh_rate")
@@ -297,6 +300,10 @@ namespace ps2x
                 "gamepad_mappings = " << s.gamepadMappings << "\n"
                 "# vibration passes the game's pad vibration on to the gamepad.\n"
                 "vibration = " << (s.vibration ? "true" : "false") << "\n"
+                "# button_prompts draws the game's button symbols for a device: auto (the one you pressed\n"
+                "# something on last, which changes as you play), playstation, xbox or keyboard (the first\n"
+                "# key bound to each button).\n"
+                "button_prompts = " << s.buttonPrompts << "\n"
                 "\n"
                 "# Sound volume in percent, and a frames-per-second counter in the window corner.\n"
                 "volume = " << s.volume << "\n"

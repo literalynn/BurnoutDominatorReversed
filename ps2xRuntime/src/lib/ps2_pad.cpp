@@ -2,8 +2,10 @@
 #include "ps2_host_backend.h"
 #include "runtime/gamepad_rumble.h"
 #include "runtime/host_settings.h"
+#include "runtime/input_device.h"
 #include "runtime/settings_menu.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -41,7 +43,11 @@ namespace
     {
         uint16_t pressed = 0u;
         float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
+        ps2x::InputDevice kind = ps2x::InputDevice::Xbox;
     };
+
+    std::atomic<ps2x::InputDevice> g_lastDevice{ps2x::InputDevice::Keyboard};
+    std::atomic<bool> g_deviceUsed{false};
 
 #if defined(PS2X_HAS_SDL2)
     SDL_GameController *g_controller = nullptr;
@@ -113,6 +119,16 @@ namespace
         input.ly = axis(SDL_CONTROLLER_AXIS_LEFTY);
         input.rx = axis(SDL_CONTROLLER_AXIS_RIGHTX);
         input.ry = axis(SDL_CONTROLLER_AXIS_RIGHTY);
+        switch (SDL_GameControllerGetType(controller))
+        {
+        case SDL_CONTROLLER_TYPE_PS3:
+        case SDL_CONTROLLER_TYPE_PS4:
+        case SDL_CONTROLLER_TYPE_PS5:
+            input.kind = ps2x::InputDevice::PlayStation;
+            break;
+        default:
+            break;
+        }
         static bool reported = false;
         if (!reported && input.pressed != 0u)
         {
@@ -170,9 +186,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
 
     // The first connected gamepad and the keyboard both drive the DualShock 2, at any time.
     GamepadInput pad;
-    if (readGamepad(pad))
+    const bool gamepad = readGamepad(pad);
+    bool gamepadUsed = false, keyboardUsed = false;
+    if (gamepad)
     {
         clearBit(pad.pressed);
+        gamepadUsed = pad.pressed != 0u || std::max({std::fabs(pad.lx), std::fabs(pad.ly), std::fabs(pad.rx),
+                                                     std::fabs(pad.ry)}) > 0.5f;
 
         // Radial dead zone, then the remaining range spread over 0..255.
         const float deadzone = ps2x::hostSettings().stickDeadzone;
@@ -224,13 +244,37 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
                                   : input > 0                ? IsKeyDown(input)
                                                              : false;
                 if (down)
+                {
                     clearBit(kMasks[button]);
+                    keyboardUsed = true;
+                }
             }
     }
+
+    // Prompts follow the last device used; both at once keep the current one.
+    if (gamepadUsed != keyboardUsed)
+        ps2x::noteInputDevice(gamepadUsed ? pad.kind : ps2x::InputDevice::Keyboard);
+    else if (!g_deviceUsed && gamepad)
+        g_lastDevice = pad.kind;
 
     data[2] = static_cast<uint8_t>(btns & 0xFF);
     data[3] = static_cast<uint8_t>(btns >> 8);
     return true;
+}
+
+void ps2x::noteInputDevice(InputDevice device)
+{
+    g_deviceUsed = true;
+    g_lastDevice = device;
+}
+
+ps2x::InputDevice ps2x::buttonPromptDevice()
+{
+    const std::string &prompts = hostSettings().buttonPrompts;
+    return prompts == "playstation" ? InputDevice::PlayStation
+           : prompts == "xbox"      ? InputDevice::Xbox
+           : prompts == "keyboard"  ? InputDevice::Keyboard
+                                    : g_lastDevice.load();
 }
 
 void ps2x::setGamepadRumble(bool small, uint8_t large)

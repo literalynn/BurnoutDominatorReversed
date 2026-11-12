@@ -13,6 +13,7 @@
       {"title": "Sound", "rows": [
         {"key": "volume", "label": "Volume", "range": [0, 100], "unit": "%"}]},
       {"title": "Gamepad", "rows": [
+        {"key": "button_prompts", "label": "Button prompts", "help": "The buttons the game shows. Auto: those of the gamepad or keyboard you used last.", "choice": ["auto", "playstation", "xbox", "keyboard"]},
         {"key": "vibration", "label": "Vibration"},
         {"key": "stick_deadzone", "label": "Stick dead zone", "help": "How far a stick moves before it counts.", "range": [0, 90], "unit": "%"},
         {"key": "gamepad_mappings", "label": "Extra mappings file", "help": "A gamecontrollerdb.txt for a pad the game does not recognise. Usually empty.", "text": true}]}

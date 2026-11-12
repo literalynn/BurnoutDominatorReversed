@@ -1,5 +1,6 @@
 #include "ps2_iop_host.h"
 #include "runtime/gamepad_rumble.h"
+#include "runtime/input_device.h"
 
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
@@ -418,11 +419,14 @@ namespace
     // BDR_PAD_SCRIPT="cross@1300-1310,start@2000-2004": hold a button on
     // controller port 0 from the first to before the last VSync tick, so a
     // headless run can get past menus. Names follow the DualShock 2 labels.
+    // A "keyboard:", "xbox:" or "playstation:" prefix presses it on that
+    // device, for the button prompts that follow the last device used.
     struct ScriptedPress
     {
         uint16_t mask = 0u;
         uint64_t begin = 0u;
         uint64_t end = 0u;
+        int device = -1;
     };
 
     std::vector<ScriptedPress> parsePadScript(const char *text)
@@ -445,8 +449,18 @@ namespace
                 std::cerr << "[pad] ignored BDR_PAD_SCRIPT entry '" << entry << "'" << std::endl;
                 continue;
             }
-            const std::string name = entry.substr(0, at);
+            std::string name = entry.substr(0, at);
             ScriptedPress press;
+            static constexpr std::pair<const char *, ps2x::InputDevice> kDevices[] = {
+                {"keyboard:", ps2x::InputDevice::Keyboard}, {"xbox:", ps2x::InputDevice::Xbox},
+                {"playstation:", ps2x::InputDevice::PlayStation},
+            };
+            for (const auto &[prefix, device] : kDevices)
+                if (name.rfind(prefix, 0) == 0)
+                {
+                    press.device = static_cast<int>(device);
+                    name.erase(0, std::strlen(prefix));
+                }
             for (const auto &[label, mask] : kButtons)
                 if (name == label)
                     press.mask = mask;
@@ -503,6 +517,8 @@ bool PS2IopHostAdapter::readControllerPad(uint32_t port, ps2x::iop::ControllerPa
             if (tick >= press.begin && tick < press.end)
             {
                 state.buttons = static_cast<uint16_t>(state.buttons & ~press.mask);
+                if (press.device >= 0)
+                    ps2x::noteInputDevice(static_cast<ps2x::InputDevice>(press.device));
             }
         }
     }

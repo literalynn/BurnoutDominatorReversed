@@ -1,4 +1,5 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
+#include "burnout_button_prompts.h"
 #include "burnout_frame_rate.h"
 #include "burnout_profile.h"
 #include "burnout_texts.h"
@@ -486,6 +487,7 @@ int main(int argc, char** argv) {
             if (!runtime.hasFunction(address) && runtime.registerFunction(address, &continueFrequencySkip))
                 g_continuation = address;
         burnout::installFrameRate(runtime);
+        burnout::installButtonPrompts();
         traceCalls(runtime, options.traceCalls);
         // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
         // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores
