@@ -32,6 +32,7 @@ GIB = 1024 ** 3
 EXTRACTION_BYTES = 4_700_000_000  # every file of the disc
 TRANSLATION_BYTES = 2 * GIB       # generated C++, about 51,000 files
 BUILD_BYTES = 10 * GIB            # tools, runtime and game build tree
+JOB_BYTES = 3 * GIB               # one compiler on the game's code (2.7 GB at most); CMake limits the VU programs'
 # Inputs that project.py generate records in generation.json. The source map
 # hash is kept in install-state.json: generation.json hashes the augmented map.
 RECORDED_INPUTS = ("elf_sha256", "ps2recomp_commit", "tool_sha256", "augmenter_sha256")
@@ -78,9 +79,30 @@ def read_json(path: Path) -> dict:
         raise SetupError(f"{path} cannot be read ({error}). Fix or delete this file, then run again.") from None
 
 
-def default_jobs(cpu_count: int | None) -> int:
-    # project.py gives MSBuild at most 64 jobs.
-    return min(cpu_count or 4, 64)
+def physical_memory() -> int | None:
+    """The machine's memory in bytes, None when it cannot be read."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class Status(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [
+                    (name, ctypes.c_ulonglong) for name in ("ullTotalPhys", "ullAvailPhys", "ullTotalPageFile",
+                                                            "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual",
+                                                            "ullAvailExtendedVirtual")]
+            status = Status()
+            status.dwLength = ctypes.sizeof(status)
+            return status.ullTotalPhys if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) else None
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def default_jobs(cpu_count: int | None, memory: int | None = None) -> int:
+    # project.py gives MSBuild at most 64 jobs. More jobs than the memory holds run out of it
+    # ("compiler is out of heap space", GitHub issue 11).
+    jobs = min(cpu_count or 4, 64)
+    return max(1, min(jobs, memory // JOB_BYTES)) if memory else jobs
 
 
 # --- Work directory ---------------------------------------------------------
@@ -554,8 +576,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--function-map", type=Path,
                         help="Ghidra function map (default: <work>/local/analysis/ghidra/functions.ee.csv "
                              "if present, else data/functions.ee.csv)")
-    parser.add_argument("--jobs", type=int, default=default_jobs(os.cpu_count()),
-                        help="Parallel compile jobs (default: processor count, at most 64)")
+    parser.add_argument("--jobs", type=int, default=default_jobs(os.cpu_count(), physical_memory()),
+                        help="Parallel compile jobs (default: processor count, at most 64 and one per 3 GB of memory)")
     parser.add_argument("--regenerate", action="store_true", help="Translate the game again even if nothing changed")
     parser.add_argument("--check", action="store_true", help="Only check the prerequisites")
     parser.add_argument("--download-compiler", action="store_true",

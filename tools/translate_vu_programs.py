@@ -25,11 +25,18 @@ the checksum of their code. The output is generated from game microcode and must
                                                                       a 4 KiB image is VU0's)
 """
 import argparse
+import re
 import struct
 import sys
 from pathlib import Path
 
 FMAC_LATENCY = 4
+# MSVC's memory to optimize one function (/d2OptimizeHugeFunctions) grows faster than its length:
+# 3.5 GB for gen_adc's 9,400 lines, 16.5 GB for gt_im3d's 21,000 (GitHub issue 11). Translations
+# longer than SPLIT_LINES are cut into parts of about PART_LINES lines (7.6 GB for gt_im3d's three);
+# each part costs a call, so shorter programs stay whole.
+SPLIT_LINES = 12000
+PART_LINES = 6000
 
 
 class TranslationError(Exception):
@@ -1086,10 +1093,10 @@ class Translator:
         self.needed = needed - {"init"}
 
     def function(self):
-        """The C++ function, run_<name>."""
-        out = [f"bool run_{self.name}(Context &c)", "{",
-               "    uint8_t *const mem = c.data;", "    VU1State &s = *c.state;",
-               "    const V f0 = opaque(_mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));"]
+        """The C++ function, run_<name>, after the parts it calls when the translation is long."""
+        head = ["    uint8_t *const mem = c.data;", "    VU1State &s = *c.state;",
+                "    const V f0 = opaque(_mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));"]
+        out = []
         out += [f"    V f{reg} = load(s.vf[{reg}]);" for reg in range(1, 32)]
         out += [f"    int32_t vi{reg} = static_cast<int16_t>(s.vi[{reg}]);" for reg in range(1, 16)]
         out += ["    V acc = load(s.acc);",
@@ -1114,22 +1121,126 @@ class Translator:
             test += [f"{start_value(token)} != {number}" for number in sorted(numbers)]
             out.append(f"    if ({' && '.join(test)})")
             out.append("        return false;")
-        out.append(f"    goto {self.entry_label};")
+        blocks = []
         for block in sorted(self.blocks, key=lambda b: b.label):
+            lines = []
             for line in block.lines:
                 if isinstance(line, tuple):
                     if line[0] == "macflags" and line[1] in self.needed:
-                        out.append(line[2])
+                        lines.append(line[2])
                     elif line[0] == "maccommit" and line[1] in self.needed:
-                        out.append(f"    mac = mac_{line[1]:04x};")
+                        lines.append(f"    mac = mac_{line[1]:04x};")
                 else:
-                    out.append(line)
-        out.append("finish:")
-        out += [f"    store(s.vf[{reg}], f{reg});" for reg in range(1, 32)]
-        out += [f"    s.vi[{reg}] = vi{reg};" for reg in range(1, 16)]
-        out += ["    store(s.acc, acc);", "    s.q = q;", "    std::memcpy(&s.i, &iBits, sizeof(iBits));",
-                "    s.p = p;", "    s.mac = mac;", "    s.clip = clip;", "    s.pc = endPc;", "    c.cycles = cycle;", "    return true;", "}"]
-        return out
+                    lines.append(line)
+            blocks.append((block.label, lines))
+        finish = [f"    store(s.vf[{reg}], f{reg});" for reg in range(1, 32)]
+        finish += [f"    s.vi[{reg}] = vi{reg};" for reg in range(1, 16)]
+        finish += ["    store(s.acc, acc);", "    s.q = q;", "    std::memcpy(&s.i, &iBits, sizeof(iBits));",
+                   "    s.p = p;", "    s.mac = mac;", "    s.clip = clip;", "    s.pc = endPc;", "    c.cycles = cycle;", "    return true;"]
+        if sum(len(lines) for _, lines in blocks) > SPLIT_LINES:
+            return self.parts(head, out, blocks, finish)
+        return ([f"bool run_{self.name}(Context &c)", "{"] + head + out + [f"    goto {self.entry_label};"] +
+                [line for _, lines in blocks for line in lines] + ["finish:"] + finish + ["}"])
+
+    def loops(self):
+        """Each block's loop: the strongly connected component of the block graph it is in (Tarjan)."""
+        successors = {block.label: block.successors for block in self.blocks}
+        index, low, stack, on, loop = {}, {}, [], set(), {}
+        for root in sorted(successors):
+            if root in index:
+                continue
+            index[root] = low[root] = len(index)
+            stack.append(root)
+            on.add(root)
+            work = [(root, iter(successors[root]))]
+            while work:
+                label, rest = work[-1]
+                for succ in rest:
+                    if succ not in index:
+                        index[succ] = low[succ] = len(index)
+                        stack.append(succ)
+                        on.add(succ)
+                        work.append((succ, iter(successors[succ])))
+                        break
+                    if succ in on:
+                        low[label] = min(low[label], index[succ])
+                else:
+                    work.pop()
+                    if work:
+                        low[work[-1][0]] = min(low[work[-1][0]], low[label])
+                    if low[label] == index[label]:
+                        while True:
+                            member = stack.pop()
+                            on.discard(member)
+                            loop[member] = label
+                            if member == label:
+                                break
+        return loop
+
+    def parts(self, head, start, blocks, finish):
+        """A long translation as parts of about PART_LINES lines, each a function that takes the registers
+        from a struct and hands them back when it jumps to another part's label. A loop stays in one part
+        (it can be longer), so a part changes only on entering or leaving a loop."""
+        variables = ([("V", f"f{reg}") for reg in range(1, 32)] + [("int32_t", f"vi{reg}") for reg in range(1, 16)] +
+                     [("V", "acc"), ("float", "q"), ("float", "qp"), ("float", "p"), ("uint32_t", "iBits"), ("V", "iR"),
+                      ("V", "iN"), ("uint32_t", "mac"), ("uint32_t", "clip"), ("uint32_t", "clipW"), ("uint64_t", "cycle"),
+                      ("uint64_t", "kickEnd"), ("uint64_t", "wait"), ("int32_t", "viOld"), ("bool", "taken"),
+                      ("uint32_t", "jump"), ("uint32_t", "endPc")] +
+                     [("uint32_t", f"mac_{producer:04x}") for producer in sorted(self.needed)] +
+                     [("uint32_t", f"clip_{producer:04x}") for producer in sorted(self.clip_producers)] +
+                     [("float", f"p_{producer:04x}") for producer in sorted(self.efu_producers)])
+        loop, units = self.loops(), {}
+        for label, lines in blocks:
+            units.setdefault(loop[label], []).append((label, lines))
+        groups, size = [[]], 0
+        for unit in units.values():
+            length = sum(len(lines) for _, lines in unit)
+            if groups[-1] and size + length > PART_LINES:
+                groups.append([])
+                size = 0
+            groups[-1] += unit
+            size += length
+        # Numbered part after part: run_<name> sends a label to its part by range.
+        ids = {label: index for index, (label, _) in enumerate(entry for group in groups for entry in group)}
+        group_of = {label: index for index, group in enumerate(groups) for label, _ in group}
+        finish_id, abort_id = len(blocks), len(blocks) + 1
+        entered = [set() for _ in groups]
+        entered[group_of[self.entry_label]].add(self.entry_label)
+        bodies = []
+        for index, group in enumerate(groups):
+            def leave(match, index=index):
+                target = match.group(1)
+                if target == "finish":
+                    return f"{{ at = {finish_id}u; goto leave; }}"
+                if group_of[target] == index:
+                    return match.group(0)
+                entered[group_of[target]].add(target)
+                return f"{{ at = {ids[target]}u; goto leave; }}"
+            # The one return in a block follows unexpectedJump: run_<name> returns at once, as it did.
+            bodies.append([re.sub(r"goto (\w+);", leave, line).replace("return true;", f"return {abort_id}u;")
+                           for _, lines in group for line in lines])
+        name = self.name
+        out = [f"struct Regs_{name}", "{"] + [f"    {kind} {n};" for kind, n in variables] + ["};", ""]
+        for index, group in enumerate(groups):
+            # A part takes and hands back only the registers it names; the others wait in r.
+            words = set(re.findall(r"\w+", "\n".join(bodies[index])))
+            used = [(kind, n) for kind, n in variables if n in words]
+            out += [f"static uint32_t run_{name}_{index}(Context &c, Regs_{name} &r, uint32_t at)", "{"] + head
+            out += [f"    {kind} {n} = r.{n};" for kind, n in used]
+            out += ["    (void)mem; (void)s; (void)f0;", "    switch (at)", "    {"]
+            out += [f"    case {ids[label]}u: goto {label};" for label in sorted(entered[index], key=ids.get)]
+            out += [f"    default: return {abort_id}u; // never: each part is only sent the labels it is entered at", "    }"]
+            out += bodies[index] + ["leave:"] + [f"    r.{n} = {n};" for _, n in used] + ["    return at;", "}", ""]
+        out += [f"bool run_{name}(Context &c)", "{"] + head + start + [f"    Regs_{name} r;"]
+        out += [f"    r.{n} = {n};" for _, n in variables]
+        out += [f"    uint32_t at = {ids[self.entry_label]}u;", f"    while (at < {finish_id}u)", "    {"]
+        for index, group in enumerate(groups):
+            bound = ids[groups[index + 1][0][0]] if index + 1 < len(groups) else None
+            test = f"if (at < {bound}u) " if bound is not None else ""
+            out.append(f"        {'' if index == 0 else 'else '}{test}at = run_{name}_{index}(c, r, at);")
+        out += ["    }", f"    if (at == {abort_id}u)", "        return true;"]
+        out += [f"    {n} = r.{n};" for _, n in variables]
+        return out + finish + ["}"]
 
     def footprint(self):
         return min(self.pairs), max(self.pairs) + 8

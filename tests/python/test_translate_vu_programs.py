@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import struct
 import unittest
+from unittest import mock
 
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "translate_vu_programs.py"
 spec = importlib.util.spec_from_file_location("translate_vu_programs", TOOL)
@@ -145,6 +147,23 @@ class Translate(unittest.TestCase):
         _, vu1 = translate(program((LQ_VF1_5, NOP_UPPER), (SQ_VF1_6, NOP_UPPER), END, NOP))
         self.assertIn("lq(mem, ", vu1)
         self.assertIn("sq<15>(mem, ", vu1)
+
+    def test_long_translations_are_cut_between_loops(self):
+        code = program((IADDIU_3, NOP_UPPER), (ISUBIU_1, NOP_UPPER), (IBNE_TO_08, NOP_UPPER), NOP, END, NOP)
+        whole = translate(code)[1]
+        with mock.patch.object(tvp, "SPLIT_LINES", 0), mock.patch.object(tvp, "PART_LINES", 1):
+            translator, text = translate(code)
+        self.assertNotIn("static uint32_t", whole)
+        parts = re.split(r"^static uint32_t run_test_\d+\(Context &c, Regs_test &r, uint32_t at\)$", text, flags=re.M)
+        self.assertGreater(len(parts), 2)
+        loop = translator.loops()
+        part_of = {label: index for index, body in enumerate(parts) for label in re.findall(r"^(L\w+):$", body, re.M)}
+        self.assertEqual(set(part_of), {block.label for block in translator.blocks})
+        for label, root in loop.items():
+            self.assertEqual(part_of[label], part_of[root])  # the IBNE loop stays in one part
+        self.assertIn("goto leave; }", text)
+        self.assertIn("bool run_test(Context &c)", text)
+        self.assertIn("    s.pc = endPc;", text.split("bool run_test(Context &c)")[1])
 
     def test_vu1_instructions_are_refused_in_vu0_programs(self):
         for lower in (XGKICK, MFP_VF2, ESQRT_VF1X, WAITP):

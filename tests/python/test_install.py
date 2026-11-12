@@ -62,6 +62,10 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(install.default_jobs(None), 4)
         self.assertEqual(install.default_jobs(12), 12)
         self.assertEqual(install.default_jobs(128), 64)
+        self.assertEqual(install.default_jobs(16, 16 * install.GIB), 5)
+        self.assertEqual(install.default_jobs(16, 2 * install.GIB), 1)
+        self.assertEqual(install.default_jobs(8, 64 * install.GIB), 8)
+        self.assertGreater(install.physical_memory() or 1, 0)
 
     def test_required_space(self):
         everything = install.EXTRACTION_BYTES + install.TRANSLATION_BYTES + install.BUILD_BYTES

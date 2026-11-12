@@ -551,17 +551,23 @@ if(PS2X_VU_PROGRAM_PROFILES)
     set(PS2X_VU_NATIVE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/../data/vu_native_programs.txt" CACHE FILEPATH
         "VU1 programs to translate to C++ (tools/translate_vu_programs.py); empty: none")
     if(PS2X_VU_NATIVE_LIST)
-        # The table, then the translations in PS2X_VU_PROGRAM_SHARDS files compiled in parallel.
+        # The table, then the translations in PS2X_VU_NATIVE_SHARDS files compiled in parallel. One
+        # file's memory grows with the programs in it: 16 files keep the longest programs apart.
+        set(PS2X_VU_NATIVE_SHARDS "16" CACHE STRING "Number of compilation units for the translated VU programs")
+        if(NOT PS2X_VU_NATIVE_SHARDS MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "PS2X_VU_NATIVE_SHARDS must be a positive integer")
+        endif()
+        math(EXPR PS2X_VU_NATIVE_LAST_SHARD "${PS2X_VU_NATIVE_SHARDS} - 1")
         set(PS2X_VU_NATIVE_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/vu_native_programs.cpp")
         set(PS2X_VU_NATIVE_SOURCES "${PS2X_VU_NATIVE_SOURCE}")
-        foreach(SHARD RANGE ${PS2X_VU_PROGRAM_LAST_SHARD})
+        foreach(SHARD RANGE ${PS2X_VU_NATIVE_LAST_SHARD})
             list(APPEND PS2X_VU_NATIVE_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/generated/vu_native_programs_${SHARD}.cpp")
         endforeach()
         add_custom_command(
             OUTPUT ${PS2X_VU_NATIVE_SOURCES}
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/translate_vu_programs.py"
                     --programs "${PS2X_VU_NATIVE_LIST}" --output "${PS2X_VU_NATIVE_SOURCE}"
-                    --shards ${PS2X_VU_PROGRAM_SHARDS} ${PS2X_VU_PROGRAM_PROFILES}
+                    --shards ${PS2X_VU_NATIVE_SHARDS} ${PS2X_VU_PROGRAM_PROFILES}
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/translate_vu_programs.py" "${PS2X_VU_NATIVE_LIST}"
                     ${PS2X_VU_PROGRAM_LISTS}
             VERBATIM)
@@ -580,6 +586,30 @@ if(PS2X_VU_PROGRAM_PROFILES)
         target_sources(ps2_runtime PRIVATE ${PS2X_VU_NATIVE_SOURCES})
         set_source_files_properties(${PS2X_VU_NATIVE_SOURCES} PROPERTIES
             SKIP_UNITY_BUILD_INCLUSION ON COMPILE_OPTIONS "${PS2X_VU_NATIVE_FP_OPTIONS}")
+        # MSVC takes up to 7.6 GB to compile one of these files; eight at once ran out of memory
+        # (GitHub issue 11). At most one per 8 GB of memory, 4 GB left to the system.
+        cmake_host_system_information(RESULT PS2X_MEMORY_MIB QUERY TOTAL_PHYSICAL_MEMORY)
+        math(EXPR PS2X_VU_NATIVE_JOBS_FOR_MEMORY "(${PS2X_MEMORY_MIB} - 4096) / 8192")
+        if(PS2X_VU_NATIVE_JOBS_FOR_MEMORY LESS 1)
+            set(PS2X_VU_NATIVE_JOBS_FOR_MEMORY 1)
+        endif()
+        set(PS2X_VU_NATIVE_COMPILE_JOBS "${PS2X_VU_NATIVE_JOBS_FOR_MEMORY}" CACHE STRING
+            "Translated VU programs compiled at once (default: one per 8 GB of memory)")
+        if(NOT PS2X_VU_NATIVE_COMPILE_JOBS MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "PS2X_VU_NATIVE_COMPILE_JOBS must be a positive integer")
+        endif()
+        if(CMAKE_GENERATOR MATCHES "Ninja")
+            # A source file's pool needs CMake 4.2; older versions ignore it.
+            set_property(GLOBAL APPEND PROPERTY JOB_POOLS ps2_vu_native_compile=${PS2X_VU_NATIVE_COMPILE_JOBS})
+            set_property(SOURCE ${PS2X_VU_NATIVE_SOURCES} PROPERTY JOB_POOL_COMPILE ps2_vu_native_compile)
+        elseif(CMAKE_GENERATOR MATCHES "Visual Studio")
+            # MSBuild compiles files whose settings differ in separate batches, one after another.
+            foreach(SHARD RANGE ${PS2X_VU_NATIVE_LAST_SHARD})
+                math(EXPR PS2X_VU_NATIVE_GROUP "${SHARD} / ${PS2X_VU_NATIVE_COMPILE_JOBS}")
+                set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/vu_native_programs_${SHARD}.cpp" APPEND PROPERTY
+                    COMPILE_DEFINITIONS PS2X_VU_NATIVE_GROUP=${PS2X_VU_NATIVE_GROUP})
+            endforeach()
+        endif()
     endif()
     add_custom_target(ps2_vu_programs DEPENDS "${PS2X_VU_PROGRAM_INCLUDE}"
                       "${PS2X_VU_PROGRAM_EXTERN_INCLUDE}" ${PS2X_VU_PROGRAM_SOURCES} ${PS2X_VU_NATIVE_SOURCES})
