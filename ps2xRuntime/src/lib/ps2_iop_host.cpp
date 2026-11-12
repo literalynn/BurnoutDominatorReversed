@@ -1,5 +1,6 @@
 #include "ps2_iop_host.h"
 #include "runtime/gamepad_rumble.h"
+#include "runtime/video_skip.h"
 
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
@@ -506,6 +507,10 @@ bool PS2IopHostAdapter::readControllerPad(uint32_t port, ps2x::iop::ControllerPa
             }
         }
     }
+    // Holding Start skips a video; from then on the game sees Start released until it is.
+    constexpr uint16_t kStart = 0x0008u;
+    if (ps2x::holdToSkipVideo((state.buttons & kStart) == 0u))
+        state.buttons |= kStart;
     return true;
 }
 

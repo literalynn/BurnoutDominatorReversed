@@ -1,0 +1,103 @@
+#include "runtime/video_skip.h"
+
+#include "ps2_host_backend.h"
+#include "runtime/host_settings.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <string>
+
+namespace
+{
+    using Clock = std::chrono::steady_clock;
+    constexpr Clock::duration kHold = std::chrono::seconds(1);
+
+    std::atomic<ps2x::VideoCheck> g_check{nullptr};
+    std::atomic<bool> g_playing{false};
+    std::atomic<bool> g_skipping{false};
+    std::atomic<Clock::rep> g_holdStart{0}; // when Start was pressed during the video, 0 = not held
+    Clock::time_point g_skipStart;
+    bool g_hidingStart = false;
+}
+
+namespace ps2x
+{
+    void setVideoCheck(VideoCheck check)
+    {
+        g_check.store(check, std::memory_order_release);
+    }
+
+    bool updateVideoSkip(const uint8_t *rdram)
+    {
+        const VideoCheck check = g_check.load(std::memory_order_acquire);
+        const bool playing = hostSettings().videoSkip && check && check(rdram);
+        if (g_playing.exchange(playing, std::memory_order_acq_rel) != playing)
+            std::printf(playing ? "[video] playing\n" : "[video] ended\n");
+        if (!playing && g_skipping.exchange(false, std::memory_order_acq_rel))
+            std::printf("[video] skipped in %.1f s\n", std::chrono::duration<double>(Clock::now() - g_skipStart).count());
+        return g_skipping.load(std::memory_order_acquire);
+    }
+
+    bool holdToSkipVideo(bool startHeld)
+    {
+        if (!startHeld)
+        {
+            g_holdStart.store(0, std::memory_order_relaxed);
+            g_hidingStart = false;
+            return false;
+        }
+        if (g_hidingStart)
+            return true;
+        if (!g_playing.load(std::memory_order_acquire))
+        {
+            g_holdStart.store(0, std::memory_order_relaxed);
+            return false;
+        }
+        const Clock::time_point now = Clock::now();
+        const Clock::rep start = g_holdStart.load(std::memory_order_relaxed);
+        if (start == 0)
+        {
+            g_holdStart.store(now.time_since_epoch().count(), std::memory_order_relaxed);
+            return false;
+        }
+        if (now - Clock::time_point(Clock::duration(start)) < kHold)
+            return false;
+        // The game no longer sees Start: a press it would read after the video must be a new one.
+        g_hidingStart = true;
+        g_holdStart.store(0, std::memory_order_relaxed);
+        g_skipStart = now;
+        g_skipping.store(true, std::memory_order_release);
+        std::printf("[video] skipping\n");
+        return true;
+    }
+
+    bool videoSkipping()
+    {
+        return g_skipping.load(std::memory_order_acquire);
+    }
+
+    void drawVideoSkipHint()
+    {
+        if (!g_playing.load(std::memory_order_acquire))
+            return;
+        std::string text = "Skipping video";
+        float held = 0.0f;
+        if (!videoSkipping())
+        {
+            const int key = hostSettings().keys[12][0]; // the first keyboard input bound to Start
+            text = key != 0 ? "Hold START / " + inputName(key) + " to skip" : "Hold START to skip";
+            if (const Clock::rep start = g_holdStart.load(std::memory_order_relaxed); start != 0)
+                held = std::min(1.0f, std::chrono::duration<float>(Clock::now() - Clock::time_point(Clock::duration(start))) /
+                                          std::chrono::duration<float>(kHold));
+        }
+        const int font = std::clamp(GetScreenHeight() / 36, 12, 28);
+        const int width = MeasureText(text.c_str(), font) + font, height = font * 2;
+        const int left = GetScreenWidth() - width - font / 2, top = GetScreenHeight() - height - font / 2;
+        DrawRectangle(left, top, width, height, Fade(BLACK, 0.6f));
+        DrawText(text.c_str(), left + font / 2, top + font / 2, font, LIGHTGRAY);
+        if (held > 0.0f)
+            DrawRectangle(left, top + height - font / 4, int(float(width) * held), font / 4, Color{255, 170, 30, 255});
+    }
+}

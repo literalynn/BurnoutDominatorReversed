@@ -4,6 +4,7 @@
 #include "ps2_stubs.h"
 #include "runtime/host_settings.h"
 #include "runtime/host_audio.h"
+#include "runtime/video_skip.h"
 
 #include <filesystem>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <chrono>
 #include <cmath>
+#include <thread>
 
 using namespace ps2_syscalls;
 
@@ -749,6 +751,7 @@ void register_ps2_runtime_io_tests()
             settings.fxaa = true;
             settings.hudSmoothing = false;
             settings.keepSpeed = false;
+            settings.videoSkip = false;
             settings.aspect = "16:9";
             settings.volume = 40;
             settings.refreshRate = "144";
@@ -764,6 +767,7 @@ void register_ps2_runtime_io_tests()
             t.IsTrue(settings.fxaa, "fxaa round-trips");
             t.IsTrue(!settings.hudSmoothing, "hud_smoothing round-trips");
             t.IsTrue(!settings.keepSpeed, "keep_speed round-trips");
+            t.IsTrue(!settings.videoSkip, "video_skip round-trips");
             t.Equals(settings.aspect, std::string("16:9"), "aspect round-trips");
             t.Equals(settings.volume, 40, "volume round-trips");
             t.Equals(settings.refreshRate, std::string("144"), "a frame rate above 60 round-trips");
@@ -793,6 +797,25 @@ void register_ps2_runtime_io_tests()
                      "bad and unknown lines are reported");
             std::filesystem::remove(path);
             settings = saved;
+        });
+
+        tc.Run("holding Start skips a video until it ends", [](TestCase &t)
+        {
+            static bool playing = true;
+            const uint8_t rdram[4] = {};
+            ps2x::setVideoCheck([](const uint8_t *) { return playing; });
+            t.IsTrue(!ps2x::updateVideoSkip(rdram), "a video plays, nothing skipped yet");
+            t.IsTrue(!ps2x::holdToSkipVideo(true), "the game sees Start pressed");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+            t.IsTrue(ps2x::holdToSkipVideo(true), "after a second the skip starts and hides Start");
+            t.IsTrue(ps2x::videoSkipping() && ps2x::updateVideoSkip(rdram), "the skip runs while the video plays");
+            playing = false;
+            t.IsTrue(!ps2x::updateVideoSkip(rdram) && !ps2x::videoSkipping(), "the skip ends with the video");
+            t.IsTrue(ps2x::holdToSkipVideo(true), "Start stays hidden until it is released");
+            t.IsTrue(!ps2x::holdToSkipVideo(false), "a release reaches the game");
+            t.IsTrue(!ps2x::holdToSkipVideo(true), "without a video Start reaches the game");
+            ps2x::setVideoCheck(nullptr);
+            ps2x::updateVideoSkip(rdram);
         });
 
         tc.Run("sceMcGetInfo reports formatted and unformatted states", [](TestCase &t)

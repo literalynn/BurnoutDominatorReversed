@@ -11,6 +11,7 @@
 #include "runtime/ee_count.h"
 #include "runtime/vblank_rate.h"
 #include "runtime/host_sleep.h"
+#include "runtime/video_skip.h"
 
 #include <algorithm>
 #include <array>
@@ -2746,6 +2747,8 @@ namespace ps2x
 
 void EeScheduler::updateFastForward()
 {
+    // A video being skipped runs as fast as the host allows, whatever the frame load.
+    const bool skipping = ps2x::updateVideoSkip(m_rdram);
     if (deterministicTiming())
         return;
     // Work per frame: the host time between two VBlanks less what was spent waiting for the
@@ -2763,7 +2766,7 @@ void EeScheduler::updateFastForward()
     m_lastVBlankHost = now;
     m_waitedSinceVBlank = {};
     const ps2x::FastForwardCheck check = ps2x::fastForwardCheck();
-    m_fastForward = check && check() && m_frameLoad < (m_fastForward ? 0.75 : 0.5);
+    m_fastForward = skipping || (check && check() && m_frameLoad < (m_fastForward ? 0.75 : 0.5));
     if (m_fastForward)
         m_fastForwardVBlanks.fetch_add(1u, std::memory_order_relaxed);
 }

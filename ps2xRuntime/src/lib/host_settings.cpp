@@ -136,6 +136,8 @@ namespace ps2x
                 return parseBool(value, s.gsThread);
             if (key == "fast_loading")
                 return parseBool(value, s.fastLoading);
+            if (key == "video_skip")
+                return parseBool(value, s.videoSkip);
             if (key == "keep_speed")
                 return parseBool(value, s.keepSpeed);
             if (key == "vibration")
@@ -287,6 +289,9 @@ namespace ps2x
                 "gs_thread = " << (s.gsThread ? "true" : "false") << "\n"
                 "# fast_loading runs loading screens (silent, mostly idle) faster than real time.\n"
                 "fast_loading = " << (s.fastLoading ? "true" : "false") << "\n"
+                "# video_skip: holding Start (or its key) for a second skips any video, even one the game\n"
+                "# does not let you skip: the game plays it as fast as the computer can, unseen and unheard.\n"
+                "video_skip = " << (s.videoSkip ? "true" : "false") << "\n"
                 "# keep_speed keeps the game's speed when the graphics cannot keep up: the game runs more\n"
                 "# simulation steps per drawn frame instead of slowing down. It starts with the next race.\n"
                 "keep_speed = " << (s.keepSpeed ? "true" : "false") << "\n"

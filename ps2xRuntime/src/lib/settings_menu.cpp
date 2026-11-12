@@ -29,6 +29,7 @@ namespace
         RowSmooth,
         RowVibration,
         RowFastLoading,
+        RowVideoSkip,
         RowKeepSpeed,
         RowRefresh,
         RowDeadzone,
@@ -124,6 +125,7 @@ namespace
         case RowSmooth: return "Smooth scaling";
         case RowVibration: return "Gamepad vibration";
         case RowFastLoading: return "Fast loading";
+        case RowVideoSkip: return "Skip videos (hold Start)";
         case RowKeepSpeed: return "Keep speed when slow (next race)";
         case RowRefresh: return "Frame rate (next menu page)";
         case RowDeadzone: return "Stick dead zone";
@@ -168,6 +170,7 @@ namespace
         case RowSmooth: return onOff(s.smoothScaling);
         case RowVibration: return onOff(s.vibration);
         case RowFastLoading: return onOff(s.fastLoading);
+        case RowVideoSkip: return onOff(s.videoSkip);
         case RowKeepSpeed: return onOff(s.keepSpeed);
         case RowRefresh: return s.refreshRate + " Hz";
         case RowDeadzone: return std::to_string(int(s.stickDeadzone * 100.0f + 0.5f)) + "%";
@@ -231,6 +234,9 @@ namespace
             break;
         case RowFastLoading:
             s.fastLoading = !s.fastLoading;
+            break;
+        case RowVideoSkip:
+            s.videoSkip = !s.videoSkip;
             break;
         case RowKeepSpeed:
             s.keepSpeed = !s.keepSpeed;
