@@ -21,6 +21,7 @@ if(BDR_BUILD_GAME)
         "${PROJECT_SOURCE_DIR}/src/burnout_button_prompts.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_frame_rate.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_main.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_menu_art.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_profile.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_texts.cpp")
@@ -76,6 +77,7 @@ if(TARGET ps2_runtime AND TARGET ps2_test_function_table)
         "${PROJECT_SOURCE_DIR}/tests/native/burnout_overrides_tests.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_button_prompts.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_frame_rate.cpp"
+        "${PROJECT_SOURCE_DIR}/src/burnout_menu_art.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_overrides.cpp"
         "${PROJECT_SOURCE_DIR}/src/burnout_texts.cpp"
         $<TARGET_OBJECTS:ps2_test_function_table>)

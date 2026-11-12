@@ -2,15 +2,17 @@
 // SDK binding resolves to the intended runtime handler, and rom0:ROMVER has the
 // layout the game's parser expects. Also the text replacement of src/burnout_texts.cpp, the
 // frame rate wrappers of src/burnout_frame_rate.cpp and the button prompts of
-// src/burnout_button_prompts.cpp.
+// src/burnout_button_prompts.cpp and the menu art decoders of src/burnout_menu_art.cpp.
 #include "../../src/burnout_button_prompts.h"
 #include "../../src/burnout_frame_rate.h"
+#include "../../src/burnout_menu_art.h"
 #include "../../src/burnout_texts.h"
 #include "game_overrides.h"
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
 #include "runtime/gs/ps2_gs_psmct32.h"
+#include "runtime/gs/ps2_gs_psmt4.h"
 #include "runtime/gs/ps2_gs_psmt8.h"
 #include "runtime/host_settings.h"
 #include "runtime/ps2_memory.h"
@@ -22,9 +24,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -387,6 +391,175 @@ void testButtonPrompts() {
     check(size == next.size() + 96 + 1024 + 80 && !contains(std::vector<uint8_t>(out, out + size), texels),
           "only the palette, still in GS memory, is uploaded again");
 }
+
+template <typename T>
+void put(std::vector<uint8_t>& file, size_t at, T value) {
+    if (file.size() < at + sizeof(T)) file.resize(at + sizeof(T));
+    std::memcpy(file.data() + at, &value, sizeof(T));
+}
+
+// A texture entry as the front end's files hold one: a width x height texture of 4 or 8 bits a
+// texel at block 0x2000, its palette at 16,16 of block 0x2040. The texels go up in a CNT packet
+// (GS page 0x2000 sent as 64x32 PSMCT32), the palette in a REF packet. index(x, y) picks the
+// texels, colour(i) the palette entries.
+template <typename Index, typename Colour>
+std::vector<uint8_t> textureEntry(uint32_t width, uint32_t height, uint32_t depth, Index index, Colour colour) {
+    std::vector<uint8_t> memory(1u << 22);
+    const uint32_t tbw = std::max(2u, width / 64u);
+    for (uint32_t y = 0; y < height; ++y)
+        for (uint32_t x = 0; x < width; ++x) {
+            const uint32_t i = index(x, y);
+            if (depth == 8) memory[GSPSMT8::addrPSMT8(0x2000, tbw, x, y)] = uint8_t(i);
+            else {
+                const uint32_t nibble = GSPSMT4::addrPSMT4(0x2000, tbw, x, y);
+                memory[nibble / 2] = uint8_t(memory[nibble / 2] | (i & 15) << (nibble & 1) * 4);
+            }
+        }
+    std::vector<uint8_t> texels(64 * 32 * 4), palette;
+    for (uint32_t i = 0; i < 64 * 32; ++i)
+        std::memcpy(texels.data() + i * 4, memory.data() + GSPSMCT32::addrPSMCT32(0x2000, 1, i % 64, i / 64), 4);
+    // CSM1: 256 colours as 16 x 16 with bits 3 and 4 of the index swapped, 16 as 8 x 2.
+    const uint32_t columns = depth == 8 ? 16 : 8, rows = depth == 8 ? 16 : 2;
+    for (uint32_t p = 0; p < columns * rows; ++p) {
+        const uint32_t i = depth == 8 ? (p & 0xe7) | (p & 0x08) << 1 | (p & 0x10) >> 1 : p;
+        const uint32_t c = colour(i);
+        palette.insert(palette.end(), reinterpret_cast<const uint8_t*>(&c), reinterpret_cast<const uint8_t*>(&c) + 4);
+    }
+    const std::vector<uint8_t> texelPacket = uploadPacket(0x2000, 0, 0, 64, 32, texels);
+    const std::vector<uint8_t> palettePacket = uploadPacket(0x2040, 16, 16, columns, rows, palette);
+
+    const uint32_t base = 0x00a00000;
+    std::vector<uint8_t> entry(0x110);
+    put<uint32_t>(entry, 0xc, width);
+    put<uint32_t>(entry, 0x10, height);
+    put<uint32_t>(entry, 0x14, depth);
+    put<uint32_t>(entry, 0x104, base);
+    put<uint64_t>(entry, 0x110, texelPacket.size() / 16 | 1ull << 28); // CNT
+    entry.resize(0x120);
+    entry.insert(entry.end(), texelPacket.begin(), texelPacket.end());
+    const size_t ref = entry.size(), packet = ref + 32;
+    put<uint64_t>(entry, ref, palettePacket.size() / 16 | 3ull << 28 | uint64_t(base + packet) << 32); // REF
+    put<uint64_t>(entry, ref + 16, 0); // an empty tag ends the chain
+    entry.resize(packet);
+    entry.insert(entry.end(), palettePacket.begin(), palettePacket.end());
+    return entry;
+}
+
+bool imageIs(const ps2x::MenuImage& image, uint32_t width, uint32_t height, const std::function<uint32_t(uint32_t, uint32_t)>& rgba) {
+    if (image.width != int(width) || image.height != int(height) || image.rgba.size() != size_t(width) * height * 4) return false;
+    for (uint32_t y = 0; y < height; ++y)
+        for (uint32_t x = 0; x < width; ++x) {
+            uint32_t value;
+            std::memcpy(&value, image.rgba.data() + (size_t(y) * width + x) * 4, 4);
+            if (value != rgba(x, y)) return false;
+        }
+    return true;
+}
+
+// The disc's colours have alpha 0x80 for opaque; the menu gets 0xff.
+uint32_t opaque(uint32_t colour) {
+    return (colour & 0xffffff) | std::min(255u, (colour >> 24) * 2) << 24;
+}
+
+void testMenuArt() {
+    // An 8-bit 32x32 image, the second of a movie of an FE/*.BIN archive.
+    const auto index8 = [](uint32_t x, uint32_t y) { return (x * 7 + y * 3) & 0xff; };
+    const auto colour8 = [](uint32_t i) { return ((i * 0x010203u + 0x40) & 0xffffff) | (i & 0x80) << 24; };
+    const std::vector<uint8_t> entry = textureEntry(32, 32, 8, index8, colour8);
+    std::vector<uint8_t> archive(0x80);
+    put<uint32_t>(archive, 8, 1);     // one movie
+    put<uint32_t>(archive, 12, 0x10); // its (name, movie) pair at 0x14
+    put<uint32_t>(archive, 0x10, 0x14);
+    put<uint32_t>(archive, 0x14, 0x20);
+    put<uint32_t>(archive, 0x18, 0x40);
+    std::memcpy(archive.data() + 0x20, "c_test", 7);
+    put<uint32_t>(archive, 0x44, 2);    // two images
+    put<uint32_t>(archive, 0x48, 0x10); // their table at 0x50
+    put<uint32_t>(archive, 0x50, 0x20);
+    put<uint32_t>(archive, 0x54, 0x40); // the second at 0x80
+    archive.insert(archive.end(), entry.begin(), entry.end());
+    const std::optional<size_t> second = burnout::movieImage(archive, "c_test", 1);
+    check(second == size_t(0x80) && !burnout::movieImage(archive, "c_test", 2) && !burnout::movieImage(archive, "c_other", 0),
+          "a movie's images are found by their index");
+    const std::optional<ps2x::MenuImage> image = second ? burnout::decodeTexture(archive, *second) : std::nullopt;
+    check(image && imageIs(*image, 32, 32, [&](uint32_t x, uint32_t y) { return opaque(colour8(index8(x, y))); }),
+          "an 8-bit texture reads back through its CSM1 palette, alpha doubled");
+    check(!burnout::decodeTexture(std::vector<uint8_t>(archive.begin(), archive.end() - 1), 0x80) &&
+              !burnout::decodeTexture(archive, 0x84),
+          "a cut or misplaced entry gives nothing");
+
+    // A font: two glyphs, A and B, a kerning pair and a 4-bit atlas.
+    const auto index4 = [](uint32_t x, uint32_t y) { return (x / 4 + y) & 15; };
+    const auto colour4 = [](uint32_t i) { return 0x00ffffffu | (i * 8) << 24; };
+    std::vector<uint8_t> font(0x100);
+    put<uint32_t>(font, 0x44, 2);
+    put<uint32_t>(font, 0x48, 3);
+    put<uint32_t>(font, 0x4c, 1);
+    put<float>(font, 0x50, 23.5f);
+    put<uint32_t>(font, 0x64, 0x80);
+    put<uint32_t>(font, 0x68, 0xc0);
+    put<uint32_t>(font, 0x6c, 0xd8);
+    put<uint32_t>(font, 0x70, 0x100);
+    const float glyphs[2][7] = {{1, 20, 10, 18, 0.5f, 17, 12}, {12, 20, 9, 18, 1, 17, 11}};
+    for (int g = 0; g < 2; ++g)
+        for (int k = 0; k < 7; ++k) put<float>(font, 0x80 + 32 * g + 4 * k, glyphs[g][k]);
+    const uint16_t codes[3][2] = {{'A', 0}, {'B', 1}, {'C', 7}};
+    for (int c = 0; c < 3; ++c) {
+        put<uint16_t>(font, 0xc0 + 8 * c, codes[c][0]);
+        put<uint16_t>(font, 0xc2 + 8 * c, codes[c][1]);
+    }
+    put<uint16_t>(font, 0xd8, 0);
+    put<uint16_t>(font, 0xda, 1);
+    put<int16_t>(font, 0xdc, -2);
+    font.resize(0x100);
+    const std::vector<uint8_t> atlas = textureEntry(64, 32, 4, index4, colour4);
+    font.insert(font.end(), atlas.begin(), atlas.end());
+    const std::optional<ps2x::MenuFont> decoded = burnout::decodeFont(font);
+    check(decoded && decoded->size == 23.5f && decoded->glyphs.size() == 2 && decoded->glyphs[1].x == 13 &&
+              decoded->glyphs[1].y == 3 && decoded->glyphs[1].top == 17 && decoded->glyphs[1].advance == 11 &&
+              decoded->codes.size() == 2 && decoded->codes.at('B') == 1 &&
+              decoded->kerning.at({0u, 1u}) == -2.0f,
+          "a font's glyphs (box from the pen and baseline), characters and kerning are read");
+    check(decoded && imageIs(decoded->atlas, 64, 32, [&](uint32_t x, uint32_t y) { return opaque(colour4(index4(x, y))); }),
+          "a 4-bit atlas reads back through its 8 x 2 palette");
+    put<float>(font, 0x50, 0.0f);
+    check(!burnout::decodeFont(font), "a font without a size gives nothing");
+
+    // A wave dictionary with two waves: the second, "two", is three ADPCM blocks whose second
+    // ends the wave. Block 1: shift 0, every nibble 1 (4096). Block 2: predictor 1 (60/64 of the
+    // last sample), nibbles 0.
+    std::vector<uint8_t> awd(0x200);
+    put<uint32_t>(awd, 8, 0x200); // the data
+    put<uint32_t>(awd, 0x60, 0xf0); // the next record at 0x100
+    std::memcpy(awd.data() + 0x60 + 0x68, "one", 4);
+    put<uint32_t>(awd, 0x100, 0x50);
+    put<uint32_t>(awd, 0x110, 22050);
+    put<uint32_t>(awd, 0x118, 48);
+    put<uint32_t>(awd, 0x14c, 0);
+    std::memcpy(awd.data() + 0x100 + 0x68, "two", 4);
+    const uint8_t blocks[48] = {0x00, 0, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+                                0x1c, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                0x00, 0, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
+    awd.insert(awd.end(), std::begin(blocks), std::end(blocks));
+    const std::optional<ps2x::MenuSound> two = burnout::awdSound(awd, "two");
+    check(two && two->sampleRate == 22050 && two->samples.size() == 56 && two->samples[0] == 4096 &&
+              two->samples[27] == 4096 && two->samples[28] == 3840 && two->samples[29] == 3600,
+          "a wave decodes from SPU2 ADPCM up to its end flag");
+    check(!burnout::awdSound(awd, "three") && !burnout::awdSound(std::vector<uint8_t>(awd.begin(), awd.begin() + 0x220), "two"),
+          "a missing or cut wave gives nothing");
+
+    // With BDR_DISC set to an extracted disc, the real files.
+    if (const char* disc = std::getenv("BDR_DISC")) {
+        const ps2x::MenuArt art = burnout::loadMenuArt(disc);
+        check(art.font.glyphs.size() == 163 && art.font.atlas.width == 256 && art.stripes.width == 198 &&
+                  art.arrow.width == 32 && art.stepFull.width == 32 && art.playStation[2].width == 32 &&
+                  !art.move.samples.empty() && !art.back.samples.empty(),
+              "the disc's font, images and sounds load");
+    }
+    const ps2x::MenuArt none = burnout::loadMenuArt(std::filesystem::path("no such disc"));
+    check(none.font.glyphs.empty() && none.stripes.rgba.empty() && none.move.samples.empty() && none.xbox[0].width == 32,
+          "without a disc only the drawn Xbox symbols are there");
+}
 } // namespace
 
 int main() {
@@ -395,11 +568,12 @@ int main() {
     testPcTexts();
     testFrameRate();
     testButtonPrompts();
+    testMenuArt();
     if (g_failures) {
         std::cerr << g_failures << " Burnout override check(s) failed\n";
         return 1;
     }
     std::cout << "Burnout override tests passed (" << std::size(kExpected)
-              << " bindings, ROM0 profile, frame rate, button prompts)\n";
+              << " bindings, ROM0 profile, frame rate, button prompts, menu art)\n";
     return 0;
 }

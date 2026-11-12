@@ -1,6 +1,7 @@
 // Project runner: original disc sectors, local saves and bounded diagnostics.
 #include "burnout_button_prompts.h"
 #include "burnout_frame_rate.h"
+#include "burnout_menu_art.h"
 #include "burnout_profile.h"
 #include "burnout_texts.h"
 #include "ps2_runtime.h"
@@ -518,6 +519,7 @@ int main(int argc, char** argv) {
             return rdram[0x43E7CDu] == 1u ? 16.0f / 9.0f : 4.0f / 3.0f;
         });
         burnout::installButtonPrompts();
+        ps2x::setMenuArt(burnout::loadMenuArt(options.disc));
         g_carLight = runtime.lookupFunction(0x2EDC58u);
         if (g_carLight)
             runtime.replaceFunction(0x2EDC58u, &carLight);

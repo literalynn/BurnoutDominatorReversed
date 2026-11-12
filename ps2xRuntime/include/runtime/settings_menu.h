@@ -2,7 +2,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace ps2x
 {
@@ -33,6 +36,45 @@ void drawSettingsOverlay(uint64_t framesShown);
 // A short notice in the bottom right corner in the menu's style, with an orange bar filled to
 // progress (0..1, 0 = none). Window thread.
 void drawCornerNotice(const std::string &text, float progress);
+
+// Art and sounds a game can lend the menu so that it looks and sounds like its own menus. Anything
+// left empty is drawn as without it (a system font, stripes and arrows of its own) or stays silent.
+// Images are RGBA, 8 bits a channel, rows from the top.
+struct MenuImage
+{
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+};
+struct MenuFont
+{
+    MenuImage atlas;   // white glyphs, their coverage in alpha
+    float size = 0.0f; // text drawn at size s scales the atlas by s / size
+    struct Glyph
+    {
+        float x, y, width, height; // the box in the atlas
+        float left, top;           // from the pen, on the baseline, to the box's top left
+        float advance;
+    };
+    std::vector<Glyph> glyphs;
+    std::map<uint32_t, uint32_t> codes;                     // Latin-1 character to glyph
+    std::map<std::pair<uint32_t, uint32_t>, float> kerning; // a pair of glyphs: change to the advance
+};
+struct MenuSound
+{
+    int sampleRate = 0;
+    std::vector<int16_t> samples; // mono
+};
+struct MenuArt
+{
+    MenuFont font;
+    MenuImage stripes;                 // hazard stripes that repeat across the image's width
+    MenuImage arrow, arrowSelected;    // a chevron pointing right
+    MenuImage stepEmpty, stepFull;     // one step of the volume bar
+    MenuImage playStation[3], xbox[3]; // the pad's cross, circle and square (A, B and X)
+    MenuSound move, left, right, select, back;
+};
+// Before the window loop starts, or on the window thread.
+void setMenuArt(MenuArt art);
 
 // The shape of the picture the game draws (width / height), which the window keeps. A game that
 // chooses it itself registers a probe, called on the window thread (Burnout asks the console once,

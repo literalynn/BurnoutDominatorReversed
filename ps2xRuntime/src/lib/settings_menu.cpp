@@ -6,8 +6,10 @@
 #include "runtime/gamepad_rumble.h"
 #include "runtime/host_settings.h"
 #include "runtime/input_device.h"
+#include "rlgl.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -122,6 +124,118 @@ namespace
     bool g_quitConfirmed = false;
     Rectangle g_quitButtons[2] = {}; // no, yes
     std::function<float()> g_gameAspect;
+
+    // The game's art (setMenuArt), made into textures and sounds on the window thread.
+    ps2x::MenuArt g_art;
+    bool g_artChanged = false;
+    enum Cue
+    {
+        CueMove,
+        CueLeft,
+        CueRight,
+        CueSelect,
+        CueBack,
+    };
+    struct ArtTextures
+    {
+        Texture2D font{}, stripes{}, arrow{}, arrowSelected{}, stepEmpty{}, stepFull{};
+        Texture2D playStation[3]{}, xbox[3]{};
+        Sound cues[5]{};
+    };
+
+    Texture2D toTexture(const ps2x::MenuImage &image)
+    {
+        if (image.width <= 0 || image.height <= 0 || image.rgba.size() != size_t(image.width) * image.height * 4u)
+            return Texture2D{};
+        Image pixels{const_cast<uint8_t *>(image.rgba.data()), image.width, image.height, 1,
+                     PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        Texture2D texture = LoadTextureFromImage(pixels);
+        SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
+        return texture;
+    }
+
+    // The font's atlas four times larger with its edges sharpened, so that text stays crisp when
+    // drawn far larger than the game drew it; mipmaps keep small text smooth.
+    Texture2D fontTexture(const ps2x::MenuImage &atlas)
+    {
+        constexpr int kScale = 4;
+        const int w = atlas.width, h = atlas.height;
+        if (w <= 0 || h <= 0 || atlas.rgba.size() != size_t(w) * h * 4u)
+            return Texture2D{};
+        const auto alpha = [&](int x, int y)
+        { return float(atlas.rgba[(size_t(std::clamp(y, 0, h - 1)) * w + size_t(std::clamp(x, 0, w - 1))) * 4u + 3u]); };
+        ps2x::MenuImage big{w * kScale, h * kScale, std::vector<uint8_t>(size_t(w) * h * kScale * kScale * 4u, 255u)};
+        for (int y = 0; y < big.height; ++y)
+            for (int x = 0; x < big.width; ++x)
+            {
+                const float u = (float(x) + 0.5f) / kScale - 0.5f, v = (float(y) + 0.5f) / kScale - 0.5f;
+                const int x0 = int(std::floor(u)), y0 = int(std::floor(v));
+                const float fx = u - float(x0), fy = v - float(y0);
+                const float a = (alpha(x0, y0) * (1 - fx) + alpha(x0 + 1, y0) * fx) * (1 - fy) +
+                                (alpha(x0, y0 + 1) * (1 - fx) + alpha(x0 + 1, y0 + 1) * fx) * fy;
+                const float t = std::clamp((a / 255.0f - 0.3f) / 0.4f, 0.0f, 1.0f);
+                big.rgba[(size_t(y) * big.width + x) * 4u + 3u] = uint8_t(255.0f * t * t * (3.0f - 2.0f * t) + 0.5f);
+            }
+        Texture2D texture = toTexture(big);
+        if (texture.id != 0)
+        {
+            GenTextureMipmaps(&texture);
+            SetTextureFilter(texture, TEXTURE_FILTER_TRILINEAR);
+        }
+        return texture;
+    }
+
+    Sound toSound(const ps2x::MenuSound &sound)
+    {
+        if (sound.sampleRate <= 0 || sound.samples.empty() || !IsAudioDeviceReady())
+            return Sound{};
+        Wave wave{unsigned(sound.samples.size()), unsigned(sound.sampleRate), 16, 1,
+                  const_cast<int16_t *>(sound.samples.data())};
+        return LoadSoundFromWave(wave);
+    }
+
+    const ArtTextures &art()
+    {
+        static ArtTextures loaded;
+        if (!g_artChanged)
+            return loaded;
+        g_artChanged = false;
+        for (Texture2D *texture : {&loaded.font, &loaded.stripes, &loaded.arrow, &loaded.arrowSelected, &loaded.stepEmpty,
+                                   &loaded.stepFull, &loaded.playStation[0], &loaded.playStation[1], &loaded.playStation[2],
+                                   &loaded.xbox[0], &loaded.xbox[1], &loaded.xbox[2]})
+            if (texture->id != 0)
+                UnloadTexture(*texture);
+        for (Sound &cue : loaded.cues)
+            if (cue.frameCount != 0)
+                UnloadSound(cue);
+        loaded = ArtTextures{};
+        loaded.font = g_art.font.glyphs.empty() ? Texture2D{} : fontTexture(g_art.font.atlas);
+        loaded.stripes = toTexture(g_art.stripes);
+        if (loaded.stripes.id != 0)
+            SetTextureWrap(loaded.stripes, TEXTURE_WRAP_REPEAT);
+        loaded.arrow = toTexture(g_art.arrow);
+        loaded.arrowSelected = toTexture(g_art.arrowSelected);
+        loaded.stepEmpty = toTexture(g_art.stepEmpty);
+        loaded.stepFull = toTexture(g_art.stepFull);
+        for (int i = 0; i < 3; ++i)
+        {
+            loaded.playStation[i] = toTexture(g_art.playStation[i]);
+            loaded.xbox[i] = toTexture(g_art.xbox[i]);
+        }
+        const ps2x::MenuSound *sounds[] = {&g_art.move, &g_art.left, &g_art.right, &g_art.select, &g_art.back};
+        for (int i = 0; i < 5; ++i)
+            loaded.cues[i] = toSound(*sounds[i]);
+        return loaded;
+    }
+
+    void cue(Cue which)
+    {
+        const Sound &sound = art().cues[which];
+        if (sound.frameCount == 0)
+            return;
+        SetSoundVolume(sound, 0.7f * float(std::clamp(ps2x::hostSettings().volume, 0, 100)) / 100.0f);
+        PlaySound(sound);
+    }
 
     const Color kOrange{255, 140, 16, 255}; // the selected row, as in the game's menus
     const Color kAmber{250, 178, 0, 255};   // hazard stripes
@@ -411,6 +525,7 @@ namespace
                 closeMenu();
             return;
         }
+        cue(step < 0 ? CueLeft : CueRight);
         save();
     }
 
@@ -548,6 +663,7 @@ namespace
         else if (in.activate && g_menu.row == kRowReset)
         {
             ps2x::hostSettings().keys = ps2x::HostSettings::defaultKeys();
+            cue(CueSelect);
             save();
         }
         else if (in.activate)
@@ -559,6 +675,7 @@ namespace
         if (g_menu.row < 16 && in.clear)
         {
             ps2x::hostSettings().keys[g_menu.row][g_menu.column] = 0;
+            cue(CueBack);
             save();
         }
 
@@ -577,6 +694,7 @@ namespace
                 else if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))
                 {
                     ps2x::hostSettings().keys[i / 3][i % 3] = 0;
+                    cue(CueBack);
                     save();
                 }
                 return;
@@ -587,6 +705,7 @@ namespace
         if (hovered == kRowReset && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
         {
             ps2x::hostSettings().keys = ps2x::HostSettings::defaultKeys();
+            cue(CueSelect);
             save();
         }
         else if (hovered == kRowBack && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
@@ -725,24 +844,108 @@ namespace
         return text;
     }
 
+    // A quad of texture between uv0 and uv1 (top left, bottom right) over the corners top left,
+    // bottom left, bottom right, top right, as raylib draws its own.
+    void texturedQuad(const Texture2D &texture, Vector2 uv0, Vector2 uv1, const std::array<Vector2, 4> &corner, Color color)
+    {
+        rlSetTexture(texture.id);
+        rlBegin(RL_QUADS);
+        rlColor4ub(color.r, color.g, color.b, color.a);
+        rlNormal3f(0.0f, 0.0f, 1.0f);
+        rlTexCoord2f(uv0.x, uv0.y);
+        rlVertex2f(corner[0].x, corner[0].y);
+        rlTexCoord2f(uv0.x, uv1.y);
+        rlVertex2f(corner[1].x, corner[1].y);
+        rlTexCoord2f(uv1.x, uv1.y);
+        rlVertex2f(corner[2].x, corner[2].y);
+        rlTexCoord2f(uv1.x, uv0.y);
+        rlVertex2f(corner[3].x, corner[3].y);
+        rlEnd();
+        rlSetTexture(0);
+    }
+
+    // The game's font when it lent one (setMenuArt): its menus write in it, slanted.
+    bool gameFont()
+    {
+        return art().font.id != 0;
+    }
+
+    // Calls draw(glyph, pen) for each character the game's font has; returns the line's advance.
+    template <typename Draw>
+    float layoutText(const std::string &text, float scale, Draw draw)
+    {
+        const ps2x::MenuFont &font = g_art.font;
+        float pen = 0.0f;
+        uint32_t previous = UINT32_MAX;
+        for (const unsigned char c : text)
+        {
+            const auto code = font.codes.find(c);
+            if (code == font.codes.end() || code->second >= font.glyphs.size())
+                continue;
+            if (const auto kern = font.kerning.find({previous, code->second}); kern != font.kerning.end())
+                pen += kern->second * scale;
+            draw(font.glyphs[code->second], pen);
+            pen += font.glyphs[code->second].advance * scale;
+            previous = code->second;
+        }
+        return pen;
+    }
+
+    constexpr float kSlant = 0.2f; // of the game's menu text
+
+    void drawGameText(const std::string &text, Vector2 at, float size, Color color, float rotation)
+    {
+        const Texture2D &texture = art().font;
+        const ps2x::MenuFont &font = g_art.font;
+        const float scale = size / font.size, baseline = 0.84f * size; // capitals centred in size
+        const float c = std::cos(rotation * DEG2RAD), s = std::sin(rotation * DEG2RAD);
+        const float w = float(font.atlas.width), h = float(font.atlas.height);
+        const auto point = [&](float x, float y) // x along the line, y down from at
+        {
+            x += (baseline - y) * kSlant;
+            return Vector2{at.x + x * c - y * s, at.y + x * s + y * c};
+        };
+        layoutText(text, scale, [&](const ps2x::MenuFont::Glyph &g, float pen)
+        {
+            if (g.width <= 0.0f || g.height <= 0.0f)
+                return;
+            const float left = pen + g.left * scale, top = baseline - g.top * scale;
+            const float right = left + g.width * scale, bottom = top + g.height * scale;
+            texturedQuad(texture, {g.x / w, g.y / h}, {(g.x + g.width) / w, (g.y + g.height) / h},
+                         {point(left, top), point(left, bottom), point(right, bottom), point(right, top)}, color);
+        });
+    }
+
+    // The system font writes in capitals; the game's as given (callers ask for capitals where the
+    // game uses them: titles and button hints).
     float textWidth(const std::string &text, float size)
     {
+        if (gameFont())
+            return layoutText(text, size / g_art.font.size, [](const ps2x::MenuFont::Glyph &, float) {});
         return MeasureTextEx(menuFont(size), capitals(text).c_str(), size, size / 20.0f).x;
     }
 
-    // In capitals with a drop shadow, or a black outline for titles over the stripes.
+    // With a drop shadow, or a black outline for titles over the stripes.
     void drawText(const std::string &text, Vector2 at, float size, Color color, float rotation = 0.0f,
                   bool outline = false)
     {
-        const Font font = menuFont(size);
-        const std::string caps = capitals(text);
+        const bool game = gameFont();
+        const Font font = game ? Font{} : menuFont(size);
+        const std::string shown = game ? text : capitals(text);
+        const auto draw = [&](Vector2 p, Color ink)
+        {
+            if (game)
+                drawGameText(shown, p, size, ink, rotation);
+            else
+                DrawTextPro(font, shown.c_str(), p, {0.0f, 0.0f}, rotation, size, size / 20.0f, ink);
+        };
         const float d = std::max(1.0f, size / 16.0f);
         const Color shade = Fade(BLACK, 0.9f * float(color.a) / 255.0f);
         if (outline)
             for (const Vector2 offset : {Vector2{-d, -d}, Vector2{d, -d}, Vector2{-d, d}, Vector2{d, d}})
-                DrawTextPro(font, caps.c_str(), {at.x + offset.x, at.y + offset.y}, {0.0f, 0.0f}, rotation, size, size / 20.0f, shade);
-        DrawTextPro(font, caps.c_str(), {at.x + d, at.y + d}, {0.0f, 0.0f}, rotation, size, size / 20.0f, shade);
-        DrawTextPro(font, caps.c_str(), at, {0.0f, 0.0f}, rotation, size, size / 20.0f, color);
+                draw({at.x + offset.x, at.y + offset.y}, shade);
+        draw({at.x + d, at.y + d}, shade);
+        draw(at, color);
     }
 
     void triangle(Vector2 a, Vector2 b, Vector2 c, Color color)
@@ -765,7 +968,15 @@ namespace
         const float c = std::cos(angle * DEG2RAD), s = std::sin(angle * DEG2RAD);
         const auto at = [&](float u, float v) { return Vector2{origin.x + u * c - v * s, origin.y + u * s + v * c}; };
         quad(at(0.0f, 0.0f), at(length, 0.0f), at(length, thickness), at(0.0f, thickness), Color{8, 8, 8, 235});
-        const float inset = thickness * 0.1f, period = thickness * 0.95f, width = period * 0.48f;
+        const float inset = thickness * 0.1f;
+        if (const Texture2D &stripes = art().stripes; stripes.id != 0) // the game's, repeated
+        {
+            const float repeat = (thickness - 2.0f * inset) * float(stripes.width) / float(stripes.height);
+            texturedQuad(stripes, {0.0f, 0.0f}, {length / repeat, 1.0f},
+                         {at(0.0f, inset), at(0.0f, thickness - inset), at(length, thickness - inset), at(length, inset)}, WHITE);
+            return;
+        }
+        const float period = thickness * 0.95f, width = period * 0.48f;
         for (float u = 0.0f; u + period < length; u += period)
             quad(at(u + thickness * 0.8f, inset), at(u + thickness * 0.8f + width, inset),
                  at(u + width, thickness - inset), at(u, thickness - inset), kAmber);
@@ -798,11 +1009,13 @@ namespace
         drawStripes(origin, l.width * 1.15f, thickness, angle);
         const float c = std::cos(angle * DEG2RAD), s = std::sin(angle * DEG2RAD);
         const float size = 7.5f * l.unit, u = l.left + 0.05f * l.span - origin.x;
-        drawText(title, {origin.x + u * c + 0.6f * size * s, origin.y + u * s - 0.6f * size * c}, size, WHITE, angle, true);
+        drawText(capitals(title), {origin.x + u * c + 0.6f * size * s, origin.y + u * s - 0.6f * size * c}, size, WHITE,
+                 angle, true);
         if (!subtitle.empty())
         {
             const float v = 0.45f * size;
-            drawText(subtitle, {origin.x + u * c - v * s, origin.y + u * s + v * c}, 3.2f * l.unit, WHITE, angle, true);
+            drawText(capitals(subtitle), {origin.x + u * c - v * s, origin.y + u * s + v * c}, 3.2f * l.unit, WHITE, angle,
+                     true);
         }
     }
 
@@ -885,6 +1098,18 @@ namespace
             }
             return width;
         }
+        if (glyph != Glyph::Change) // the game's symbol, its ring r wide
+        {
+            const ArtTextures &textures = art();
+            const Texture2D &symbol = (playStationPad() ? textures.playStation : textures.xbox)[int(glyph)];
+            const float side = 2.0f * r * 32.0f / 26.0f;
+            if (symbol.id != 0)
+            {
+                DrawTexturePro(symbol, {0.0f, 0.0f, float(symbol.width), float(symbol.height)},
+                               {c.x - side / 2.0f, c.y - side / 2.0f, side, side}, {0.0f, 0.0f}, 0.0f, WHITE);
+                return width;
+            }
+        }
         if (glyph == Glyph::Change || playStationPad())
         {
             DrawCircleV(c, r, Color{10, 10, 12, 255});
@@ -922,15 +1147,16 @@ namespace
         const float r = 2.4f * l.unit, size = 3.1f * l.unit, gap = 2.5f * l.unit, y = top + thickness / 2.0f;
         float end = l.left + 0.04f * l.span;
         for (const Hint &hint : hints)
-            end += glyphWidth(hint.glyph, r) + 0.8f * r + textWidth(hint.label, size) + gap;
+            end += glyphWidth(hint.glyph, r) + 0.8f * r + textWidth(capitals(hint.label), size) + gap;
         DrawRectangle(0, int(top), int(end), int(thickness + 1.0f), BLACK);
         DrawRectangleGradientH(int(end), int(top), int(8.0f * l.unit), int(thickness + 1.0f), BLACK, Fade(BLACK, 0.0f));
         float x = l.left + 0.04f * l.span;
         for (const Hint &hint : hints)
         {
+            const std::string label = capitals(hint.label);
             x += drawGlyph(hint.glyph, x, y, r) + 0.8f * r;
-            drawText(hint.label, {x, y - size / 2.0f}, size, WHITE);
-            x += textWidth(hint.label, size) + gap;
+            drawText(label, {x, y - size / 2.0f}, size, WHITE);
+            x += textWidth(label, size) + gap;
         }
     }
 
@@ -940,8 +1166,16 @@ namespace
         drawText(note, {(l.width - textWidth(note, size)) / 2.0f, 85.0f * l.unit}, size, Color{205, 205, 210, 255});
     }
 
-    void drawChevron(Vector2 c, float size, bool right, Color color)
+    void drawChevron(Vector2 c, float size, bool right, bool selected)
     {
+        if (const Texture2D &arrow = selected ? art().arrowSelected : art().arrow; arrow.id != 0) // the game's
+        {
+            const float side = size * 1.15f, w = float(arrow.width);
+            DrawTexturePro(arrow, {0.0f, 0.0f, right ? w : -w, float(arrow.height)},
+                           {c.x - side / 2.0f, c.y - side / 2.0f, side, side}, {0.0f, 0.0f}, 0.0f, WHITE);
+            return;
+        }
+        const Color color = selected ? WHITE : kGrey;
         const float d = right ? 1.0f : -1.0f, t = size * 0.26f;
         const Vector2 tip{c.x + d * size * 0.22f, c.y};
         DrawLineEx({c.x - d * size * 0.22f, c.y - size * 0.45f}, tip, t, color);
@@ -953,25 +1187,36 @@ namespace
     void drawValue(int row, float y, float size, float half, bool selected)
     {
         const float center = g_menu.valueCenter;
-        const Color arrows = selected ? WHITE : kGrey;
         const float spread = selected ? half + size * 0.15f : half;
         if (row == RowControls)
         {
-            drawChevron({center + spread, y}, size, true, arrows);
+            drawChevron({center + spread, y}, size, true, selected);
             return;
         }
         if (row > RowControls)
             return;
-        drawChevron({center - spread, y}, size, false, arrows);
-        drawChevron({center + spread, y}, size, true, arrows);
+        drawChevron({center - spread, y}, size, false, selected);
+        drawChevron({center + spread, y}, size, true, selected);
         if (row == RowVolume)
         {
             const int steps = 20, filled = ps2x::hostSettings().volume / 5;
             const float step = (half - size * 0.7f) * 2.0f / float(steps), w = step * 0.62f, h = size * 0.42f;
             float x = center - step * float(steps) / 2.0f;
+            const Texture2D &full = art().stepFull, &empty = art().stepEmpty;
             for (int i = 0; i < steps; ++i, x += step)
-                quad({x + h * 0.5f, y - h}, {x + h * 0.5f + w, y - h}, {x + w, y + h}, {x, y + h},
-                     i < filled ? Color{240, 92, 30, 255} : Color{86, 86, 92, 255});
+            {
+                if (full.id != 0 && empty.id != 0) // the game's steps: their bar is 22 of 32 texels high
+                {
+                    const Texture2D &texture = i < filled ? full : empty;
+                    const float side = 2.0f * h * 32.0f / 22.0f;
+                    DrawTexturePro(texture, {0.0f, 0.0f, float(texture.width), float(texture.height)},
+                                   {x + step / 2.0f - side / 2.0f, y - side / 2.0f, side, side}, {0.0f, 0.0f}, 0.0f,
+                                   i < filled ? WHITE : Color{110, 110, 116, 255});
+                }
+                else
+                    quad({x + h * 0.5f, y - h}, {x + h * 0.5f + w, y - h}, {x + w, y + h}, {x, y + h},
+                         i < filled ? Color{240, 92, 30, 255} : Color{86, 86, 92, 255});
+            }
             return;
         }
         const std::string value = mainValue(row);
@@ -1111,8 +1356,15 @@ namespace
 
 namespace ps2x
 {
-    void drawCornerNotice(const std::string &text, float progress)
+    void setMenuArt(MenuArt lent)
     {
+        g_art = std::move(lent);
+        g_artChanged = true;
+    }
+
+    void drawCornerNotice(const std::string &hint, float progress)
+    {
+        const std::string text = capitals(hint); // a button hint, in capitals like the game's
         const float size = std::clamp(float(GetScreenHeight()) / 32.0f, 12.0f, 30.0f);
         const float width = textWidth(text, size) + 2.0f * size, height = 2.0f * size;
         const float left = float(GetScreenWidth()) - width - size, top = float(GetScreenHeight()) - height - size;
@@ -1141,6 +1393,9 @@ namespace ps2x
         in.toggle |= pad.toggle;
         in.close |= pad.close;
 
+        const bool wasOpen = g_menu.open, wasAsking = g_quitQuestion;
+        const Page page = g_menu.page;
+        const int row = g_menu.row, column = g_menu.column, capturing = g_menu.capturing;
         const bool busy = cardBusy(now);
         if (g_waitingForSave)
         {
@@ -1169,6 +1424,17 @@ namespace ps2x
             else
                 updateControls(in);
         }
+        // The front end's sounds for what changed (a changed value plays its own in changeMain).
+        if (g_quitQuestion != wasAsking)
+            cue(g_quitQuestion || g_waitingForSave ? CueSelect : CueBack);
+        else if (g_menu.open != wasOpen)
+            cue(g_menu.open ? CueSelect : CueBack);
+        else if (g_menu.open && g_menu.page != page)
+            cue(g_menu.page == Page::Controls ? CueSelect : CueBack);
+        else if (g_menu.open && (g_menu.row != row || g_menu.column != column))
+            cue(CueMove);
+        else if (g_menu.capturing >= 0 && capturing < 0)
+            cue(CueSelect);
         if (!g_menu.open && g_menu.releasing && !menuKeyHeld())
             g_menu.releasing = false;
         g_captures.store(g_menu.open || g_menu.releasing || g_quitQuestion, std::memory_order_release);
