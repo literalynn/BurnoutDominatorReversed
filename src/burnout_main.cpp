@@ -272,14 +272,17 @@ void setArg(R5900Context* ctx, int reg, uint32_t value) {
     ctx->r[reg] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(value)));
 }
 
-// Calls a guest function returning to the continuation; false if the scheduler stopped it.
-bool callGuest(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t function, uint32_t a0, uint32_t a1) {
+// Calls a guest function returning to a continuation; false if the scheduler stopped it.
+bool callGuest(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t function, uint32_t a0, uint32_t a1,
+               uint32_t a2 = 0, uint32_t a3 = 0, uint32_t continuation = g_continuation) {
     setArg(ctx, 4, a0);
     setArg(ctx, 5, a1);
-    setArg(ctx, 31, g_continuation);
+    setArg(ctx, 6, a2);
+    setArg(ctx, 7, a3);
+    setArg(ctx, 31, continuation);
     ctx->pc = function;
     runtime->lookupFunction(function)(rdram, ctx, runtime);
-    return ctx->pc == g_continuation && !ps2_ee_unwind::g_returningToScheduler;
+    return ctx->pc == continuation && !ps2_ee_unwind::g_returningToScheduler;
 }
 
 void continueFrequencySkip(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
@@ -357,6 +360,73 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         return;
     }
     g_goToPage(rdram, ctx, runtime);
+}
+
+// Holding Start ends a video (runtime/video_skip.h) the way its last frame does. Every video is
+// played by the front end's one video object, 0x43E000, which the front end's frame (0x206C08)
+// updates with 0x19E6A0(a0 = the object, f12 = the frame's time). When that update finds the
+// stream at its end (0x1FA350), it calls the clip's _FunctionOnFinish, whose name is at +0x1A4
+// ("none" for none), with 0x101AC0(name, 0, 0x2480B0(2), 0), an Apt call without arguments, then
+// stops the video with 0x19F018 (+0x1D4 = 0x1D); the next updates close it. Every clip that does
+// not loop names ContinueFlow (ContinueRewardsFlow on the rewards page): the page's way on.
+// While the player holds Start past the hint, the runner makes the same calls right after the
+// update of a frame where a video plays (+0x1D4 = 0x1C), is drawn (+0x1E0, set by its draw
+// callback 0x19F408 and cleared after each frame by 0x209248) and does not loop (+0x1C8), as if
+// its stream had ended there. Like the 50/60 Hz answer, each call returns to a continuation.
+PS2Runtime::RecompiledFunction g_videoUpdate = nullptr;
+uint32_t g_videoContinuation = 0; // guest address of continueVideoEnd
+
+struct VideoEnd {
+    int step = 0;
+    __m128i a0, ra; // the update's call
+} g_videoEnd;
+
+bool videoShown(const uint8_t* rdram) {
+    uint32_t state = 0;
+    std::memcpy(&state, rdram + 0x43E1D4u, sizeof(state));
+    return state == 0x1Cu && rdram[0x43E1E0u] != 0u && rdram[0x43E1C8u] == 0u;
+}
+
+void continueVideoEnd(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    for (;;) {
+        const int step = g_videoEnd.step++;
+        bool finished = true;
+        if (step == 0) { // the frame's update
+            ctx->r[4] = g_videoEnd.a0;
+            setArg(ctx, 31, g_videoContinuation);
+            ctx->pc = 0x19E6A0u;
+            g_videoUpdate(rdram, ctx, runtime);
+            finished = ctx->pc == g_videoContinuation && !ps2_ee_unwind::g_returningToScheduler;
+        } else if (step == 1 && !videoShown(rdram)) // it ended or stopped by itself
+            g_videoEnd.step = 5;
+        else if (step == 1 && std::strcmp(reinterpret_cast<const char*>(rdram + 0x43E1A4u), "none") == 0)
+            g_videoEnd.step = 3;
+        else if (step == 1)
+            finished = callGuest(rdram, ctx, runtime, 0x2480B0u, 2u, 0u, 0u, 0u, g_videoContinuation);
+        else if (step == 2)
+            finished = callGuest(rdram, ctx, runtime, 0x101AC0u, 0x43E1A4u, 0u, getRegU32(ctx, 2), 0u, g_videoContinuation);
+        else if (step == 3)
+            finished = callGuest(rdram, ctx, runtime, 0x19F018u, 0x43E000u, 0u, 0u, 0u, g_videoContinuation);
+        else {
+            if (step == 4)
+                std::printf("[game] ended the video %.32s\n", reinterpret_cast<const char*>(rdram + 0x43E184u));
+            ctx->r[4] = g_videoEnd.a0;
+            ctx->r[31] = g_videoEnd.ra;
+            ctx->pc = getRegU32(ctx, 31);
+            return;
+        }
+        if (!finished)
+            return;
+    }
+}
+
+void videoUpdate(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    if (g_videoContinuation == 0 || !ps2x::videoSkipping() || !videoShown(rdram)) {
+        g_videoUpdate(rdram, ctx, runtime);
+        return;
+    }
+    g_videoEnd = VideoEnd{0, ctx->r[4], ctx->r[31]};
+    continueVideoEnd(rdram, ctx, runtime);
 }
 
 // settings.ini car_lights (runtime/car_lights.h). 0x2EDC58 adds one light glow to the corona list
@@ -535,6 +605,12 @@ int main(int argc, char** argv) {
             std::memcpy(&callback, rdram + address, sizeof(callback));
             return callback == 0u || callback == 0x1B49F0u;
         });
+        g_videoUpdate = runtime.lookupFunction(0x19E6A0u);
+        if (g_videoUpdate)
+            runtime.replaceFunction(0x19E6A0u, &videoUpdate);
+        for (uint32_t address = 0x19E6A4u; address < 0x19E6C0u && g_videoUpdate && !g_videoContinuation; address += 4)
+            if (!runtime.hasFunction(address) && runtime.registerFunction(address, &continueVideoEnd))
+                g_videoContinuation = address;
         // Every video is played by the front end's one video object, 0x43E000 (set up by
         // 0x19EDD8 from a page's Video clip, played by 0x19F070/0x19E6A0, closed by 0x19F1B0):
         // +0x1D4 is 0x1C from its first frame until it ends or is stopped, and +0x1C8 is set

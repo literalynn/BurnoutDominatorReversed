@@ -3053,8 +3053,7 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         // Opaque: a frame keeps the scan-out's alpha, which is not a display value.
         rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
         BeginBlendMode(BLEND_CUSTOM);
-        if (!ps2x::videoSkipping()) // a video being skipped plays fast: it is not shown
-            DrawTexturePro(picture.texture, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        DrawTexturePro(picture.texture, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
         EndBlendMode();
         ps2x::drawVideoSkipHint();
         ps2x::drawSettingsOverlay(framesShown);

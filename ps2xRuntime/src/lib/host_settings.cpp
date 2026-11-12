@@ -299,7 +299,7 @@ namespace ps2x
                 "# fast_loading runs loading screens (silent, mostly idle) faster than real time.\n"
                 "fast_loading = " << (s.fastLoading ? "true" : "false") << "\n"
                 "# video_skip: holding Start (or its key) for a second skips any video, even one the game\n"
-                "# does not let you skip: the game plays it as fast as the computer can, unseen and unheard.\n"
+                "# does not let you skip, and those that follow while it is held: the game goes on at once.\n"
                 "video_skip = " << (s.videoSkip ? "true" : "false") << "\n"
                 "# keep_speed keeps the game's speed when the graphics cannot keep up: the game runs more\n"
                 "# simulation steps per drawn frame instead of slowing down. It starts with the next race.\n"

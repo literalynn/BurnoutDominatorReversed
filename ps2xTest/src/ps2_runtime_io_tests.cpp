@@ -875,21 +875,27 @@ void register_ps2_runtime_io_tests()
             settings.carLights = saved;
         });
 
-        tc.Run("holding Start skips a video until it ends", [](TestCase &t)
+        tc.Run("holding Start skips videos until it is released", [](TestCase &t)
         {
             static bool playing = true;
             const uint8_t rdram[4] = {};
             ps2x::setVideoCheck([](const uint8_t *) { return playing; });
-            t.IsTrue(!ps2x::updateVideoSkip(rdram), "a video plays, nothing skipped yet");
-            t.IsTrue(!ps2x::holdToSkipVideo(true), "the game sees Start pressed");
+            ps2x::updateVideoSkip(rdram);
+            t.IsTrue(!ps2x::holdToSkipVideo(true) && !ps2x::videoSkipping(), "a video plays: the game sees Start pressed");
             std::this_thread::sleep_for(std::chrono::milliseconds(1100));
-            t.IsTrue(ps2x::holdToSkipVideo(true), "after a second the skip starts and hides Start");
-            t.IsTrue(ps2x::videoSkipping() && ps2x::updateVideoSkip(rdram), "the skip runs while the video plays");
+            t.IsTrue(ps2x::holdToSkipVideo(true) && ps2x::videoSkipping(), "after a second the skip starts and hides Start");
             playing = false;
-            t.IsTrue(!ps2x::updateVideoSkip(rdram) && !ps2x::videoSkipping(), "the skip ends with the video");
-            t.IsTrue(ps2x::holdToSkipVideo(true), "Start stays hidden until it is released");
-            t.IsTrue(!ps2x::holdToSkipVideo(false), "a release reaches the game");
-            t.IsTrue(!ps2x::holdToSkipVideo(true), "without a video Start reaches the game");
+            ps2x::updateVideoSkip(rdram);
+            t.IsTrue(ps2x::holdToSkipVideo(true) && ps2x::videoSkipping(), "after the video both last while Start is held");
+            playing = true;
+            ps2x::updateVideoSkip(rdram);
+            t.IsTrue(ps2x::holdToSkipVideo(true) && ps2x::videoSkipping(), "the next video is skipped without a new hold");
+            t.IsTrue(!ps2x::holdToSkipVideo(false) && !ps2x::videoSkipping(), "a release reaches the game and ends the skip");
+            t.IsTrue(!ps2x::holdToSkipVideo(true), "a new press reaches the game");
+            playing = false;
+            ps2x::updateVideoSkip(rdram);
+            t.IsTrue(!ps2x::holdToSkipVideo(false) && !ps2x::holdToSkipVideo(true) && !ps2x::videoSkipping(),
+                     "without a video Start reaches the game");
             ps2x::setVideoCheck(nullptr);
             ps2x::updateVideoSkip(rdram);
         });
