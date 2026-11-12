@@ -12,6 +12,7 @@
 #include "runtime/ee_unwind.h"
 #include "runtime/host_settings.h"
 #include "runtime/vblank_rate.h"
+#include "runtime/video_skip.h"
 #include "runtime/ps2_vu1_native.h"
 #include "runtime/ps2_vu1_stats.h"
 
@@ -531,6 +532,15 @@ int main(int argc, char** argv) {
             const uint32_t address = (getRegU32(&ctx, 28) - 0x7DD8u) & (PS2_RAM_SIZE - 1) & ~3u;
             std::memcpy(&callback, rdram + address, sizeof(callback));
             return callback == 0u || callback == 0x1B49F0u;
+        });
+        // Every video is played by the front end's one video object, 0x43E000 (set up by
+        // 0x19EDD8 from a page's Video clip, played by 0x19F070/0x19E6A0, closed by 0x19F1B0):
+        // +0x1D4 is 0x1C from its first frame until it ends or is stopped, and +0x1C8 is set
+        // for the looping menu background (TVID\ABG.M2V), which never ends.
+        ps2x::setVideoCheck([](const uint8_t* rdram) {
+            uint32_t state = 0;
+            std::memcpy(&state, rdram + 0x43E1D4u, sizeof(state));
+            return state == 0x1Cu && rdram[0x43E1C8u] == 0u;
         });
         // loadELF configures roots; apply our explicit mount afterwards.
         auto paths = PS2Runtime::getIoPaths();

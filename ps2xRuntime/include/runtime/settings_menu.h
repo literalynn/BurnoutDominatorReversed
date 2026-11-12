@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 
 namespace ps2x
 {
@@ -29,6 +30,9 @@ bool settingsMenuCapturesInput();
 // Draws the FPS counter and the menu over the frame. framesShown counts the game frames the
 // window has shown so far.
 void drawSettingsOverlay(uint64_t framesShown);
+// A short notice in the bottom right corner in the menu's style, with an orange bar filled to
+// progress (0..1, 0 = none). Window thread.
+void drawCornerNotice(const std::string &text, float progress);
 
 // The shape of the picture the game draws (width / height), which the window keeps. A game that
 // chooses it itself registers a probe, called on the window thread (Burnout asks the console once,

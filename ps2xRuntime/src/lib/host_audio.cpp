@@ -1,5 +1,6 @@
 #include "runtime/host_audio.h"
 #include "runtime/host_settings.h"
+#include "runtime/video_skip.h"
 
 #include <algorithm>
 #include <cmath>
@@ -106,7 +107,15 @@ namespace
             std::memset(out, 0, size_t(frames) * 4u);
             return;
         }
-        drain(state, true);
+        // A video being skipped plays faster than real time: its sound is dropped with what was
+        // queued, the last frames fade out, and the sound after it starts as after a stall.
+        const bool skipping = ps2x::videoSkipping();
+        drain(state, !skipping);
+        if (skipping)
+        {
+            state.head = state.queue.size() / 2u;
+            state.starved = true;
+        }
         size_t available = state.queue.size() / 2u - state.head;
         if (available > kMaxFrames)
         {
@@ -156,7 +165,7 @@ namespace
             else
             {
                 // Underrun: fade out what played last instead of clicking.
-                ++state.stats.underrunFrames;
+                state.stats.underrunFrames += skipping ? 0u : 1u;
                 for (int c = 0; c < 2; ++c)
                     state.last[c] = int16_t(state.last[c] * 31 / 32);
             }

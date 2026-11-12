@@ -5,9 +5,13 @@
 #include <array>
 #include <cstring>
 #include <cstdlib>
-#include <deque>
 #include <iostream>
 #include <vector>
+
+#if defined(_M_X64) || defined(__SSE2__)
+#define PS2X_IPU_SSE2 1
+#include <emmintrin.h>
+#endif
 
 namespace
 {
@@ -31,15 +35,20 @@ namespace
             }
             m_bytes.insert(m_bytes.end(), data, data + count);
         }
+        const uint8_t *data() const { return m_bytes.data() + m_head; }
+        void discard(size_t count)
+        {
+            m_head += std::min(count, size());
+            if (m_head == m_bytes.size())
+                clear();
+        }
         // Copies min(count, size()) bytes out and zero-fills the rest.
         void pop(uint8_t *out, size_t count)
         {
             const size_t taken = std::min(count, size());
-            std::memcpy(out, m_bytes.data() + m_head, taken);
+            std::memcpy(out, data(), taken);
             std::memset(out + taken, 0, count - taken);
-            m_head += taken;
-            if (m_head == m_bytes.size())
-                clear();
+            discard(taken);
         }
 
     private:
@@ -48,6 +57,46 @@ namespace
     };
 
     using Qword = std::array<uint8_t, 16>;
+
+    // Input FIFO. Consumed qwords stay stored until compact(), so a command that runs out
+    // of input is retried by rewinding to its starting head: the qwords it consumed come
+    // back ahead of those DMA delivered meanwhile, without copying the FIFO per command.
+    class QwordFifo
+    {
+    public:
+        size_t size() const { return m_qwords.size() - m_head; }
+        bool empty() const { return m_head == m_qwords.size(); }
+        void clear()
+        {
+            m_qwords.clear();
+            m_head = 0u;
+        }
+        void push(const Qword &qword) { m_qwords.push_back(qword); }
+        const Qword &pop() { return m_qwords[m_head++]; }
+        size_t head() const { return m_head; }
+        void rewind(size_t head) { m_head = head; }
+        void compact()
+        {
+            m_qwords.erase(m_qwords.begin(), m_qwords.begin() + static_cast<std::ptrdiff_t>(m_head));
+            m_head = 0u;
+        }
+        std::vector<Qword> contents() const { return {m_qwords.begin() + static_cast<std::ptrdiff_t>(m_head), m_qwords.end()}; }
+
+    private:
+        std::vector<Qword> m_qwords;
+        size_t m_head = 0u;
+    };
+
+    inline uint64_t loadBigEndian64(const uint8_t *bytes)
+    {
+        uint64_t value;
+        std::memcpy(&value, bytes, sizeof(value));
+#if defined(_MSC_VER)
+        return _byteswap_uint64(value);
+#else
+        return __builtin_bswap64(value);
+#endif
+    }
 
     // ------------------------------------------------------------------ VLC tables
     // MPEG-2 (ISO/IEC 13818-2) annex B. Codes are given without their sign bit.
@@ -165,29 +214,54 @@ namespace
         uint8_t run = 0;    // DCT tables: run; 0xFF EOB, 0xFE escape
     };
 
+    // Built flat, then split in two levels so that the 16-bit DCT tables fit the L1 cache:
+    // the top 8 bits give the entry when they decide it, else a page indexed by the rest.
     class Lut
     {
     public:
-        explicit Lut(uint32_t bits) : m_bits(bits), m_entries(size_t(1) << bits) {}
+        explicit Lut(uint32_t bits) : m_bits(bits), m_low(bits > 8u ? bits - 8u : 0u), m_pages(size_t(1) << bits) {}
 
         void add(uint32_t code, uint32_t length, int16_t value, uint8_t run = 0)
         {
             const uint32_t shift = m_bits - length;
             for (uint32_t suffix = 0; suffix < (1u << shift); ++suffix)
+                m_pages[(static_cast<size_t>(code) << shift) | suffix] = {value, static_cast<uint8_t>(length), run};
+        }
+        void split()
+        {
+            const size_t pageSize = size_t(1) << m_low;
+            std::vector<LutEntry> pages;
+            m_top.resize(m_pages.size() / pageSize);
+            for (size_t top = 0; top < m_top.size(); ++top)
             {
-                LutEntry &entry = m_entries[(static_cast<size_t>(code) << shift) | suffix];
-                if (entry.length != 0u)
-                    ++m_conflicts;
-                entry = {value, static_cast<uint8_t>(length), run};
+                const LutEntry *page = m_pages.data() + top * pageSize;
+                const bool uniform = std::all_of(page, page + pageSize, [page](const LutEntry &entry)
+                                                 { return entry.value == page->value && entry.length == page->length && entry.run == page->run; });
+                if (uniform)
+                {
+                    m_top[top] = *page;
+                    continue;
+                }
+                m_top[top] = {static_cast<int16_t>(pages.size() / pageSize), kPage, 0};
+                pages.insert(pages.end(), page, page + pageSize);
             }
+            m_pages = std::move(pages);
         }
         uint32_t bits() const { return m_bits; }
-        const LutEntry &at(uint32_t index) const { return m_entries[index]; }
+        LutEntry at(uint32_t index) const
+        {
+            const LutEntry top = m_top[index >> m_low];
+            if (top.length != kPage)
+                return top;
+            return m_pages[(static_cast<size_t>(top.value) << m_low) | (index & ((1u << m_low) - 1u))];
+        }
 
     private:
+        static constexpr uint8_t kPage = 0xFF;
         uint32_t m_bits;
-        std::vector<LutEntry> m_entries;
-        uint32_t m_conflicts = 0;
+        uint32_t m_low;
+        std::vector<LutEntry> m_top;
+        std::vector<LutEntry> m_pages;
     };
 
     struct Tables
@@ -262,6 +336,9 @@ namespace
 
             for (int i = 0; i < 64; ++i)
                 inverseZigzag[kZigzag[i]] = static_cast<uint8_t>(i);
+
+            for (Lut *lut : {&mba, &mbI, &mbP, &mbB, &mbD, &cbp, &motion, &dmv, &dcLuminance, &dcChrominance, &dctZero, &dctOne})
+                lut->split();
         }
 
         static void addDct(Lut &lut, const VlcCode (&codes)[111], VlcCode eob)
@@ -300,6 +377,13 @@ namespace
         return static_cast<int16_t>(value < -256 ? -256 : (value > 255 ? 255 : value));
     }
 
+    // Wraps on 32 bits like the int multiply compiled before, where extreme blocks
+    // overflow it, without the undefined behaviour.
+    inline int times181(int value)
+    {
+        return static_cast<int>(181u * static_cast<uint32_t>(value));
+    }
+
     void idctRow(int16_t *blk)
     {
         int x0, x1, x2, x3, x4, x5, x6, x7, x8;
@@ -331,8 +415,8 @@ namespace
         x8 -= x3;
         x3 = x0 + x2;
         x0 -= x2;
-        x2 = (181 * (x4 + x5) + 128) >> 8;
-        x4 = (181 * (x4 - x5) + 128) >> 8;
+        x2 = (times181(x4 + x5) + 128) >> 8;
+        x4 = (times181(x4 - x5) + 128) >> 8;
         blk[0] = static_cast<int16_t>((x7 + x1) >> 8);
         blk[1] = static_cast<int16_t>((x3 + x2) >> 8);
         blk[2] = static_cast<int16_t>((x0 + x4) >> 8);
@@ -374,8 +458,8 @@ namespace
         x8 -= x3;
         x3 = x0 + x2;
         x0 -= x2;
-        x2 = (181 * (x4 + x5) + 128) >> 8;
-        x4 = (181 * (x4 - x5) + 128) >> 8;
+        x2 = (times181(x4 + x5) + 128) >> 8;
+        x4 = (times181(x4 - x5) + 128) >> 8;
         blk[8 * 0] = clip256((x7 + x1) >> 14);
         blk[8 * 1] = clip256((x3 + x2) >> 14);
         blk[8 * 2] = clip256((x0 + x4) >> 14);
@@ -386,17 +470,23 @@ namespace
         blk[8 * 7] = clip256((x7 - x1) >> 14);
     }
 
-    void inverseDct(int16_t *block)
-    {
-        for (int i = 0; i < 8; ++i)
-            idctRow(block + 8 * i);
-        for (int i = 0; i < 8; ++i)
-            idctColumn(block + i);
-    }
-
     inline uint8_t clampByte(int value)
     {
         return static_cast<uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : value));
+    }
+
+    void applyThresholds(uint32_t threshold0, uint32_t threshold1, uint8_t *rgba)
+    {
+        if (threshold0 == 0u && threshold1 == 0u)
+            return;
+        for (int i = 0; i < 256; ++i)
+        {
+            uint8_t *pixel = rgba + i * 4;
+            if (threshold0 > 0u && pixel[0] < threshold0 && pixel[1] < threshold0 && pixel[2] < threshold0)
+                pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0u;
+            else if (threshold1 > 0u && pixel[0] < threshold1 && pixel[1] < threshold1 && pixel[2] < threshold1)
+                pixel[3] = 0x40;
+        }
     }
 
     constexpr uint32_t kChcrStart = 0x100u;
@@ -417,6 +507,209 @@ namespace
     constexpr size_t kFifoQwords = 8u;
 } // namespace
 
+namespace ps2_ipu_kernels
+{
+    void inverseDctScalar(int16_t block[64])
+    {
+        for (int i = 0; i < 8; ++i)
+            idctRow(block + 8 * i);
+        for (int i = 0; i < 8; ++i)
+            idctColumn(block + i);
+    }
+
+    void convertToRgb32Scalar(const uint8_t macroblock[384], uint32_t threshold0, uint32_t threshold1, uint8_t rgba[1024])
+    {
+        const uint8_t *luminance = macroblock;
+        const uint8_t *cb = macroblock + 256;
+        const uint8_t *cr = macroblock + 320;
+        for (int y = 0; y < 16; ++y)
+        {
+            for (int x = 0; x < 16; ++x)
+            {
+                const int chroma = (y >> 1) * 8 + (x >> 1);
+                const int lum = (0x95 * std::max(0, luminance[y * 16 + x] - 16)) >> 6;
+                const int red = (0xcc * (cr[chroma] - 128)) >> 6;
+                const int greenCr = (-0x68 * (cr[chroma] - 128)) >> 6;
+                const int greenCb = (-0x32 * (cb[chroma] - 128)) >> 6;
+                const int blue = (0x102 * (cb[chroma] - 128)) >> 6;
+                uint8_t *pixel = rgba + (y * 16 + x) * 4;
+                pixel[0] = clampByte((lum + red + 1) >> 1);
+                pixel[1] = clampByte((lum + greenCr + greenCb + 1) >> 1);
+                pixel[2] = clampByte((lum + blue + 1) >> 1);
+                pixel[3] = 0x80;
+            }
+        }
+        applyThresholds(threshold0, threshold1, rgba);
+    }
+
+#if PS2X_IPU_SSE2
+    namespace
+    {
+        void transpose(__m128i (&r)[8])
+        {
+            const __m128i a0 = _mm_unpacklo_epi16(r[0], r[1]), a1 = _mm_unpackhi_epi16(r[0], r[1]);
+            const __m128i a2 = _mm_unpacklo_epi16(r[2], r[3]), a3 = _mm_unpackhi_epi16(r[2], r[3]);
+            const __m128i a4 = _mm_unpacklo_epi16(r[4], r[5]), a5 = _mm_unpackhi_epi16(r[4], r[5]);
+            const __m128i a6 = _mm_unpacklo_epi16(r[6], r[7]), a7 = _mm_unpackhi_epi16(r[6], r[7]);
+            const __m128i b0 = _mm_unpacklo_epi32(a0, a2), b1 = _mm_unpackhi_epi32(a0, a2);
+            const __m128i b2 = _mm_unpacklo_epi32(a1, a3), b3 = _mm_unpackhi_epi32(a1, a3);
+            const __m128i b4 = _mm_unpacklo_epi32(a4, a6), b5 = _mm_unpackhi_epi32(a4, a6);
+            const __m128i b6 = _mm_unpacklo_epi32(a5, a7), b7 = _mm_unpackhi_epi32(a5, a7);
+            r[0] = _mm_unpacklo_epi64(b0, b4);
+            r[1] = _mm_unpackhi_epi64(b0, b4);
+            r[2] = _mm_unpacklo_epi64(b1, b5);
+            r[3] = _mm_unpackhi_epi64(b1, b5);
+            r[4] = _mm_unpacklo_epi64(b2, b6);
+            r[5] = _mm_unpackhi_epi64(b2, b6);
+            r[6] = _mm_unpacklo_epi64(b3, b7);
+            r[7] = _mm_unpackhi_epi64(b3, b7);
+        }
+
+        // a * x + b * y for every pair (x, y) of 16-bit lanes.
+        inline __m128i madd(__m128i pairs, int a, int b)
+        {
+            const auto x = static_cast<int16_t>(a), y = static_cast<int16_t>(b);
+            return _mm_madd_epi16(pairs, _mm_set_epi16(y, x, y, x, y, x, y, x));
+        }
+
+        // times181 on 32-bit lanes, without SSE4.1's pmulld.
+        inline __m128i times181(__m128i v)
+        {
+            return _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(_mm_slli_epi32(v, 7), _mm_slli_epi32(v, 5)),
+                                               _mm_add_epi32(_mm_slli_epi32(v, 4), _mm_slli_epi32(v, 2))),
+                                 v);
+        }
+
+        // idctRow (or idctColumn) on eight rows at once: lane j of v[k] is coefficient k of
+        // row j. Products are regrouped into exact 16-bit multiply-adds (W7 * (x4 + x5) +
+        // (W1 - W7) * x4 is W1 * x4 + W7 * x5), and the scalar shortcuts for zero
+        // coefficients give what the full computation gives.
+        template <bool Column>
+        void idctPass(__m128i (&v)[8])
+        {
+            __m128i result[2][8];
+            for (int half = 0; half < 2; ++half)
+            {
+                const auto pair = [&](int a, int b)
+                { return half == 0 ? _mm_unpacklo_epi16(v[a], v[b]) : _mm_unpackhi_epi16(v[a], v[b]); };
+                const __m128i p04 = pair(0, 4), p17 = pair(1, 7), p53 = pair(5, 3), p26 = pair(2, 6);
+                const int scale = Column ? 256 : 2048;
+                const __m128i bias = _mm_set1_epi32(Column ? 8192 : 128);
+                __m128i x8 = _mm_add_epi32(madd(p04, scale, scale), bias);
+                __m128i x0 = _mm_add_epi32(madd(p04, scale, -scale), bias);
+                __m128i x4 = madd(p17, W1, W7);
+                __m128i x5 = madd(p17, W7, -W1);
+                __m128i x6 = madd(p53, W5, W3);
+                __m128i x7 = madd(p53, W3, -W5);
+                __m128i x2 = madd(p26, W6, -W2);
+                __m128i x3 = madd(p26, W2, W6);
+                if (Column)
+                {
+                    const __m128i four = _mm_set1_epi32(4);
+                    for (__m128i *x : {&x4, &x5, &x6, &x7, &x2, &x3})
+                        *x = _mm_srai_epi32(_mm_add_epi32(*x, four), 3);
+                }
+                __m128i x1 = _mm_add_epi32(x4, x6);
+                x4 = _mm_sub_epi32(x4, x6);
+                x6 = _mm_add_epi32(x5, x7);
+                x5 = _mm_sub_epi32(x5, x7);
+                x7 = _mm_add_epi32(x8, x3);
+                x8 = _mm_sub_epi32(x8, x3);
+                x3 = _mm_add_epi32(x0, x2);
+                x0 = _mm_sub_epi32(x0, x2);
+                const __m128i round = _mm_set1_epi32(128);
+                x2 = _mm_srai_epi32(_mm_add_epi32(times181(_mm_add_epi32(x4, x5)), round), 8);
+                x4 = _mm_srai_epi32(_mm_add_epi32(times181(_mm_sub_epi32(x4, x5)), round), 8);
+                const __m128i outputs[8] = {_mm_add_epi32(x7, x1), _mm_add_epi32(x3, x2), _mm_add_epi32(x0, x4),
+                                            _mm_add_epi32(x8, x6), _mm_sub_epi32(x8, x6), _mm_sub_epi32(x0, x4),
+                                            _mm_sub_epi32(x3, x2), _mm_sub_epi32(x7, x1)};
+                for (int k = 0; k < 8; ++k)
+                {
+                    const __m128i out = _mm_srai_epi32(outputs[k], Column ? 14 : 8);
+                    // The row pass keeps the low 16 bits, as the scalar cast to int16_t does.
+                    result[half][k] = Column ? out : _mm_srai_epi32(_mm_slli_epi32(out, 16), 16);
+                }
+            }
+            for (int k = 0; k < 8; ++k)
+            {
+                v[k] = _mm_packs_epi32(result[0][k], result[1][k]);
+                if (Column)
+                    v[k] = _mm_max_epi16(_mm_min_epi16(v[k], _mm_set1_epi16(255)), _mm_set1_epi16(-256));
+            }
+        }
+    }
+
+    void inverseDct(int16_t block[64])
+    {
+        __m128i v[8];
+        for (int i = 0; i < 8; ++i)
+            v[i] = _mm_loadu_si128(reinterpret_cast<const __m128i *>(block + 8 * i));
+        transpose(v);
+        idctPass<false>(v);
+        transpose(v);
+        idctPass<true>(v);
+        for (int i = 0; i < 8; ++i)
+            _mm_storeu_si128(reinterpret_cast<__m128i *>(block + 8 * i), v[i]);
+    }
+
+    // The scalar formulas on 16-bit lanes: every product fits but 0x102 * cb, and
+    // 0x102 * cb >> 6 is 4 * cb + (cb >> 5).
+    void convertToRgb32(const uint8_t macroblock[384], uint32_t threshold0, uint32_t threshold1, uint8_t rgba[1024])
+    {
+        const __m128i zero = _mm_setzero_si128();
+        const __m128i one = _mm_set1_epi16(1);
+        const __m128i bias = _mm_set1_epi16(128);
+        const __m128i alpha = _mm_set1_epi8(static_cast<char>(0x80));
+        for (int y = 0; y < 16; ++y)
+        {
+            const __m128i luminance = _mm_subs_epu8(_mm_loadu_si128(reinterpret_cast<const __m128i *>(macroblock + y * 16)),
+                                                    _mm_set1_epi8(16));
+            const __m128i cb8 = _mm_loadl_epi64(reinterpret_cast<const __m128i *>(macroblock + 256 + (y >> 1) * 8));
+            const __m128i cr8 = _mm_loadl_epi64(reinterpret_cast<const __m128i *>(macroblock + 320 + (y >> 1) * 8));
+            const __m128i cb16 = _mm_unpacklo_epi8(cb8, cb8);
+            const __m128i cr16 = _mm_unpacklo_epi8(cr8, cr8);
+            __m128i channels[3][2];
+            for (int part = 0; part < 2; ++part)
+            {
+                const auto widen = [&](__m128i bytes)
+                { return part == 0 ? _mm_unpacklo_epi8(bytes, zero) : _mm_unpackhi_epi8(bytes, zero); };
+                const __m128i lum = _mm_srli_epi16(_mm_mullo_epi16(widen(luminance), _mm_set1_epi16(0x95)), 6);
+                const __m128i cb = _mm_sub_epi16(widen(cb16), bias);
+                const __m128i cr = _mm_sub_epi16(widen(cr16), bias);
+                const __m128i red = _mm_srai_epi16(_mm_mullo_epi16(cr, _mm_set1_epi16(0xcc)), 6);
+                const __m128i green = _mm_add_epi16(_mm_srai_epi16(_mm_mullo_epi16(cr, _mm_set1_epi16(-0x68)), 6),
+                                                    _mm_srai_epi16(_mm_mullo_epi16(cb, _mm_set1_epi16(-0x32)), 6));
+                const __m128i blue = _mm_add_epi16(_mm_slli_epi16(cb, 2), _mm_srai_epi16(cb, 5));
+                channels[0][part] = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(lum, red), one), 1);
+                channels[1][part] = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(lum, green), one), 1);
+                channels[2][part] = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(lum, blue), one), 1);
+            }
+            const __m128i r = _mm_packus_epi16(channels[0][0], channels[0][1]);
+            const __m128i g = _mm_packus_epi16(channels[1][0], channels[1][1]);
+            const __m128i b = _mm_packus_epi16(channels[2][0], channels[2][1]);
+            const __m128i rg0 = _mm_unpacklo_epi8(r, g), rg1 = _mm_unpackhi_epi8(r, g);
+            const __m128i ba0 = _mm_unpacklo_epi8(b, alpha), ba1 = _mm_unpackhi_epi8(b, alpha);
+            __m128i *row = reinterpret_cast<__m128i *>(rgba + y * 64);
+            _mm_storeu_si128(row + 0, _mm_unpacklo_epi16(rg0, ba0));
+            _mm_storeu_si128(row + 1, _mm_unpackhi_epi16(rg0, ba0));
+            _mm_storeu_si128(row + 2, _mm_unpacklo_epi16(rg1, ba1));
+            _mm_storeu_si128(row + 3, _mm_unpackhi_epi16(rg1, ba1));
+        }
+        applyThresholds(threshold0, threshold1, rgba);
+    }
+#else
+    void inverseDct(int16_t block[64])
+    {
+        inverseDctScalar(block);
+    }
+
+    void convertToRgb32(const uint8_t macroblock[384], uint32_t threshold0, uint32_t threshold1, uint8_t rgba[1024])
+    {
+        convertToRgb32Scalar(macroblock, threshold0, threshold1, rgba);
+    }
+#endif
+}
+
 struct Ps2Ipu::State
 {
     explicit State(Bus busIn) : bus(std::move(busIn)) {}
@@ -431,8 +724,11 @@ struct Ps2Ipu::State
     uint32_t top = 0u;
     bool topBusy = true;
 
-    // Input: the FIFO (IFC) and the decoder's two-qword buffer (FP) read at bit BP.
-    std::deque<Qword> fifo;
+    const Tables &vlc = tables();
+
+    // Input: the FIFO (IFC) and the decoder's two-qword buffer (FP) read at bit BP,
+    // which stays below 128 whenever bits are peeked.
+    QwordFifo fifo;
     std::array<uint8_t, 32> internal{};
     uint32_t fp = 0u;
     uint32_t bp = 0u;
@@ -441,15 +737,13 @@ struct Ps2Ipu::State
     // consumed is restored, followed by the qwords DMA delivered meanwhile.
     struct Snapshot
     {
-        std::deque<Qword> fifo;
+        size_t fifoHead = 0u;
         std::array<uint8_t, 32> internal{};
         uint32_t fp = 0u;
         uint32_t bp = 0u;
         int dcPredictor[3] = {};
     };
     Snapshot snapshot;
-    bool recording = false;
-    std::vector<Qword> delivered;
 
     // Output FIFO, drained by DMA channel 3 or reads of 0x10007000.
     ByteFifo output;
@@ -609,13 +903,17 @@ struct Ps2Ipu::State
             completeFromIpu();
             return;
         }
-        uint8_t qword[16];
         while (output.size() >= 16u && (qwc & 0xFFFFu) != 0u)
         {
-            output.pop(qword, sizeof(qword));
-            bus.writeMemory(madr, qword, 16u);
-            madr += 16u;
-            qwc = (qwc & ~0xFFFFu) | ((qwc - 1u) & 0xFFFFu);
+            const uint32_t qwords = static_cast<uint32_t>(std::min<size_t>(output.size() / 16u, qwc & 0xFFFFu));
+            // The bus refuses a span it cannot write whole; qword by qword, the
+            // scratchpad wraps and an unmapped qword is dropped alone.
+            if (!bus.writeMemory(madr, output.data(), qwords * 16u))
+                for (uint32_t i = 0; i < qwords; ++i)
+                    bus.writeMemory(madr + i * 16u, output.data() + i * 16u, 16u);
+            output.discard(qwords * 16u);
+            madr += qwords * 16u;
+            qwc = (qwc & ~0xFFFFu) | ((qwc - qwords) & 0xFFFFu);
         }
         if ((qwc & 0xFFFFu) == 0u)
             completeFromIpu();
@@ -629,17 +927,19 @@ struct Ps2Ipu::State
             Qword incoming{};
             if (!readToIpu(incoming))
                 return false;
-            if (recording)
-                delivered.push_back(incoming);
-            fifo.push_back(incoming);
+            fifo.push(incoming);
         }
-        qword = fifo.front();
-        fifo.pop_front();
+        qword = fifo.pop();
         return true;
     }
 
     // Loads the decoder buffer until `bits` bits past BP are present.
     bool fill(uint32_t bits)
+    {
+        return fp * 128u >= bp + bits || load(bits);
+    }
+
+    bool load(uint32_t bits)
     {
         while (fp * 128u < bp + bits)
         {
@@ -665,16 +965,12 @@ struct Ps2Ipu::State
     {
         if (bits == 0u)
             return 0u;
-        uint64_t window = 0u;
-        const uint32_t firstByte = bp >> 3;
-        for (uint32_t i = 0; i < 5u; ++i)
-        {
-            const uint32_t index = firstByte + i;
-            const uint8_t byte = index < fp * 16u ? internal[index] : 0u;
-            window = (window << 8) | byte;
-        }
-        const uint32_t shift = 40u - (bp & 7u) - bits;
-        return static_cast<uint32_t>((window >> shift) & ((uint64_t(1) << bits) - 1u));
+        const uint64_t window = loadBigEndian64(internal.data() + (bp >> 3)) << (bp & 7u);
+        uint32_t value = static_cast<uint32_t>(window >> (64u - bits));
+        const uint32_t loaded = available();
+        if (loaded < bits)
+            value &= static_cast<uint32_t>(~uint64_t(0) << (bits - loaded));
+        return value;
     }
 
     void advance(uint32_t bits)
@@ -682,7 +978,7 @@ struct Ps2Ipu::State
         bp += bits;
         while (bp >= 128u && fp > 0u)
         {
-            std::memmove(internal.data(), internal.data() + 16u, 16u);
+            std::memcpy(internal.data(), internal.data() + 16u, 16u);
             --fp;
             bp -= 128u;
         }
@@ -727,32 +1023,21 @@ struct Ps2Ipu::State
 
     void beginTransaction()
     {
-        snapshot.fifo = fifo;
+        fifo.compact();
+        snapshot.fifoHead = fifo.head();
         snapshot.internal = internal;
         snapshot.fp = fp;
         snapshot.bp = bp;
         std::memcpy(snapshot.dcPredictor, dcPredictor, sizeof(dcPredictor));
-        delivered.clear();
-        recording = true;
-    }
-
-    void commit()
-    {
-        recording = false;
-        delivered.clear();
     }
 
     void rollback()
     {
-        fifo = snapshot.fifo;
-        for (const Qword &qword : delivered)
-            fifo.push_back(qword);
+        fifo.rewind(snapshot.fifoHead);
         internal = snapshot.internal;
         fp = snapshot.fp;
         bp = snapshot.bp;
         std::memcpy(dcPredictor, snapshot.dcPredictor, sizeof(dcPredictor));
-        recording = false;
-        delivered.clear();
     }
 
     void topUpFifo()
@@ -762,7 +1047,7 @@ struct Ps2Ipu::State
             Qword qword{};
             if (!readToIpu(qword))
                 break;
-            fifo.push_back(qword);
+            fifo.push(qword);
         }
     }
 
@@ -803,7 +1088,7 @@ struct Ps2Ipu::State
             return Result::Done;
         }
         LutEntry entry{};
-        if (!decode(tableOne ? tables().dctOne : tables().dctZero, entry))
+        if (!decode(tableOne ? vlc.dctOne : vlc.dctZero, entry))
             return Result::NeedData;
         if (entry.length == 0u)
             return Result::Error;
@@ -868,7 +1153,7 @@ struct Ps2Ipu::State
         if (intra)
         {
             LutEntry entry{};
-            if (!decode(component == 0 ? tables().dcLuminance : tables().dcChrominance, entry))
+            if (!decode(component == 0 ? vlc.dcLuminance : vlc.dcChrominance, entry))
                 return Result::NeedData;
             if (entry.length == 0u)
                 return Result::Error;
@@ -905,7 +1190,7 @@ struct Ps2Ipu::State
             if (index > 63)
                 return Result::Error;
             const int position = scan[index];
-            const int weight = matrix[tables().inverseZigzag[position]];
+            const int weight = matrix[vlc.inverseZigzag[position]];
             const int magnitude = level < 0 ? -level : level;
             int value;
             if (mpeg1())
@@ -929,12 +1214,12 @@ struct Ps2Ipu::State
         }
         if (!mpeg1() && (sum & 1) == 0)
             block[63] = static_cast<int16_t>(block[63] ^ 1);
-        inverseDct(block);
+        ps2_ipu_kernels::inverseDct(block);
         return Result::Done;
     }
 
     // BDEC: one macroblock as RAW16 (16x16 luminance, then 8x8 Cb and Cr).
-    Result blockDecode(uint32_t word, std::vector<uint8_t> &out)
+    Result blockDecode(uint32_t word, int16_t (&raw)[384])
     {
         const uint32_t forwardBits = word & 0x3Fu;
         const int quantiserCode = static_cast<int>((word >> 16) & 0x1Fu);
@@ -956,7 +1241,7 @@ struct Ps2Ipu::State
         if (!intra)
         {
             LutEntry entry{};
-            if (!decode(tables().cbp, entry))
+            if (!decode(vlc.cbp, entry))
                 return Result::NeedData;
             if (entry.length == 0u)
                 return Result::Error;
@@ -979,7 +1264,6 @@ struct Ps2Ipu::State
                     sample = std::clamp(sample, int16_t{0}, int16_t{255});
         }
 
-        int16_t raw[384];
         for (int i = 0; i < 4; ++i)
         {
             const int column = (i & 1) * 8;
@@ -991,8 +1275,6 @@ struct Ps2Ipu::State
         }
         std::memcpy(&raw[256], blocks[4], 64 * sizeof(int16_t));
         std::memcpy(&raw[320], blocks[5], 64 * sizeof(int16_t));
-        out.resize(sizeof(raw));
-        std::memcpy(out.data(), raw, sizeof(raw));
         return Result::Done;
     }
 
@@ -1033,30 +1315,30 @@ struct Ps2Ipu::State
         switch ((word >> 26) & 3u)
         {
         case 0:
-            lut = &tables().mba;
+            lut = &vlc.mba;
             break;
         case 1:
             switch (pictureType())
             {
             case 2:
-                lut = &tables().mbP;
+                lut = &vlc.mbP;
                 break;
             case 3:
-                lut = &tables().mbB;
+                lut = &vlc.mbB;
                 break;
             case 4:
-                lut = &tables().mbD;
+                lut = &vlc.mbD;
                 break;
             default:
-                lut = &tables().mbI;
+                lut = &vlc.mbI;
                 break;
             }
             break;
         case 2:
-            lut = &tables().motion;
+            lut = &vlc.motion;
             break;
         default:
-            lut = &tables().dmv;
+            lut = &vlc.dmv;
             break;
         }
         LutEntry entry{};
@@ -1107,49 +1389,22 @@ struct Ps2Ipu::State
         return Result::Done;
     }
 
+    // As getBits(8) per byte; on a byte boundary, all the bytes loaded are taken at once.
     bool readBytes(uint8_t *destination, size_t count)
     {
-        for (size_t i = 0; i < count; ++i)
+        for (size_t i = 0; i < count;)
         {
-            uint32_t bits = 0u;
-            if (!getBits(8u, bits))
+            if (!fill(8u))
                 return false;
-            destination[i] = static_cast<uint8_t>(bits);
+            const size_t run = (bp & 7u) == 0u ? std::min<size_t>(count - i, available() / 8u) : 1u;
+            if (run == 1u)
+                destination[i] = static_cast<uint8_t>(peek(8u));
+            else
+                std::memcpy(destination + i, internal.data() + bp / 8u, run);
+            advance(static_cast<uint32_t>(run) * 8u);
+            i += run;
         }
         return true;
-    }
-
-    // YCbCr 4:2:0 macroblock to RGBA, with the IPU's coefficients.
-    void convertToRgb32(const uint8_t *macroblock, uint8_t *rgba) const
-    {
-        const uint8_t *luminance = macroblock;
-        const uint8_t *cb = macroblock + 256;
-        const uint8_t *cr = macroblock + 320;
-        for (int y = 0; y < 16; ++y)
-        {
-            for (int x = 0; x < 16; ++x)
-            {
-                const int chroma = (y >> 1) * 8 + (x >> 1);
-                const int lum = (0x95 * std::max(0, luminance[y * 16 + x] - 16)) >> 6;
-                const int red = (0xcc * (cr[chroma] - 128)) >> 6;
-                const int greenCr = (-0x68 * (cr[chroma] - 128)) >> 6;
-                const int greenCb = (-0x32 * (cb[chroma] - 128)) >> 6;
-                const int blue = (0x102 * (cb[chroma] - 128)) >> 6;
-                uint8_t *pixel = rgba + (y * 16 + x) * 4;
-                pixel[0] = clampByte((lum + red + 1) >> 1);
-                pixel[1] = clampByte((lum + greenCr + greenCb + 1) >> 1);
-                pixel[2] = clampByte((lum + blue + 1) >> 1);
-                pixel[3] = 0x80;
-            }
-        }
-        for (int i = 0; i < 256; ++i)
-        {
-            uint8_t *pixel = rgba + i * 4;
-            if (threshold0 > 0u && pixel[0] < threshold0 && pixel[1] < threshold0 && pixel[2] < threshold0)
-                pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0u;
-            else if (threshold1 > 0u && pixel[0] < threshold1 && pixel[1] < threshold1 && pixel[2] < threshold1)
-                pixel[3] = 0x40;
-        }
     }
 
     void packToRgb16(const uint8_t *rgba, bool dither, uint8_t *out) const
@@ -1186,9 +1441,8 @@ struct Ps2Ipu::State
                 rollback();
                 return Result::NeedData;
             }
-            commit();
             uint8_t rgba[1024];
-            convertToRgb32(macroblock, rgba);
+            ps2_ipu_kernels::convertToRgb32(macroblock, threshold0, threshold1, rgba);
             if (rgb16)
             {
                 uint8_t packed[512];
@@ -1220,7 +1474,6 @@ struct Ps2Ipu::State
                 rollback();
                 return Result::NeedData;
             }
-            commit();
             if (rgb16)
             {
                 uint8_t packed[512];
@@ -1284,16 +1537,14 @@ struct Ps2Ipu::State
             {
                 if (!blockDecoded)
                 {
-                    std::vector<uint8_t> macroblock;
+                    int16_t macroblock[384];
                     beginTransaction();
                     result = blockDecode(command, macroblock);
                     if (result == Result::NeedData)
                         rollback();
-                    else
-                        commit();
                     if (result != Result::Done)
                         break;
-                    output.push(macroblock.data(), macroblock.size());
+                    output.push(reinterpret_cast<const uint8_t *>(macroblock), sizeof(macroblock));
                     blockDecoded = true;
                 }
                 drainOutput();
@@ -1306,8 +1557,6 @@ struct Ps2Ipu::State
                 result = finishBlock();
                 if (result == Result::NeedData)
                     rollback();
-                else
-                    commit();
                 break;
             }
             case 0x3: // VDEC
@@ -1315,32 +1564,24 @@ struct Ps2Ipu::State
                 result = variableDecode(command);
                 if (result == Result::NeedData)
                     rollback();
-                else
-                    commit();
                 break;
             case 0x4: // FDEC
                 beginTransaction();
                 result = fixedDecode(command);
                 if (result == Result::NeedData)
                     rollback();
-                else
-                    commit();
                 break;
             case 0x5: // SETIQ
                 beginTransaction();
                 result = setIq(command);
                 if (result == Result::NeedData)
                     rollback();
-                else
-                    commit();
                 break;
             case 0x6: // SETVQ
                 beginTransaction();
                 result = setVq();
                 if (result == Result::NeedData)
                     rollback();
-                else
-                    commit();
                 break;
             case 0x7: // CSC
                 result = colourConvert(command);
@@ -1400,8 +1641,6 @@ struct Ps2Ipu::State
         fp = 0u;
         bp = 0u;
         output.clear();
-        recording = false;
-        delivered.clear();
         macroblocksDone = 0u;
         blockDecoded = false;
     }
@@ -1499,7 +1738,7 @@ void Ps2Ipu::writeInFifo(const uint8_t qword[16])
     State &state = *m_state;
     Qword incoming{};
     std::memcpy(incoming.data(), qword, 16u);
-    state.fifo.push_back(incoming);
+    state.fifo.push(incoming);
     state.process();
 }
 
@@ -1537,27 +1776,34 @@ void Ps2Ipu::serialize(ps2x::StateArchive &archive)
 {
     State &state = *m_state;
     archive.tag("IPU.");
-    const auto qwords = [](ps2x::StateArchive &a, std::deque<Qword> &fifo)
-    {
-        a.sequence(fifo, [](ps2x::StateArchive &b, Qword &qword) { b.value(qword); });
-    };
+    // No command is midway through a retry at a save: the snapshot's FIFO and the qwords
+    // recorded during a command, which the format keeps, are empty.
+    std::vector<Qword> fifo = state.fifo.contents();
+    std::vector<Qword> retry;
+    bool recording = false;
     archive.value(state.command);
     archive.value(state.data);
     archive.value(state.busy);
     archive.value(state.ctrl);
     archive.value(state.top);
     archive.value(state.topBusy);
-    qwords(archive, state.fifo);
+    archive.vector(fifo);
+    if (archive.loading())
+    {
+        state.fifo.clear();
+        for (const Qword &qword : fifo)
+            state.fifo.push(qword);
+    }
     archive.value(state.internal);
     archive.value(state.fp);
     archive.value(state.bp);
-    qwords(archive, state.snapshot.fifo);
+    archive.vector(retry);
     archive.value(state.snapshot.internal);
     archive.value(state.snapshot.fp);
     archive.value(state.snapshot.bp);
     archive.value(state.snapshot.dcPredictor);
-    archive.value(state.recording);
-    archive.vector(state.delivered);
+    archive.value(recording);
+    archive.vector(retry);
     std::vector<uint8_t> output;
     if (!archive.loading())
     {

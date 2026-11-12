@@ -42,6 +42,7 @@ namespace
         RowCarLights,
         RowVibration,
         RowFastLoading,
+        RowVideoSkip,
         RowKeepSpeed,
         RowRefresh,
         RowDeadzone,
@@ -221,6 +222,7 @@ namespace
         case RowCarLights: return "Car lights";
         case RowVibration: return "Gamepad vibration";
         case RowFastLoading: return "Fast loading";
+        case RowVideoSkip: return "Skip videos (hold Start)";
         case RowKeepSpeed: return "Keep speed when slow (next race)";
         case RowRefresh: return "Frame rate (next menu page)";
         case RowDeadzone: return "Stick dead zone";
@@ -268,6 +270,7 @@ namespace
         case RowCarLights: return s.carLights == 100 ? "Original" : std::to_string(s.carLights) + "%";
         case RowVibration: return onOff(s.vibration);
         case RowFastLoading: return onOff(s.fastLoading);
+        case RowVideoSkip: return onOff(s.videoSkip);
         case RowKeepSpeed: return onOff(s.keepSpeed);
         case RowRefresh: return s.refreshRate + " Hz";
         case RowDeadzone: return std::to_string(int(s.stickDeadzone * 100.0f + 0.5f)) + "%";
@@ -362,6 +365,9 @@ namespace
             break;
         case RowFastLoading:
             s.fastLoading = !s.fastLoading;
+            break;
+        case RowVideoSkip:
+            s.videoSkip = !s.videoSkip;
             break;
         case RowKeepSpeed:
             s.keepSpeed = !s.keepSpeed;
@@ -1105,6 +1111,18 @@ namespace
 
 namespace ps2x
 {
+    void drawCornerNotice(const std::string &text, float progress)
+    {
+        const float size = std::clamp(float(GetScreenHeight()) / 32.0f, 12.0f, 30.0f);
+        const float width = textWidth(text, size) + 2.0f * size, height = 2.0f * size;
+        const float left = float(GetScreenWidth()) - width - size, top = float(GetScreenHeight()) - height - size;
+        DrawRectangleRec({left, top, width, height}, Fade(BLACK, 0.75f));
+        DrawRectangleRec({left, top, width, std::max(1.0f, size / 12.0f)}, Color{225, 225, 230, 255});
+        drawText(text, {left + size, top + size / 2.0f}, size, WHITE);
+        if (progress > 0.0f)
+            DrawRectangleRec({left, top + height - size / 5.0f, width * std::min(progress, 1.0f), size / 5.0f}, kOrange);
+    }
+
     void updateSettingsMenu()
     {
         const auto now = Clock::now();

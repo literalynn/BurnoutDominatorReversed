@@ -62,3 +62,16 @@ private:
     struct State;
     std::unique_ptr<State> m_state;
 };
+
+// The IPU's arithmetic. The scalar versions are the reference that the vector ones
+// must match bit for bit, and the fallback on CPUs without SSE2.
+namespace ps2_ipu_kernels
+{
+    // Chen-Wang IDCT of the MPEG reference decoder, in place on a block in raster order.
+    void inverseDct(int16_t block[64]);
+    void inverseDctScalar(int16_t block[64]);
+
+    // A 4:2:0 macroblock (256 Y, 64 Cb, 64 Cr bytes) to 256 RGBA pixels, SETTH thresholds applied.
+    void convertToRgb32(const uint8_t macroblock[384], uint32_t threshold0, uint32_t threshold1, uint8_t rgba[1024]);
+    void convertToRgb32Scalar(const uint8_t macroblock[384], uint32_t threshold0, uint32_t threshold1, uint8_t rgba[1024]);
+}

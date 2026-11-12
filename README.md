@@ -137,6 +137,7 @@ A window of its own, the same on every system ([tools/launcher/](tools/launcher/
 | ○ | C · keypad 1 | B / ○ |
 | L1 · L2 · R2 | Left Shift · E · Q | LB · LT · RT |
 | Start · Select | Enter · Tab | Start · Back |
+| hold Start: skip a video | hold Enter | hold Start |
 
 Each PS2 button takes up to three keys, mouse buttons or wheel directions: change them in the launcher's Settings tab or in the game's **F1** menu.
 
@@ -169,6 +170,7 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 | `progressive_scan` | true | whole frames, no interlacing lines |
 | `gs_thread` | true | the PS2's graphics units on a second processor core |
 | `fast_loading` | true | loading screens run faster than real time |
+| `video_skip` | true | holding Start (Enter on the keyboard) for a second skips any video, even one the game does not let you skip: it plays as fast as the computer can, unseen and unheard |
 | `keep_speed` | true | when the graphics cannot keep up, the game draws fewer frames instead of slowing down (from the next race) |
 | `refresh_rate` | 60 | `50` or `60` as on a console; `120`, `144`, `240`... up to `500` runs the whole game that many frames a second at the same speed, with more processor work |
 | `stick_deadzone` | 12 | percent |

@@ -423,6 +423,7 @@ add_library(ps2_runtime STATIC
     src/lib/car_lights.cpp
     src/lib/disc_patches.cpp
     src/lib/settings_menu.cpp
+    src/lib/video_skip.cpp
     src/lib/post_filter.cpp
     src/lib/shared_frames.cpp
     src/lib/gs_worker.cpp

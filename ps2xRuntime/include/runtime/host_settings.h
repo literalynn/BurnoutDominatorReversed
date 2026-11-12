@@ -25,6 +25,7 @@ namespace ps2x
         int carLights = 100;         // brightness of the cars' light glows in percent: 100 (original), 150 or 200
         bool gsThread = true;        // VIF1, VU1 and GS submission on a second thread
         bool fastLoading = true;     // run faster than real time while the game is silent and idle
+        bool videoSkip = true;       // holding Start skips any video (runtime/video_skip.h)
         bool keepSpeed = true;       // COP0 Count runs: the game steps more when frames come late
         float stickDeadzone = 0.12f;
         bool vibration = true;       // the game's pad vibration on the host gamepad

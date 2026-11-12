@@ -1,8 +1,12 @@
 #include "MiniTest.h"
+#include "runtime/ps2_ipu.h"
 #include "runtime/ps2_memory.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <random>
+#include <vector>
 
 namespace
 {
@@ -23,6 +27,135 @@ namespace
         memory.write32(channel + 0x10u, address);
         memory.write32(channel + 0x20u, qwords);
         memory.write32(channel, chcr);
+    }
+
+    constexpr uint8_t kZigzag[64] = {
+        0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5,
+        12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
+        35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
+
+    struct BitWriter
+    {
+        std::vector<uint8_t> bytes;
+        uint32_t bits = 0u;
+        void put(uint32_t value, uint32_t length)
+        {
+            for (uint32_t i = length; i-- > 0u; ++bits)
+            {
+                if (bits % 8u == 0u)
+                    bytes.push_back(0u);
+                bytes.back() |= static_cast<uint8_t>(((value >> i) & 1u) << (7u - bits % 8u));
+            }
+        }
+    };
+
+    // An intra macroblock of six random blocks (DC size 0, AC as escape codes or as some
+    // short and long table B.14 codes), after a SETIQ matrix of 16, and the RAW16 that
+    // the reference dequantiser and IDCT make of it at quantiser_scale_code 1.
+    struct Macroblock
+    {
+        std::vector<uint8_t> stream;
+        int16_t raw[384] = {};
+    };
+
+    Macroblock makeMacroblock(std::mt19937 &rng)
+    {
+        struct TableCode
+        {
+            int run, level;
+            uint32_t code, length;
+        };
+        static constexpr TableCode kCodes[] = {{0, 1, 0x3, 2}, {1, 1, 0x3, 3}, {0, 2, 0x4, 4}, {0, 40, 0x10, 15}, {31, 1, 0x1b, 16}};
+        const auto random = [&](int low, int high) { return std::uniform_int_distribution<int>(low, high)(rng); };
+        Macroblock result;
+        BitWriter bits;
+        for (int i = 0; i < 64; ++i)
+            bits.put(16u, 8u);
+        int16_t blocks[6][64] = {};
+        for (int b = 0; b < 6; ++b)
+        {
+            int16_t *block = blocks[b];
+            bits.put(b < 4 ? 0x4u : 0x0u, b < 4 ? 3u : 2u);
+            block[0] = 1024; // DC predictor 128, precision 0
+            int sum = 1024;
+            const int kind = random(0, 3); // 0: DC only, 3: saturated levels
+            for (int index = 1; kind != 0 && random(0, 15) != 0;)
+            {
+                int run = random(0, 3);
+                int level = kind == 3 ? (random(0, 1) ? 2047 : -2047) : random(-2047, 2047);
+                const TableCode *table = random(0, 2) == 0 ? &kCodes[random(0, 4)] : nullptr;
+                if (table)
+                {
+                    run = table->run;
+                    level = random(0, 1) ? table->level : -table->level;
+                }
+                if (level == 0 || index + run > 63)
+                    break;
+                if (table)
+                {
+                    bits.put(table->code, table->length);
+                    bits.put(level < 0 ? 1u : 0u, 1u);
+                }
+                else
+                {
+                    bits.put(0x1u, 6u);
+                    bits.put(static_cast<uint32_t>(run), 6u);
+                    bits.put(static_cast<uint32_t>(level) & 0xFFFu, 12u);
+                }
+                index += run;
+                const int value = std::clamp(level * 2, -2048, 2047);
+                block[kZigzag[index]] = static_cast<int16_t>(value);
+                sum += value;
+                ++index;
+            }
+            bits.put(0x2u, 2u); // EOB
+            if ((sum & 1) == 0)
+                block[63] ^= 1;
+            ps2_ipu_kernels::inverseDctScalar(block);
+            for (int i = 0; i < 64; ++i)
+                block[i] = std::clamp<int16_t>(block[i], 0, 255);
+        }
+        for (int i = 0; i < 4; ++i)
+            for (int row = 0; row < 8; ++row)
+                std::memcpy(&result.raw[(row + (i >> 1) * 8) * 16 + (i & 1) * 8], &blocks[i][row * 8], 16);
+        std::memcpy(&result.raw[256], blocks[4], 128);
+        std::memcpy(&result.raw[320], blocks[5], 128);
+        result.stream = std::move(bits.bytes);
+        for (uint8_t byte : {0x00, 0x00, 0x01, 0xB3})
+            result.stream.push_back(byte);
+        result.stream.resize((result.stream.size() + 31u) / 16u * 16u, 0u);
+        return result;
+    }
+
+    // SETIQ then BDEC on `stream`, given to DMA channel 4 at once or one qword per transfer.
+    bool decodeMacroblock(const std::vector<uint8_t> &stream, bool qwordByQword, int16_t (&raw)[384], uint32_t &ctrlAfter)
+    {
+        PS2Memory m;
+        if (!m.initialize())
+            return false;
+        std::memcpy(m.getRDRAM() + 0x10000, stream.data(), stream.size());
+        const uint32_t qwords = static_cast<uint32_t>(stream.size() / 16u);
+        uint32_t sent = 0u;
+        const auto run = [&](uint32_t command)
+        {
+            m.write32(cmd, command);
+            for (int guard = 0; guard < 4096 && (m.read32(ctrl) >> 31) != 0u; ++guard)
+            {
+                if (sent == qwords || (m.read32(to) & 0x100u) != 0u)
+                    return false;
+                const uint32_t count = qwordByQword ? 1u : qwords - sent;
+                dma(m, to, 0x10000u + sent * 16u, count, 0x101u);
+                sent += count;
+            }
+            return true;
+        };
+        dma(m, from, 0x80001000u, 48u, 0x100u);
+        if (!run(0x50000000u) || !run(0x2C010000u))
+            return false;
+        ctrlAfter = m.read32(ctrl);
+        std::memcpy(raw, m.getScratchpad() + 0x1000, sizeof(raw));
+        return m.read32(from + 0x20u) == 0u;
     }
 }
 
@@ -173,6 +306,95 @@ void register_ps2_ipu_tests()
             t.Equals(m.read64(top), uint64_t{0x1B3}, "next MPEG header in TOP");
             for (int i = 0; i < 384; ++i)
                 t.Equals(m.read16(0x70001000u + i * 2u), uint16_t{128}, "constant intra samples");
+        });
+
+        test.Run("vector IDCT matches the scalar reference bit for bit", [](TestCase &t) {
+            std::mt19937 rng(12345u);
+            const auto random = [&](int low, int high) { return std::uniform_int_distribution<int>(low, high)(rng); };
+            int differing = 0;
+            for (int trial = 0; trial < 50000; ++trial)
+            {
+                int16_t block[64] = {};
+                switch (trial % 5)
+                {
+                case 0: // dense, over the dequantiser's range
+                    for (int16_t &value : block)
+                        value = static_cast<int16_t>(random(-2048, 2047));
+                    break;
+                case 1: // a few coefficients
+                    for (int i = random(1, 6); i > 0; --i)
+                        block[random(0, 63)] = static_cast<int16_t>(random(-2048, 2047));
+                    break;
+                case 2: // DC only
+                    block[0] = static_cast<int16_t>(random(-2048, 2047));
+                    break;
+                case 3: // saturated: the row pass overflows 16 bits and the output clips
+                    for (int16_t &value : block)
+                        value = static_cast<int16_t>(random(0, 1) ? 2047 : -2048);
+                    break;
+                default: // any 16-bit value
+                    for (int16_t &value : block)
+                        value = static_cast<int16_t>(random(-32768, 32767));
+                    break;
+                }
+                int16_t vector[64];
+                int16_t scalar[64];
+                std::memcpy(vector, block, sizeof(block));
+                std::memcpy(scalar, block, sizeof(block));
+                ps2_ipu_kernels::inverseDct(vector);
+                ps2_ipu_kernels::inverseDctScalar(scalar);
+                differing += std::memcmp(vector, scalar, sizeof(block)) != 0;
+            }
+            t.Equals(differing, 0, "blocks that differ");
+        });
+
+        test.Run("vector colour conversion matches the scalar reference bit for bit", [](TestCase &t) {
+            std::mt19937 rng(54321u);
+            static constexpr uint32_t kThresholds[][2] = {{0, 0}, {0, 0}, {40, 0}, {0, 90}, {60, 120}, {300, 511}};
+            int differing = 0;
+            for (int trial = 0; trial < 2048; ++trial)
+            {
+                uint8_t macroblock[384];
+                for (uint8_t &byte : macroblock)
+                    byte = static_cast<uint8_t>(rng());
+                if (trial < 1024) // every (Cb, Cr) pair once, every luminance in each macroblock
+                {
+                    for (int i = 0; i < 256; ++i)
+                        macroblock[i] = static_cast<uint8_t>(i + trial);
+                    for (int i = 0; i < 64; ++i)
+                    {
+                        macroblock[256 + i] = static_cast<uint8_t>(trial * 64 + i);
+                        macroblock[320 + i] = static_cast<uint8_t>((trial * 64 + i) >> 8);
+                    }
+                }
+                const uint32_t *threshold = kThresholds[trial % 6];
+                uint8_t vector[1024];
+                uint8_t scalar[1024];
+                ps2_ipu_kernels::convertToRgb32(macroblock, threshold[0], threshold[1], vector);
+                ps2_ipu_kernels::convertToRgb32Scalar(macroblock, threshold[0], threshold[1], scalar);
+                differing += std::memcmp(vector, scalar, sizeof(vector)) != 0;
+            }
+            t.Equals(differing, 0, "macroblocks that differ");
+        });
+
+        test.Run("BDEC decodes random escape and table codes as the reference, whole or a qword at a time", [](TestCase &t) {
+            std::mt19937 rng(777u);
+            int differing = 0;
+            int failed = 0;
+            for (int trial = 0; trial < 200; ++trial)
+            {
+                const Macroblock macroblock = makeMacroblock(rng);
+                for (const bool qwordByQword : {false, true})
+                {
+                    int16_t raw[384] = {};
+                    uint32_t ctrlAfter = 0u;
+                    if (!decodeMacroblock(macroblock.stream, qwordByQword, raw, ctrlAfter) || (ctrlAfter & 0xC000u) != 0x8000u)
+                        ++failed;
+                    differing += std::memcmp(raw, macroblock.raw, sizeof(raw)) != 0;
+                }
+            }
+            t.Equals(failed, 0, "decodes without completion, ECD or the next start code");
+            t.Equals(differing, 0, "macroblocks that differ from the reference");
         });
     });
 }
