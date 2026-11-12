@@ -1,5 +1,6 @@
 // Based on Blackline Interactive implementation
 #include "runtime/ps2_memory.h"
+#include "runtime/car_lights.h"
 #include <cstring>
 
 enum VIFCmd : uint8_t
@@ -193,6 +194,8 @@ namespace
                 const uint32_t step = wl == 1u ? cl : 1u;
                 for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
                     std::memcpy(vuData + ((vuAddr + writeIndex * step) & qwordMask) * 16u, srcBase + writeIndex * 16u, 16u);
+                if (useTops && step == 1u)
+                    ps2x::brightenCarLights(vuData, vuAddr, writeVectorCount);
                 return totalBytes;
             }
             // V4-32 and V3-32 without mask or mode, the vertex streams: every write

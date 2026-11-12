@@ -170,6 +170,7 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 | `high_resolution` | true | a higher resolution built from the samples: 2x (1280 pixels wide) with 4 or 8 samples, 4x (2560) with 16 |
 | `fxaa` | false | FXAA on the finished picture |
 | `hud_smoothing` | true | the HUD and the menus' art and text smooth instead of blocky at 2x and 4x |
+| `car_lights` | 100 | brightness of every car's light glows (headlights, tail lights, indicators) in percent: `100` (original), `150` or `200` to see traffic from further away |
 | `progressive_scan` | true | whole frames, no interlacing lines |
 | `gs_thread` | true | the PS2's graphics units on a second processor core |
 | `fast_loading` | true | loading screens run faster than real time |

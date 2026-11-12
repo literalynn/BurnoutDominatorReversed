@@ -3,6 +3,7 @@
 #include "burnout_profile.h"
 #include "burnout_texts.h"
 #include "ps2_runtime.h"
+#include "runtime/car_lights.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/ee_scheduler.h"
 #include "runtime/run_marks.h"
@@ -355,6 +356,28 @@ void goToPage(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
     g_goToPage(rdram, ctx, runtime);
 }
 
+// settings.ini car_lights (runtime/car_lights.h). 0x2EDC58 adds one light glow to the corona list
+// at a0 + 0x10 (the effects manager 0x1CF9080's first list), whose write pointer is at a0 + 0x30.
+// A car's light groups (front, rear, brake, reverse, indicators) call it from 0x2ED9B8 and
+// 0x2EDAE0, which end where it starts; the traffic signals from 0x311868. The track's lamps go to
+// the same list from 0x1BB988.
+PS2Runtime::RecompiledFunction g_carLight = nullptr;
+
+void carLight(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const uint32_t returnAddress = getRegU32(ctx, 31);
+    if (ps2x::hostSettings().carLights == 100 || returnAddress < 0x2ED9B8u || returnAddress >= 0x2EDC58u) {
+        g_carLight(rdram, ctx, runtime);
+        return;
+    }
+    const uint32_t pointer = (getRegU32(ctx, 4) + 0x30u) & (PS2_RAM_SIZE - 1) & ~3u;
+    uint32_t before = 0, after = 0;
+    std::memcpy(&before, rdram + pointer, sizeof(before));
+    g_carLight(rdram, ctx, runtime);
+    std::memcpy(&after, rdram + pointer, sizeof(after));
+    if (after == before + 0x40u && (before & (PS2_RAM_SIZE - 1)) <= PS2_RAM_SIZE - 0x40u)
+        ps2x::noteCarLight(rdram + (before & (PS2_RAM_SIZE - 1)));
+}
+
 class CameraWatch {
 public:
     CameraWatch(PS2Runtime& runtime, bool windowed) : m_runtime(runtime) {
@@ -486,6 +509,9 @@ int main(int argc, char** argv) {
             if (!runtime.hasFunction(address) && runtime.registerFunction(address, &continueFrequencySkip))
                 g_continuation = address;
         burnout::installFrameRate(runtime);
+        g_carLight = runtime.lookupFunction(0x2EDC58u);
+        if (g_carLight)
+            runtime.replaceFunction(0x2EDC58u, &carLight);
         traceCalls(runtime, options.traceCalls);
         // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
         // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores

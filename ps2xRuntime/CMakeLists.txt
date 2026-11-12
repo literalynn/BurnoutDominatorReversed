@@ -420,6 +420,7 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_save_state.cpp
     src/lib/host_audio.cpp
     src/lib/host_settings.cpp
+    src/lib/car_lights.cpp
     src/lib/disc_patches.cpp
     src/lib/settings_menu.cpp
     src/lib/post_filter.cpp

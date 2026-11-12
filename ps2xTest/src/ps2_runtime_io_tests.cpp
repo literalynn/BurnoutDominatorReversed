@@ -2,6 +2,7 @@
 #include "ps2_runtime.h"
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "runtime/car_lights.h"
 #include "runtime/host_settings.h"
 #include "runtime/host_audio.h"
 
@@ -748,6 +749,7 @@ void register_ps2_runtime_io_tests()
             settings.highResolution = false;
             settings.fxaa = true;
             settings.hudSmoothing = false;
+            settings.carLights = 150;
             settings.keepSpeed = false;
             settings.aspect = "16:9";
             settings.volume = 40;
@@ -763,6 +765,7 @@ void register_ps2_runtime_io_tests()
             t.IsTrue(!settings.highResolution, "high_resolution round-trips");
             t.IsTrue(settings.fxaa, "fxaa round-trips");
             t.IsTrue(!settings.hudSmoothing, "hud_smoothing round-trips");
+            t.Equals(settings.carLights, 150, "car_lights round-trips");
             t.IsTrue(!settings.keepSpeed, "keep_speed round-trips");
             t.Equals(settings.aspect, std::string("16:9"), "aspect round-trips");
             t.Equals(settings.volume, 40, "volume round-trips");
@@ -793,6 +796,34 @@ void register_ps2_runtime_io_tests()
                      "bad and unknown lines are reported");
             std::filesystem::remove(path);
             settings = saved;
+        });
+
+        tc.Run("car_lights scales the colour of the noted car light glows only", [](TestCase &t)
+        {
+            // Two entries as the car light code writes them (400.0 and 0.5 in words 3 and 5),
+            // the first one noted, at VU1 qword 0x3F0; the second differs by its position.
+            std::vector<uint8_t> vu1(0x4000, 0);
+            const float light[16] = {10.0f, 2.0f, -3.0f, 400.0f, 4.5f, 0.5f, 0, 0, 40.0f, 20.0f, 96.0f, 0, 0.25f};
+            std::memcpy(vu1.data() + 0x3F0 * 16, light, sizeof(light));
+            std::memcpy(vu1.data() + 0x3F4 * 16, light, sizeof(light));
+            vu1[0x3F4 * 16] ^= 1;
+            ps2x::noteCarLight(vu1.data() + 0x3F0 * 16);
+            const std::vector<uint8_t> before = vu1;
+            ps2x::HostSettings &settings = ps2x::hostSettings();
+            const int saved = settings.carLights;
+
+            settings.carLights = 100;
+            ps2x::brightenCarLights(vu1.data(), 0x3F0, 8);
+            t.IsTrue(vu1 == before, "100 changes nothing");
+
+            settings.carLights = 200;
+            ps2x::brightenCarLights(vu1.data(), 0x3F0, 8);
+            float out[16];
+            std::memcpy(out, vu1.data() + 0x3F0 * 16, sizeof(out));
+            t.IsTrue(out[8] == 80.0f && out[9] == 40.0f && out[10] == 192.0f, "the noted entry's colour doubles");
+            std::memcpy(vu1.data() + 0x3F0 * 16 + 32, light + 8, 12);
+            t.IsTrue(vu1 == before, "every other word stays, the other entry too");
+            settings.carLights = saved;
         });
 
         tc.Run("sceMcGetInfo reports formatted and unformatted states", [](TestCase &t)
