@@ -44,7 +44,7 @@ The game is complete and playable from start to finish. The project is a work in
 - **60 frames per second, or more**: 120, 144, 240 and up to 500, simulated for real, not interpolated, at the original speed.
 - **Higher resolution**: two or four times the PS2's, 1 to 16 samples per pixel, FXAA, progressive scan, and a HUD and menus that stay smooth instead of blocky.
 - **Real 16:9**: the game draws a wider view; nothing is stretched.
-- **Controllers**: Xbox, PlayStation and other SDL gamepads with vibration; keyboard and mouse with keys you can change.
+- **Controllers**: Xbox, PlayStation and other SDL gamepads with vibration; keyboard and mouse with keys you can change. The game's button symbols follow the device you use.
 - **Saves**: the memory card, save states (F5 / F7), and save profiles kept apart.
 - **Fast loading**: loading screens run faster than real time.
 - **One file to install**: `BurnoutDominator.exe` (Windows) or `BurnoutDominator.py` (Linux) installs the game into its own folder, opens the launcher and keeps everything up to date, itself included.
@@ -178,6 +178,7 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 | `stick_deadzone` | 12 | percent |
 | `vibration` | true | the game's pad vibration on your gamepad |
 | `gamepad_mappings` | — | an extra `gamecontrollerdb.txt` |
+| `button_prompts` | auto | the game's button symbols: `playstation`, `xbox` (A, B, X, Y, LB, RB, LT, RT), `keyboard` (the first key bound to each button) or `auto`, the device you pressed something on last, switching as you play |
 | `volume` | 100 | percent |
 | `show_fps` | false | frames per second in the corner |
 | `key_cross`, `key_l1`... | see Controls | up to three inputs per button (`W`, `LEFT_SHIFT`, `MOUSE_LEFT`, `MOUSE_WHEEL_UP`...), or `NONE` |

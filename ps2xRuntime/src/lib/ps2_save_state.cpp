@@ -5,6 +5,7 @@
 #include "runtime/ee_count.h"
 #include "runtime/vblank_rate.h"
 #include "runtime/gs_worker.h"
+#include "runtime/gs/gif_packet_filter.h"
 #include "runtime/ps2_ipu.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "ps2x/state_archive.h"
@@ -208,6 +209,8 @@ void GS::serialize(ps2x::StateArchive &archive)
     if (!m_backend)
         throw std::runtime_error("save states need a GS backend");
     m_backend->SerializeState(archive);
+    if (archive.loading())
+        ps2x::resetGifPacketFilter();
 }
 
 void GifArbiter::serialize(ps2x::StateArchive &archive)

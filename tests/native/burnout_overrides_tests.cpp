@@ -1,16 +1,22 @@
 // Checks src/burnout_overrides.cpp without the generated guest code: every
 // SDK binding resolves to the intended runtime handler, and rom0:ROMVER has the
-// layout the game's parser expects. Also the text replacement of src/burnout_texts.cpp and the
-// frame rate wrappers of src/burnout_frame_rate.cpp.
+// layout the game's parser expects. Also the text replacement of src/burnout_texts.cpp, the
+// frame rate wrappers of src/burnout_frame_rate.cpp and the button prompts of
+// src/burnout_button_prompts.cpp.
+#include "../../src/burnout_button_prompts.h"
 #include "../../src/burnout_frame_rate.h"
 #include "../../src/burnout_texts.h"
 #include "game_overrides.h"
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
+#include "runtime/gs/ps2_gs_psmct32.h"
+#include "runtime/gs/ps2_gs_psmt8.h"
+#include "runtime/host_settings.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/vblank_rate.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -277,6 +283,110 @@ void testFrameRate() {
     for (const uint32_t address : {kSetRate, kSetStep, kCamera, kPowf, kMenuBox, kVBlankCount})
         g_ps2RecompiledFunctionTable[address >> 2] = nullptr;
 }
+
+// A GIF packet as the game uploads a symbol level: the transfer registers (PSMCT32, 64 pixels
+// wide), then the data in one IMAGE tag.
+std::vector<uint8_t> uploadPacket(uint32_t dbp, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                                  const std::vector<uint8_t>& image) {
+    const uint64_t qwords[] = {4 | 1ull << 60, 0xe,
+                               uint64_t(dbp) << 32 | 1ull << 48, 0x50,
+                               uint64_t(x) << 32 | uint64_t(y) << 48, 0x51,
+                               w | uint64_t(h) << 32, 0x52,
+                               0, 0x53,
+                               image.size() / 16 | 1ull << 15 | 2ull << 58, 0};
+    std::vector<uint8_t> packet(reinterpret_cast<const uint8_t*>(qwords), reinterpret_cast<const uint8_t*>(std::end(qwords)));
+    packet.insert(packet.end(), image.begin(), image.end());
+    return packet;
+}
+
+bool contains(const std::vector<uint8_t>& haystack, const std::vector<uint8_t>& needle) {
+    return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) != haystack.end();
+}
+
+void testButtonPrompts() {
+    using burnout::promptLabel;
+    check(promptLabel('W', true) == "W" && promptLabel(340, false) == "SHIFT" && promptLabel(340, true) == "\6",
+          "letters and Shift label their keys");
+    check(promptLabel(256, true) == "ESC" && promptLabel(300, false) == "F11" && promptLabel(321, false) == "NUM1" &&
+              promptLabel(321, true) == "1",
+          "Escape, F11 and the keypad are not taken for punctuation");
+    check(promptLabel(ps2x::kMouseInput, true) == "LMB" && promptLabel(0, true).empty(), "mouse buttons and no key");
+    check(burnout::gameUploads().size() == 33, "every level and palette of the 11 symbol textures is known");
+
+    // Two uploads of the front end's cross: its first level (32x32 PSMT8 as 16x16 PSMCT32) and
+    // its 256-colour palette (16x16 at 48,16), with made-up contents.
+    std::vector<uint8_t> texels(1024), palette(1024);
+    for (size_t i = 0; i < texels.size(); ++i) {
+        texels[i] = uint8_t(i * 7 + 3);
+        palette[i] = uint8_t(i * 13 + 5);
+    }
+    const std::vector<burnout::KnownUpload> known = {
+        {1024, burnout::uploadHash(texels.data(), 1024), burnout::PromptTexture::MenuCross, 0},
+        {1024, burnout::uploadHash(palette.data(), 1024), burnout::PromptTexture::MenuCross, burnout::kPaletteLevel}};
+    const std::vector<uint8_t> texelPacket = uploadPacket(0x2000, 0, 0, 16, 16, texels);
+    const std::vector<uint8_t> palettePacket = uploadPacket(0x2000, 48, 16, 16, 16, palette);
+    burnout::PromptStyle playStation, xbox;
+    xbox.device = ps2x::InputDevice::Xbox;
+
+    burnout::ButtonPrompts prompts(known);
+    uint32_t size = uint32_t(texelPacket.size());
+    check(prompts.filter(1, texelPacket.data(), size, playStation) == texelPacket.data() && size == texelPacket.size(),
+          "PlayStation symbols reach the GS unchanged");
+    size = uint32_t(palettePacket.size());
+    prompts.filter(1, palettePacket.data(), size, playStation);
+
+    burnout::ButtonPrompts replacing(known);
+    size = uint32_t(texelPacket.size());
+    const uint8_t* out = replacing.filter(2, texelPacket.data(), size, xbox);
+    const std::vector<uint8_t> xboxTexels(out + 96, out + size);
+    check(size == texelPacket.size() && std::equal(out, out + 96, texelPacket.data()) && xboxTexels != texels,
+          "an Xbox style replaces the texels and keeps the packet's shape");
+    // Written to GS memory as uploaded and read back as the PSMT8 texture, they are the drawing.
+    std::vector<uint8_t> memory(8192);
+    for (uint32_t i = 0; i < 256; ++i)
+        std::memcpy(memory.data() + GSPSMCT32::addrPSMCT32(0, 1, i % 16, i / 16), xboxTexels.data() + i * 4, 4);
+    const burnout::ButtonPrompts::Art art = burnout::ButtonPrompts::draw(burnout::PromptTexture::MenuCross, xbox);
+    bool same = art.levels[0].size() == 1024;
+    for (uint32_t i = 0; same && i < 1024; ++i)
+        same = memory[GSPSMT8::addrPSMT8(0, 2, i % 32, i / 32)] == art.levels[0][i];
+    check(same, "the replaced upload holds the drawing's texels");
+
+    size = uint32_t(palettePacket.size());
+    out = replacing.filter(2, palettePacket.data(), size, xbox);
+    bool alphas = true;
+    for (uint32_t p = 0; p < 256; ++p) {
+        uint32_t colour;
+        std::memcpy(&colour, out + 96 + p * 4, 4);
+        const uint32_t entry = (p & 0xe7) | (p & 0x08) << 1 | (p & 0x10) >> 1;
+        alphas = alphas && colour == art.palette[entry] && (colour >> 24) <= 0x80;
+    }
+    check(alphas && art.palette[0] == 0, "the palette is uploaded in CSM1 order, transparent first, alpha up to 0x80");
+
+    // A device change uploads the symbols in GS memory again before the next packet, then
+    // restores the transfer registers.
+    const uint64_t texflush[] = {1 | 1ull << 15 | 1ull << 60, 0xe, 0, 0x3f};
+    const std::vector<uint8_t> next(reinterpret_cast<const uint8_t*>(texflush), reinterpret_cast<const uint8_t*>(std::end(texflush)));
+    size = uint32_t(next.size());
+    out = prompts.filter(3, next.data(), size, xbox);
+    const std::vector<uint8_t> refreshed(out, out + size);
+    check(contains(refreshed, xboxTexels) && size == 2 * (96 + 1024) + 80 + next.size() &&
+              std::equal(next.begin(), next.end(), refreshed.end() - next.size()),
+          "a change to Xbox uploads both symbols again, ahead of the game's packet");
+    size = uint32_t(next.size());
+    out = prompts.filter(3, next.data(), size, playStation);
+    check(contains(std::vector<uint8_t>(out, out + size), texels), "a change back uploads the original texels");
+
+    // Something else uploaded over the cross: it is no longer there to change.
+    std::vector<uint8_t> other(texels);
+    other[0] ^= 1;
+    const std::vector<uint8_t> otherPacket = uploadPacket(0x2000, 0, 0, 16, 16, other);
+    size = uint32_t(otherPacket.size());
+    prompts.filter(1, otherPacket.data(), size, playStation);
+    size = uint32_t(next.size());
+    out = prompts.filter(3, next.data(), size, xbox);
+    check(size == next.size() + 96 + 1024 + 80 && !contains(std::vector<uint8_t>(out, out + size), texels),
+          "only the palette, still in GS memory, is uploaded again");
+}
 } // namespace
 
 int main() {
@@ -284,10 +394,12 @@ int main() {
     testRomVersion();
     testPcTexts();
     testFrameRate();
+    testButtonPrompts();
     if (g_failures) {
         std::cerr << g_failures << " Burnout override check(s) failed\n";
         return 1;
     }
-    std::cout << "Burnout override tests passed (" << std::size(kExpected) << " bindings, ROM0 profile, frame rate)\n";
+    std::cout << "Burnout override tests passed (" << std::size(kExpected)
+              << " bindings, ROM0 profile, frame rate, button prompts)\n";
     return 0;
 }

@@ -5,6 +5,7 @@
 #include "runtime/ee_idle_loops.h"
 #include "runtime/gamepad_rumble.h"
 #include "runtime/host_settings.h"
+#include "runtime/input_device.h"
 
 #include <algorithm>
 #include <atomic>
@@ -43,6 +44,7 @@ namespace
         RowKeepSpeed,
         RowRefresh,
         RowDeadzone,
+        RowPrompts,
         RowControls,
         RowClose,
         RowQuit,
@@ -104,8 +106,9 @@ namespace
 
     Menu g_menu;
     PadState g_pad;
-    bool g_usingPad = false; // the hints show the gamepad's buttons, else the keyboard's
-    bool g_playStation = false;
+    // The hints show the buttons of the device in use, as the game's prompts do (button_prompts).
+    bool usingPad() { return ps2x::buttonPromptDevice() != ps2x::InputDevice::Keyboard; }
+    bool playStationPad() { return ps2x::buttonPromptDevice() == ps2x::InputDevice::PlayStation; }
     std::atomic<bool> g_captures{false};
     std::atomic<int> g_wheelNotches{0};
     float g_wheel = 0.0f;
@@ -219,6 +222,7 @@ namespace
         case RowKeepSpeed: return "Keep speed when slow (next race)";
         case RowRefresh: return "Frame rate (next menu page)";
         case RowDeadzone: return "Stick dead zone";
+        case RowPrompts: return "Button prompts";
         case RowControls: return "Keyboard and mouse controls";
         case RowQuit: return "Quit game";
         default: return "Continue";
@@ -264,6 +268,11 @@ namespace
         case RowKeepSpeed: return onOff(s.keepSpeed);
         case RowRefresh: return s.refreshRate + " Hz";
         case RowDeadzone: return std::to_string(int(s.stickDeadzone * 100.0f + 0.5f)) + "%";
+        case RowPrompts:
+            return s.buttonPrompts == "playstation" ? "PlayStation"
+                   : s.buttonPrompts == "xbox"      ? "Xbox"
+                   : s.buttonPrompts == "keyboard"  ? "Keyboard"
+                                                    : "Auto";
         default: return "";
         }
     }
@@ -358,6 +367,15 @@ namespace
         case RowDeadzone:
             s.stickDeadzone = std::clamp(s.stickDeadzone + 0.02f * float(step == 0 ? 1 : step), 0.0f, 0.5f);
             break;
+        case RowPrompts:
+        {
+            static const char *kPrompts[] = {"auto", "playstation", "xbox", "keyboard"};
+            int index = 0;
+            while (index < 4 && s.buttonPrompts != kPrompts[index])
+                ++index;
+            s.buttonPrompts = kPrompts[(index % 4 + (step < 0 ? 3 : 1)) % 4];
+            break;
+        }
         case RowControls:
             if (activate || step > 0)
             {
@@ -626,10 +644,7 @@ namespace
         if (selectHeld)
             g_pad.selectSince = {};
         if (down != 0u)
-        {
-            g_usingPad = true;
-            g_playStation = pad.playStation;
-        }
+            ps2x::noteInputDevice(pad.playStation ? ps2x::InputDevice::PlayStation : ps2x::InputDevice::Xbox);
         g_pad.buttons = pad.buttons;
         g_pad.held = held;
         return in;
@@ -818,7 +833,7 @@ namespace
     // The width the glyph takes for button height 2 * r.
     float glyphWidth(Glyph glyph, float r)
     {
-        if (g_usingPad)
+        if (usingPad())
             return 2.0f * r;
         return glyph == Glyph::Change ? 2.6f * r : textWidth(keyCaption(glyph), r * 0.8f) + r;
     }
@@ -836,7 +851,7 @@ namespace
     {
         const float width = glyphWidth(glyph, r);
         const Vector2 c{x + width / 2.0f, y};
-        if (!g_usingPad)
+        if (!usingPad())
         {
             const Rectangle cap{x, y - r * 0.9f, width, r * 1.8f};
             const float edge = std::max(1.0f, r * 0.12f);
@@ -852,7 +867,7 @@ namespace
             }
             return width;
         }
-        if (glyph == Glyph::Change || g_playStation)
+        if (glyph == Glyph::Change || playStationPad())
         {
             DrawCircleV(c, r, Color{10, 10, 12, 255});
             DrawRing(c, r * 0.8f, r, 0.0f, 360.0f, 40, Color{225, 225, 230, 255});
@@ -1085,7 +1100,7 @@ namespace ps2x
         const Input pad = readPad(now, selectHeld);
         Input in = g_menu.capturing >= 0 ? Input{} : readKeys(); // a key being bound is not a command
         if ((g_menu.capturing < 0 && GetKeyPressed() != 0) || mouseMoved() || IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-            g_usingPad = false;
+            ps2x::noteInputDevice(ps2x::InputDevice::Keyboard);
         in.up |= pad.up;
         in.down |= pad.down;
         in.left |= pad.left;

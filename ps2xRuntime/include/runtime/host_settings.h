@@ -28,6 +28,8 @@ namespace ps2x
         float stickDeadzone = 0.12f;
         bool vibration = true;       // the game's pad vibration on the host gamepad
         std::string gamepadMappings; // extra SDL_GameControllerDB mappings file
+        // The game's button symbols: auto (the last device used), playstation, xbox or keyboard.
+        std::string buttonPrompts = "auto";
         int volume = 100;            // sound volume in percent
         // "60" or "50": the answer to the game's boot question. 61 to 500 answers 60
         // and runs the game that many frames a second (Burnout: src/burnout_frame_rate.cpp).
