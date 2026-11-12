@@ -14,8 +14,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
+
+import portable_toolchain
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "tools" / "project.py"
@@ -168,24 +171,41 @@ def required_space(disc_ready: bool, game_built: bool) -> int:
     return (0 if disc_ready else EXTRACTION_BYTES) + TRANSLATION_BYTES + (0 if game_built else BUILD_BYTES)
 
 
-def check_prerequisites(work: Path, build_dir: Path, needed: int) -> dict:
+def choose_compiler(studio: bool, ready: bool, tree: bool, tree_portable: bool) -> tuple[bool, bool]:
+    """(use the downloaded compiler, start the build tree over). Visual Studio when it is installed, as before;
+    the downloaded one without it, or while a build tree made with it is there. A tree made with the other one
+    is started over: CMake keeps a tree's generator and compiler."""
+    portable = (tree_portable and ready) or not studio
+    return portable, tree and (portable != tree_portable or (portable and not ready))
+
+
+def check_prerequisites(work: Path, build_dir: Path, needed: int, download_compiler: bool = False) -> dict:
     """Return the CMake executable and generator options, or raise with what to install."""
     windows = os.name == "nt"
     problems = []
+    compiler_missing = False
     if sys.version_info < (3, 11):
         problems.append("Python 3.11 or later: in a terminal, type  winget install Python.Python.3.12"
                         if windows else "Python 3.11 or later.")
     if not shutil.which("git"):
         problems.append("Git, which downloads the dependencies and the updates: in a terminal, type  "
                         "winget install Git.Git" if windows else "Git (Ubuntu: sudo apt install git).")
-    toolchain = {"cmake": cached_cmake(build_dir), "generator": [], "path": []}
+    toolchain = {"cmake": cached_cmake(build_dir), "generator": [], "path": [], "portable": None, "fresh": False}
     if windows:
         studio = find_visual_studio()
-        if not studio or studio[0] not in GENERATORS:
-            problems.append("The C++ compiler: Visual Studio 2026 or 2022 (Community or Build Tools) with the "
-                            "\"Desktop development with C++\" workload, from https://visualstudio.microsoft.com/downloads/ "
-                            "or, in a terminal:  winget install Microsoft.VisualStudio.2022.BuildTools --override "
-                            "\"--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"")
+        studio = studio if studio and studio[0] in GENERATORS else None
+        folder, ready = work / "toolchain", portable_toolchain.ready(work / "toolchain")
+        made_by = cache_entry(build_dir, "CMAKE_COMMAND")  # the CMake that configured the build tree
+        portable, toolchain["fresh"] = choose_compiler(bool(studio), ready, made_by is not None,
+                                                       made_by is not None and folder.resolve() in Path(made_by).resolve().parents)
+        if toolchain["fresh"]:
+            toolchain["cmake"] = None
+        if portable and (ready or download_compiler):
+            toolchain.update(portable=folder, cmake=str(folder / "cmake" / "bin" / "cmake.exe"),
+                             generator=["--generator", "Ninja"])
+            needed += 0 if ready else portable_toolchain.DISK_BYTES
+        elif portable:
+            compiler_missing = True
         else:
             major, location = studio
             if not toolchain["cmake"]:
@@ -210,19 +230,43 @@ def check_prerequisites(work: Path, build_dir: Path, needed: int) -> dict:
                 problems.append("Development libraries (Ubuntu): sudo apt install pkg-config libgl-dev libx11-dev "
                                 "libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev libavcodec-dev "
                                 "libavformat-dev libavutil-dev libswresample-dev libswscale-dev")
-    if cache_entry(build_dir, "CMAKE_GENERATOR"):
+    if cache_entry(build_dir, "CMAKE_GENERATOR") and not toolchain["fresh"]:
         # An existing build tree keeps its generator; CMake rejects a different one.
         toolchain["generator"] = []
     free = shutil.disk_usage(existing_parent(work)).free
     if free < needed:
         problems.append(f"At least {needed / GIB:.0f} GB free for {work} "
                         f"({free / GIB:.1f} GB left). Free some space or choose another drive with --work-dir.")
-    if problems:
-        error = SetupError("Missing:\n  - " + "\n  - ".join(problems)
+    if problems or compiler_missing:
+        listed = problems + [COMPILER_HINT.format(folder=work / "toolchain")] * compiler_missing
+        error = SetupError("Missing:\n  - " + "\n  - ".join(listed)
                            + "\nInstall them, close and reopen the terminal, then run the same command again.")
         error.problems = problems  # for the launcher, which has no terminal to reopen
+        error.compiler = compiler_missing  # the launcher offers the download itself
         raise error
     return toolchain
+
+
+COMPILER_HINT = (f"The C++ compiler. Run the same command with --download-compiler to download Microsoft's C++ Build "
+                 f"Tools, CMake and Ninja into {{folder}} (about {portable_toolchain.DOWNLOAD_MB} MB, nothing installed on "
+                 "the system; you accept Microsoft's licence terms for the Build Tools, which the launcher and "
+                 "Installer.bat show). Or install Visual Studio 2026 or 2022 (Community or Build Tools) with the "
+                 "\"Desktop development with C++\" workload, from https://visualstudio.microsoft.com/downloads/")
+
+
+def accept_licence(folder: Path) -> bool:
+    """In a terminal: offer the download, with Microsoft's licence terms, and return the answer."""
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    try:
+        terms = portable_toolchain.licence()
+    except (OSError, ValueError, KeyError, StopIteration) as error:
+        raise SetupError(f"Microsoft's servers could not be reached ({error}). Check the connection and run again.") from None
+    print(f"\nNo C++ compiler was found. The installer can download Microsoft's C++ Build Tools, CMake and Ninja "
+          f"into {folder} (about {portable_toolchain.DOWNLOAD_MB} MB). Nothing is installed on the system; "
+          f"deleting the folder removes them.\nMicrosoft's licence terms: {terms}\n"
+          "Or install Visual Studio 2026 or 2022 with \"Desktop development with C++\" yourself.", flush=True)
+    return input("Accept the licence terms and download them? [y/N] ").strip().lower() in ("y", "yes")
 
 
 # --- Disc -------------------------------------------------------------------
@@ -343,7 +387,11 @@ def remove_inside(path: Path, work: Path) -> None:
     resolved = path.resolve()
     if work.resolve() not in resolved.parents or resolved != path.parent.resolve() / path.name or not resolved.is_dir():
         raise SetupError(f"Deletion refused: {path} is not a folder inside the work directory {work}.")
-    shutil.rmtree(resolved)
+
+    def writable(remove, name, _error):  # Git keeps its objects read-only (build/_deps/*/.git)
+        os.chmod(name, stat.S_IWRITE)
+        remove(name)
+    shutil.rmtree(resolved, **{"onexc" if sys.version_info >= (3, 12) else "onerror": writable})
 
 
 def prune_backups(backups: Path, work: Path, keep: int = 1) -> list[Path]:
@@ -370,6 +418,7 @@ def find_recompiler(build_dir: Path) -> Path | None:
 
 def find_game(build_dir: Path) -> Path | None:
     for candidate in (build_dir / "ps2xRuntime" / "Release" / "burnout_dominator.exe",
+                      build_dir / "ps2xRuntime" / "burnout_dominator.exe",  # Ninja, the downloaded compiler
                       build_dir / "ps2xRuntime" / "burnout_dominator"):
         if candidate.is_file():
             return candidate
@@ -404,7 +453,13 @@ def setup(args: argparse.Namespace) -> int:
     say(f"Work directory: {work}")
     lock = read_json(ROOT / "project.json")
     disc = disc_state(local, lock)
-    toolchain = check_prerequisites(work, build_dir, required_space(disc == "ok", find_game(build_dir) is not None))
+    needed = required_space(disc == "ok", find_game(build_dir) is not None)
+    try:
+        toolchain = check_prerequisites(work, build_dir, needed, args.download_compiler)
+    except SetupError as error:
+        if not getattr(error, "compiler", False) or error.problems or args.check or not accept_licence(work / "toolchain"):
+            raise
+        toolchain = check_prerequisites(work, build_dir, needed, download_compiler=True)
     if args.check:
         say("All prerequisites are present.")
         return 0
@@ -414,6 +469,22 @@ def setup(args: argparse.Namespace) -> int:
     env = dict(os.environ)
     env["PATH"] = os.pathsep.join(toolchain["path"] + [env.get("PATH", "")])
     env["BDR_WORK_DIR"] = str(work)
+    if toolchain["fresh"]:
+        say("The build was made with another C++ compiler: building everything again")
+        remove_inside(build_dir, work)
+    if toolchain["portable"]:
+        folder = toolchain["portable"]
+        if not portable_toolchain.ready(folder):
+            say(f"Downloading Microsoft's C++ Build Tools, CMake and Ninja into {folder} "
+                f"(about {portable_toolchain.DOWNLOAD_MB} MB, a few minutes)")
+            if folder.exists():
+                remove_inside(folder, work)  # an interrupted download
+            try:
+                portable_toolchain.download(folder, say=lambda text: print("  " + text, flush=True))
+            except (OSError, ValueError, KeyError, StopIteration) as error:
+                raise SetupError(f"The C++ Build Tools could not be downloaded: {error}\nRun the same command again "
+                                 "to try again.") from None
+        env.update(portable_toolchain.environment(folder, env["PATH"]))
     cmake = ["--cmake", toolchain["cmake"]]
 
     known_iso = recorded_iso(local)
@@ -466,6 +537,10 @@ def setup(args: argparse.Namespace) -> int:
     say("Building the game (10 to 60 minutes depending on the processor)")
     project(env, "configure", "--game", *cmake, *toolchain["generator"])
     project(env, "build", "--game", *cmake, "--jobs", str(args.jobs))
+    if toolchain["portable"]:
+        # Visual Studio puts the C++ runtime in Windows; here the game and FFmpeg's DLLs find it next to them.
+        for dll in portable_toolchain.runtime_dlls(toolchain["portable"]):
+            shutil.copy2(dll, find_game(build_dir).parent)
     say("Installation finished.")
     print("\n".join(final_message(windows)))
     return 0
@@ -483,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Parallel compile jobs (default: processor count, at most 64)")
     parser.add_argument("--regenerate", action="store_true", help="Translate the game again even if nothing changed")
     parser.add_argument("--check", action="store_true", help="Only check the prerequisites")
+    parser.add_argument("--download-compiler", action="store_true",
+                        help="Windows without Visual Studio: download Microsoft's C++ Build Tools, CMake and Ninja into "
+                             "<work>/toolchain, accepting Microsoft's licence terms for the Build Tools")
     args = parser.parse_args(argv)
     try:
         return setup(args)

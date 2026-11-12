@@ -405,6 +405,7 @@ def verified_iso() -> Path:
 
 def default_exe() -> Path:
     for candidate in [WORK / "build" / "ps2xRuntime" / "Release" / "burnout_dominator.exe",
+                      WORK / "build" / "ps2xRuntime" / "burnout_dominator.exe",  # Ninja, the downloaded compiler
                       WORK / "build" / "ps2xRuntime" / "burnout_dominator"]:
         if candidate.is_file():
             return candidate

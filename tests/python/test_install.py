@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import unittest
 from unittest import mock
@@ -209,6 +210,9 @@ class InstallTests(unittest.TestCase):
         generated = self.work / "generated"
         generated.mkdir()
         (generated / "a.cpp").write_text("", encoding="utf-8")
+        (generated / ".git").mkdir()
+        (generated / ".git" / "pack.idx").write_text("", encoding="utf-8")
+        os.chmod(generated / ".git" / "pack.idx", stat.S_IREAD)  # as Git leaves its objects
         install.remove_inside(generated, self.work)
         self.assertFalse(generated.exists())
         outside = self.root / "outside"
@@ -301,6 +305,53 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(ask.call_args[0][0][1:3], ["-path", instance.as_posix()])
             project.follow_visual_studio_update(build)  # already current
         self.assertEqual(out.getvalue().count("Visual Studio was updated"), 1)
+
+    def test_compiler_choice_between_visual_studio_and_the_downloaded_one(self):
+        # (Visual Studio, downloaded compiler ready, build tree, tree made with the downloaded one) -> (portable, fresh)
+        cases = {(True, False, False, False): (False, False),  # Visual Studio, as before
+                 (True, True, True, False): (False, False),    # a Visual Studio tree keeps Visual Studio
+                 (True, True, True, True): (True, False),      # a tree of the downloaded compiler keeps it
+                 (True, False, True, True): (False, True),     # ...until its folder is deleted
+                 (False, False, False, False): (True, False),  # no Visual Studio: download
+                 (False, True, True, False): (True, True),     # Visual Studio uninstalled: start the tree over
+                 (False, False, True, True): (True, True)}     # downloaded again, maybe a newer compiler
+        for given, expected in cases.items():
+            self.assertEqual(install.choose_compiler(*given), expected, given)
+
+    @unittest.skipUnless(os.name == "nt", "the downloaded compiler is for Windows")
+    def test_without_visual_studio_the_compiler_is_offered_then_used(self):
+        build, folder = self.work / "build", self.work / "toolchain"
+        with mock.patch.object(install, "find_visual_studio", return_value=None):
+            with self.assertRaises(install.SetupError) as raised:
+                install.check_prerequisites(self.work, build, 0)
+            self.assertTrue(raised.exception.compiler)
+            self.assertEqual(raised.exception.problems, [])
+            self.assertIn("--download-compiler", str(raised.exception))
+            chosen = install.check_prerequisites(self.work, build, 0, download_compiler=True)
+            self.assertEqual((chosen["portable"], chosen["generator"]), (folder, ["--generator", "Ninja"]))
+            # A tree Visual Studio configured cannot change generator: it starts over.
+            build.mkdir()
+            (build / "CMakeCache.txt").write_text("CMAKE_GENERATOR:INTERNAL=Visual Studio 18 2026\n"
+                                                  "CMAKE_COMMAND:INTERNAL=C:/VS/cmake.exe\n", encoding="utf-8")
+            (folder / install.portable_toolchain.RECORD).parent.mkdir()
+            (folder / install.portable_toolchain.RECORD).write_text("{}", encoding="utf-8")
+            chosen = install.check_prerequisites(self.work, build, 0)
+            self.assertEqual((chosen["fresh"], chosen["cmake"], chosen["generator"]),
+                             (True, str(folder / "cmake" / "bin" / "cmake.exe"), ["--generator", "Ninja"]))
+
+    def test_a_terminal_shows_the_licence_before_the_download(self):
+        out = io.StringIO()
+        terminal = mock.Mock(isatty=mock.Mock(return_value=True))
+        with mock.patch.object(install.portable_toolchain, "licence", return_value="https://example.invalid/terms"), \
+                mock.patch.object(install.sys, "stdin", terminal), contextlib.redirect_stdout(out):
+            with mock.patch("builtins.input", return_value="y") as asked:
+                self.assertTrue(install.accept_licence(self.work / "toolchain"))
+            self.assertIn("https://example.invalid/terms", out.getvalue())
+            self.assertIn("[y/N]", asked.call_args[0][0])
+            with mock.patch("builtins.input", return_value=""):
+                self.assertFalse(install.accept_licence(self.work / "toolchain"))
+            terminal.isatty.return_value = False  # the launcher: it asks in its own window
+            self.assertFalse(install.accept_licence(self.work / "toolchain"))
 
     def test_shipped_map_matches_its_documented_hash(self):
         shipped = install.SHIPPED_MAP

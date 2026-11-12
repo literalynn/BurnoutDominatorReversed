@@ -1464,11 +1464,27 @@ namespace
                 print(F(fText), step.first, sx + u(26), middle, step.second.yes() ? kText : kMute);
                 ++i;
             }
-            const float row = cy + float((i + 1) / 2) * u(29) - u(8) + u(16);
+            float row = cy + float((i + 1) / 2) * u(29) - u(8) + u(16);
+            const Json &offer = s["compiler"]; // no C++ compiler: the launcher offers to download one
+            if (!offer["text"].text.empty())
+            {
+                if (g_draw)
+                    DrawRectangleRec(snap({cx, row, cw, hairline()}), kLine);
+                row += u(14) + paragraph(F(fText), offer["text"].text, cx, row + u(14), cw, u(21), kText) + u(12);
+                const std::string accept = "Accept the licence and download";
+                if (button(cx, row, accept, kPrimary, !busy() && !offer["licence"].text.empty()))
+                    act("download-compiler", "{\"iso\": " + quote(g.iso.text) + "}", [](const Json &) {
+                        g.iso.edited = false;
+                        g.nextPage = kConsole;
+                    });
+                if (!offer["licence"].text.empty() && button(cx + buttonWidth(accept) + u(8), row, "Licence terms", kQuiet))
+                    api("licence");
+                row += u(49) + paragraph(F(fSmall), offer["hint"].text, cx, row + u(49), cw, u(18.75f), kMute) + u(16);
+            }
             const float install = buttonWidth("Generate the code and build the game");
             const std::vector<std::string_view> note = wrap(F(fNote), "30 to 90 minutes the first time, a few minutes after an update.", cw - install - u(6));
             const float height = std::max(u(39), u(19.5f) * float(note.size()));
-            if (button(cx, row + (height - u(39)) / 2, "Generate the code and build the game", kPlain, !busy()))
+            if (button(cx, row + (height - u(39)) / 2, "Generate the code and build the game", kPlain, !busy() && offer["text"].text.empty()))
                 act("install", "{\"iso\": " + quote(g.iso.text) + "}", [](const Json &) {
                     g.iso.edited = false;
                     g.nextPage = kConsole;

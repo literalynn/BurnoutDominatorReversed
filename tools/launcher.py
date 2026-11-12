@@ -40,6 +40,7 @@ if PORTABLE:
         os.environ["PATH"] = str(PORTABLE / "git" / "cmd") + os.pathsep + os.environ.get("PATH", "")
 sys.path.insert(0, str(ROOT / "tools"))
 import install  # noqa: E402
+import portable_toolchain  # noqa: E402
 from project import DEFAULT_PROFILE, PROFILE_NAME, adopt_saves, profile_dir, profiles_root, settings_file  # noqa: E402
 
 SETTINGS = settings_file()
@@ -315,11 +316,36 @@ class Launcher:
         self.client_seen = time.monotonic()
         self.restart: list[str] | None = None  # set to the new launcher's arguments after an update
         self.front = 0  # bumped when the launcher's window is started again: the open one comes to the front
+        self.compiler: dict = {}  # the offer to download the C++ compiler, when Windows has none
+        self.check()
+
+    def check(self) -> None:
+        """What the installation lacks: `missing` for the page's alert, `compiler` for the offer to download it."""
         try:
             install.check_prerequisites(self.work, self.work / "build", 0)
-            self.missing = ""
+            problems, compiler = [], False
         except install.SetupError as error:
-            self.missing = "\n".join(getattr(error, "problems", [str(error)])) + "\nInstall what is missing, then start the launcher again."
+            problems, compiler = getattr(error, "problems", [str(error)]), getattr(error, "compiler", False)
+        self.missing = "\n".join(problems) + "\nInstall what is missing, then start the launcher again." if problems else ""
+        if not compiler:
+            self.compiler = {}
+        elif not self.compiler:
+            folder = self.work / "toolchain"
+            self.compiler = {"text": f"No C++ compiler found. The launcher can download Microsoft's C++ Build Tools, CMake "
+                                     f"and Ninja into {folder} (about {portable_toolchain.DOWNLOAD_MB} MB). Nothing is "
+                                     "installed on the system; deleting the folder removes them.",
+                             "hint": "Or install Visual Studio 2026 or 2022 with \"Desktop development with C++\" yourself, "
+                                     "then start the launcher again.",
+                             "licence": ""}
+            threading.Thread(target=self.find_licence, daemon=True).start()
+
+    def find_licence(self) -> None:
+        """The link to Microsoft's licence terms, read from the same manifest as the download."""
+        try:
+            self.compiler["licence"] = portable_toolchain.licence()
+        except (OSError, ValueError, KeyError, StopIteration) as error:
+            self.compiler["hint"] = f"Microsoft's servers could not be reached ({error}). Start the launcher again to retry."
+        self.touch()
 
     # --- State --------------------------------------------------------------
 
@@ -370,7 +396,7 @@ class Launcher:
                 "profiles": self.profiles(), "profile": self.profile(), "saves": str(self.root or ""),
                 "settings": settings, "settings_stamp": SETTINGS.stat().st_mtime_ns if SETTINGS.is_file() else 0, "table": SETTINGS_TABLE,
                 "version": installed_version(), "changelog": entries, "updates": self.updates,
-                "missing": self.missing, "build": BUILD, "front": self.front}
+                "missing": self.missing, "compiler": self.compiler, "build": BUILD, "front": self.front}
 
     # --- Commands -----------------------------------------------------------
 
@@ -407,8 +433,10 @@ class Launcher:
         else:
             os.killpg(process.pid, signal.SIGTERM)
 
-    def install(self, iso: str = "") -> None:
-        self.start("Installation", [console_python(), "-u", str(ROOT / "tools" / "install.py"), "--iso", iso.strip()])
+    def install(self, iso: str = "", download_compiler: bool = False) -> None:
+        """The installation; with `download_compiler`, the player accepted Microsoft's licence terms."""
+        self.start("Installation", [console_python(), "-u", str(ROOT / "tools" / "install.py"), "--iso", iso.strip()]
+                   + ["--download-compiler"] * download_compiler, lambda code: self.check())
 
     def play(self, profile: str) -> None:
         if profile not in self.profiles():
@@ -524,6 +552,13 @@ class Launcher:
                 return {"path": choose(folder=name == "browse-saves")}
             if name == "install":
                 self.install(str(body.get("iso", "")))
+            elif name in ("download-compiler", "licence"):
+                if not self.compiler.get("licence"):
+                    raise ValueError("Microsoft's licence terms could not be read yet.")
+                if name == "licence":
+                    webbrowser.open(self.compiler["licence"])
+                else:
+                    self.install(str(body.get("iso", "")), download_compiler=True)
             elif name == "play":
                 self.play(str(body.get("profile", "")))
             elif name == "front":

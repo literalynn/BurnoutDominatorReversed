@@ -14,7 +14,7 @@ Static recompilation of Burnout Dominator PS2 (PAL, SLES_546.27, SHA256 locked i
 ```
 python tools/launcher.py              # the players' launcher (Launcher.bat): a local page, tools/launcher.html, for the ISO, install, save profiles, play with the console in a tab, settings, updates
 cmake -S tools/launcher -B build/launcher && cmake --build build/launcher --config Release   # the same launcher in a window of its own (raylib): BurnoutDominator.exe on Windows (with the first start's downloads), bdr_launcher elsewhere, which BurnoutDominator.py builds; it runs `--python <python> --script tools/launcher.py`
-python tools/install.py --iso <ISO>   # one-command install (Installer.bat on Windows): extract, build tools, generate, build the game
+python tools/install.py --iso <ISO> [--download-compiler]   # one-command install (Installer.bat on Windows): extract, build tools, generate, build the game; without Visual Studio, --download-compiler puts MSVC, the Windows SDK pieces, CMake and Ninja in <work>/toolchain (tools/portable_toolchain.py)
 python tools/project.py configure [--game] [--generator Ninja|"Visual Studio 18 2026" --arch x64] [--lto]
 python tools/project.py build [--game] --jobs N
 python tools/project.py generate --tool <ps2_recomp> --function-map <functions.ee.csv> --augment --regenerate
