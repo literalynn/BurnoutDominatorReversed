@@ -161,7 +161,7 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 
 | Setting | Default | |
 |---|---|---|
-| `window_width`, `window_height` | 1280 × 960 | start-up window size |
+| `window_width`, `window_height` | 1280 × 720 | start-up window size |
 | `fullscreen` | false | borderless full screen |
 | `vsync`, `fps_limit` | true, 0 | display sync and cap |
 | `aspect` | 16:9 | `16:9`, `4:3` or `stretch`. With `16:9` the game draws a wider view. A change applies from the game's next start (a save state keeps the view it was saved with); until then the window keeps the shape the game draws. `stretch` fills the window with the picture |

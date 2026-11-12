@@ -1051,8 +1051,8 @@ namespace
     void drawQuitQuestion()
     {
         const Layout l = layout();
-        if (!g_quitFromMenu)
-            DrawRectangle(0, 0, int(l.width), int(l.height), Fade(BLACK, 0.5f));
+        // Over the menu, darker: its rows would show through the panel's edges.
+        DrawRectangle(0, 0, int(l.width), int(l.height), Fade(BLACK, g_quitFromMenu ? 0.7f : 0.5f));
         drawPanel(l, 36.0f * l.unit, 66.0f * l.unit, 0.92f); // hides the menu's rows behind it
         const std::string question = "Quit the game and go back to the desktop?";
         const std::string detail = "Anything the game has not saved will be lost";

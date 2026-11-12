@@ -11,7 +11,7 @@ namespace ps2x
     struct HostSettings
     {
         int windowWidth = 1280;
-        int windowHeight = 960;
+        int windowHeight = 720; // 16:9, like the default aspect
         bool fullscreen = false;   // borderless window on the current monitor
         bool vsync = true;         // presentation waits for the monitor refresh
         int fpsLimit = 0;          // presentation loop limit, 0 = none (monitor refresh with vsync)
