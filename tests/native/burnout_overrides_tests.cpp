@@ -288,6 +288,101 @@ void testFrameRate() {
         g_ps2RecompiledFunctionTable[address >> 2] = nullptr;
 }
 
+// Stand-ins for the front end's Apt step 0x2462F0 (records f12 and dt), its pad input 0x248208
+// (stores g_apt.input as FEInputId) and its page logic 0x247C88 (counts its calls).
+struct AptSeen {
+    float f12 = 0.0f, dt = 0.0f;
+    uint32_t input = 0;
+    int pages = 0;
+};
+AptSeen g_apt;
+
+void aptStepStub(uint8_t* rdram, R5900Context* ctx, PS2Runtime*) {
+    g_apt.f12 = ctx->f[12];
+    std::memcpy(&g_apt.dt, rdram + 0x4915BC, sizeof(float));
+}
+void aptInputStub(uint8_t* rdram, R5900Context* ctx, PS2Runtime*) {
+    std::memcpy(rdram + getRegU32(ctx, 4), &g_apt.input, sizeof(g_apt.input));
+}
+void aptPagesStub(uint8_t*, R5900Context*, PS2Runtime*) {
+    ++g_apt.pages;
+}
+
+void testAptPace() {
+    constexpr uint32_t kStep = 0x2462F0, kInput = 0x248208, kPages = 0x247C88, kInputId = 0x1CA5480;
+    const auto runtime = std::make_unique<PS2Runtime>();
+    runtime->registerFunction(kStep, &aptStepStub);
+    runtime->registerFunction(kInput, &aptInputStub);
+    runtime->registerFunction(kPages, &aptPagesStub);
+    burnout::installFrameRate(*runtime);
+    std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0);
+    R5900Context ctx{};
+    const auto call = [&](uint32_t address) {
+        g_ps2RecompiledFunctionTable[address >> 2](rdram.data(), &ctx, runtime.get());
+    };
+    const auto setDt = [&](float dt) { std::memcpy(rdram.data() + 0x4915BC, &dt, sizeof(dt)); };
+    const auto dtNow = [&] {
+        float dt = 0.0f;
+        std::memcpy(&dt, rdram.data() + 0x4915BC, sizeof(dt));
+        return dt;
+    };
+    const auto inputNow = [&] {
+        uint32_t input = 0;
+        std::memcpy(&input, rdram.data() + kInputId, sizeof(input));
+        return input;
+    };
+    // One frame as 0x208390 makes it: the step, which calls the input, then the page logic.
+    const auto frame = [&](float f12, uint32_t input) {
+        ctx.f[12] = f12;
+        setReg(ctx, 4, 0x1CA5370);
+        call(kStep);
+        g_apt.input = input;
+        setReg(ctx, 4, kInputId);
+        call(kInput);
+        setReg(ctx, 4, 0x1CA5370);
+        setReg(ctx, 31, 0x246378);
+        ctx.pc = kPages;
+        call(kPages);
+    };
+
+    ps2x::setVBlankRate(0);
+    setDt(1.0f / 30.0f);
+    frame(1.0f / 30.0f, 0);
+    check(g_apt.f12 == 1.0f / 30.0f && g_apt.pages == 1, "without a VBlank rate Apt gets every front-end step");
+
+    // Front end at 240: 120 steps a second, Apt and its pages run on every fourth with 1/30 s.
+    ps2x::setVBlankRate(240);
+    setDt(1.0f / 120.0f);
+    g_apt.pages = 0;
+    int pagesBefore = 0;
+    bool paced = true;
+    for (int i = 1; i <= 8; ++i) {
+        frame(1.0f / 120.0f, i == 1 ? 5u : i == 8 ? 7u : 0u);
+        const bool due = i % 4 == 0;
+        paced = paced && g_apt.f12 == (due ? 1.0f / 30.0f : 0.0f) && g_apt.dt == (due ? 1.0f / 30.0f : 1.0f / 120.0f) &&
+                g_apt.pages == pagesBefore + (due ? 1 : 0) && dtNow() == 1.0f / 120.0f;
+        if (!due)
+            paced = paced && ctx.pc == 0x246378;
+        if (i == 4)
+            check(inputNow() == 5, "a press between two console steps is the next console step's FEInputId");
+        if (i == 8)
+            check(inputNow() == 7, "a press on a console step stays");
+        pagesBefore = g_apt.pages;
+    }
+    check(paced, "the front end at 240 gives Apt 1/30 s and runs its pages every fourth step, dt 1/30 meanwhile");
+
+    // Race at 240 with two steps a frame: a console step every other frame.
+    setDt(1.0f / 240.0f);
+    g_apt.pages = 0;
+    frame(2.0f / 240.0f, 0);
+    frame(2.0f / 240.0f, 0);
+    check(g_apt.f12 == 1.0f / 60.0f && g_apt.pages == 1, "a race at 240 with two steps a frame gives Apt 1/60 s every other frame");
+
+    ps2x::setVBlankRate(0);
+    for (const uint32_t address : {kStep, kInput, kPages})
+        g_ps2RecompiledFunctionTable[address >> 2] = nullptr;
+}
+
 // A GIF packet as the game uploads a symbol level: the transfer registers (PSMCT32, 64 pixels
 // wide), then the data in one IMAGE tag.
 std::vector<uint8_t> uploadPacket(uint32_t dbp, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
@@ -567,6 +662,7 @@ int main() {
     testRomVersion();
     testPcTexts();
     testFrameRate();
+    testAptPace();
     testButtonPrompts();
     testMenuArt();
     if (g_failures) {
