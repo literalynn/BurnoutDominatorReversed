@@ -170,7 +170,7 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 | `progressive_scan` | true | whole frames, no interlacing lines |
 | `gs_thread` | true | the PS2's graphics units on a second processor core |
 | `fast_loading` | true | loading screens run faster than real time |
-| `video_skip` | true | holding Start (Enter on the keyboard) for a second skips any video, even one the game does not let you skip: it plays as fast as the computer can, unseen and unheard |
+| `video_skip` | true | holding Start (Enter on the keyboard) for a second skips any video, even one the game does not let you skip, and the videos that follow while you keep holding it: the game goes on at once as if each had played to its end |
 | `keep_speed` | true | when the graphics cannot keep up, the game draws fewer frames instead of slowing down (from the next race) |
 | `refresh_rate` | 60 | `50` or `60` as on a console; `120`, `144`, `240`... up to `500` runs the whole game that many frames a second at the same speed, with more processor work |
 | `stick_deadzone` | 12 | percent |

@@ -30,7 +30,7 @@
       {"title": "Performance", "rows": [
         {"key": "gs_thread", "label": "Graphics on a second core", "help": "The PS2's graphics units run on a processor core of their own."},
         {"key": "fast_loading", "label": "Fast loading", "help": "Loading screens run faster than real time."},
-        {"key": "video_skip", "label": "Skip videos", "help": "Holding Start for a second skips any video, even one the game does not let you skip: it plays as fast as the computer can, unseen and unheard."},
+        {"key": "video_skip", "label": "Skip videos", "help": "Holding Start for a second skips any video, even one the game does not let you skip, and the videos that follow while you keep holding it: the game goes on at once as if each had played to its end."},
         {"key": "keep_speed", "label": "Keep the game's speed", "help": "When the graphics cannot keep up, the game draws fewer frames instead of slowing down."}]}
     ]
   ],

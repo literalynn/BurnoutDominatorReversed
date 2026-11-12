@@ -18,10 +18,9 @@ namespace
 
     std::atomic<ps2x::VideoCheck> g_check{nullptr};
     std::atomic<bool> g_playing{false};
-    std::atomic<bool> g_skipping{false};
+    std::atomic<bool> g_skipping{false};    // from the end of the hold until Start is released
     std::atomic<Clock::rep> g_holdStart{0}; // when Start was pressed during the video, 0 = not held
-    Clock::time_point g_skipStart;
-    bool g_hidingStart = false;
+    Clock::time_point g_playStart;          // EE thread
 }
 
 namespace ps2x
@@ -31,15 +30,19 @@ namespace ps2x
         g_check.store(check, std::memory_order_release);
     }
 
-    bool updateVideoSkip(const uint8_t *rdram)
+    void updateVideoSkip(const uint8_t *rdram)
     {
         const VideoCheck check = g_check.load(std::memory_order_acquire);
         const bool playing = hostSettings().videoSkip && check && check(rdram);
-        if (g_playing.exchange(playing, std::memory_order_acq_rel) != playing)
-            std::printf(playing ? "[video] playing\n" : "[video] ended\n");
-        if (!playing && g_skipping.exchange(false, std::memory_order_acq_rel))
-            std::printf("[video] skipped in %.1f s\n", std::chrono::duration<double>(Clock::now() - g_skipStart).count());
-        return g_skipping.load(std::memory_order_acquire);
+        if (g_playing.exchange(playing, std::memory_order_acq_rel) == playing)
+            return;
+        if (playing)
+        {
+            g_playStart = Clock::now();
+            std::printf("[video] playing\n");
+        }
+        else
+            std::printf("[video] ended after %.1f s\n", std::chrono::duration<double>(Clock::now() - g_playStart).count());
     }
 
     bool holdToSkipVideo(bool startHeld)
@@ -47,10 +50,10 @@ namespace ps2x
         if (!startHeld)
         {
             g_holdStart.store(0, std::memory_order_relaxed);
-            g_hidingStart = false;
+            g_skipping.store(false, std::memory_order_release);
             return false;
         }
-        if (g_hidingStart)
+        if (g_skipping.load(std::memory_order_acquire))
             return true;
         if (!g_playing.load(std::memory_order_acquire))
         {
@@ -66,10 +69,9 @@ namespace ps2x
         }
         if (now - Clock::time_point(Clock::duration(start)) < kHold)
             return false;
-        // The game no longer sees Start: a press it would read after the video must be a new one.
-        g_hidingStart = true;
+        // Until Start is released the game no longer sees it (a press it reads after the videos
+        // must be a new one) and every video that plays is ended.
         g_holdStart.store(0, std::memory_order_relaxed);
-        g_skipStart = now;
         g_skipping.store(true, std::memory_order_release);
         std::printf("[video] skipping\n");
         return true;
