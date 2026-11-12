@@ -4,7 +4,8 @@
 // (0x1E6668, FINDINGS.md E019), at 60 or 50 steps a second, half that in the front end. With a
 // VBlank rate set (runtime/vblank_rate.h), the wrappers below give both that rate instead, then
 // call the original function. The few places that assume 60 or 50 steps a second and change what
-// the player sees get the rate too, so the game moves as it does at 60 Hz (FINDINGS.md E021).
+// the player sees get the rate too, so the game moves as it does at 60 Hz (FINDINGS.md E021). The
+// front end's Apt movies keep the console's pace instead (FINDINGS.md E029).
 // Without a VBlank rate every wrapper only calls the original.
 #include "burnout_frame_rate.h"
 
@@ -12,6 +13,7 @@
 #include "ps2_runtime_macros.h"
 #include "runtime/vblank_rate.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -27,6 +29,14 @@ PS2Runtime::RecompiledFunction g_camera = nullptr;
 PS2Runtime::RecompiledFunction g_powf = nullptr;
 PS2Runtime::RecompiledFunction g_menuBox = nullptr;
 PS2Runtime::RecompiledFunction g_vblankCount = nullptr;
+PS2Runtime::RecompiledFunction g_aptStep = nullptr;
+PS2Runtime::RecompiledFunction g_aptInput = nullptr;
+PS2Runtime::RecompiledFunction g_aptPages = nullptr;
+
+// Apt's pace (aptStep): console steps since Apt last ran, in units of 1 / (steps a second).
+uint32_t g_aptElapsed = 0;
+bool g_aptDue = true;         // this call of 0x2462F0 is a console step: Apt's frame and page logic run
+uint32_t g_aptLastInput = 0;  // the last pad input of the calls between two console steps
 
 uint32_t consoleRate(const uint8_t* rdram) {
     return rdram[kPalFlag] ? 50u : 60u;
@@ -108,6 +118,67 @@ void vblankCount(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         SET_GPR_U32(ctx, 2, static_cast<uint32_t>(uint64_t(GPR_U32(ctx, 2)) * consoleRate(rdram) / rate));
 }
 
+// The front end and the in-game menus are Apt movies (EA's Flash player, FINDINGS.md E029). Once a
+// frame, 0x2462F0(f12 = dt x steps, a0 = the Apt manager 0x1CA5370) sends the pad's presses to Apt
+// (0x248208), gives Apt the elapsed milliseconds (one movie frame per 33 ms) and runs the page logic
+// 0x247C88, which calls the page's ActionScript Update: on a console, one movie frame and one Update
+// a front-end step. Update moves things a fixed amount a call (the ticker), so above 60 Apt runs
+// only on the calls that complete a console step, given that step's time and dt; the other calls
+// send the presses and give Apt no time. The presses sent between two console steps go to Apt's key
+// queue, read at its next frame; the last of them is also the next console step's FEInputId.
+void aptStep(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const uint32_t rate = ps2x::vblankRate();
+    float dt = 0.0f;
+    std::memcpy(&dt, rdram + kStepSeconds, sizeof(dt));
+    const long steps = dt > 0.0f ? std::lround(ctx->f[12] / dt) : 0;
+    if (!rate || steps <= 0) {
+        g_aptDue = true;
+        g_aptStep(rdram, ctx, runtime);
+        return;
+    }
+    const uint32_t perSecond = static_cast<uint32_t>(std::lround(1.0f / dt));
+    const uint32_t consolePerSecond = (perSecond * consoleRate(rdram) + rate / 2) / rate;
+    g_aptElapsed += static_cast<uint32_t>(steps) * consolePerSecond;
+    const uint32_t consoleSteps = g_aptElapsed / perSecond;
+    g_aptElapsed %= perSecond;
+    g_aptDue = consoleSteps > 0;
+    const float consoleDt = 1.0f / static_cast<float>(consolePerSecond);
+    ctx->f[12] = consoleDt * static_cast<float>(consoleSteps);
+    if (g_aptDue)
+        std::memcpy(rdram + kStepSeconds, &consoleDt, sizeof(consoleDt)); // natives Update calls count dt
+    g_aptStep(rdram, ctx, runtime);
+    std::memcpy(rdram + kStepSeconds, &dt, sizeof(dt));
+}
+
+// 0x248208(a0 = FEInputId, the word Apt's pages read the pad from) clears it, then stores the
+// pressed button's id and queues it as an Apt key event.
+void aptInput(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const uint32_t address = GPR_U32(ctx, 4) & (PS2_RAM_SIZE - 1) & ~3u;
+    g_aptInput(rdram, ctx, runtime);
+    if (!ps2x::vblankRate())
+        return;
+    uint32_t input = 0;
+    std::memcpy(&input, rdram + address, sizeof(input));
+    if (!g_aptDue) {
+        if (input)
+            g_aptLastInput = input;
+        return;
+    }
+    if (!input)
+        std::memcpy(rdram + address, &g_aptLastInput, sizeof(g_aptLastInput));
+    g_aptLastInput = 0;
+}
+
+// 0x247C88(a0 = the Apt manager) loads and changes pages and calls the page's Update: only on the
+// calls that complete a console step.
+void aptPages(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    if (g_aptDue || !ps2x::vblankRate()) {
+        g_aptPages(rdram, ctx, runtime);
+        return;
+    }
+    ctx->pc = GPR_U32(ctx, 31);
+}
+
 void wrap(PS2Runtime& runtime, uint32_t address, PS2Runtime::RecompiledFunction& original,
           PS2Runtime::RecompiledFunction wrapper) {
     if (runtime.hasFunction(address)) {
@@ -124,5 +195,8 @@ void installFrameRate(PS2Runtime& runtime) {
     wrap(runtime, 0x37C5A8, g_powf, power);
     wrap(runtime, 0x24A260, g_menuBox, menuBox);
     wrap(runtime, 0x1B9F80, g_vblankCount, vblankCount);
+    wrap(runtime, 0x2462F0, g_aptStep, aptStep);
+    wrap(runtime, 0x248208, g_aptInput, aptInput);
+    wrap(runtime, 0x247C88, g_aptPages, aptPages);
 }
 } // namespace burnout
