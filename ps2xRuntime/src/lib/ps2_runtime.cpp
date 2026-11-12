@@ -3037,11 +3037,10 @@ PS2Runtime::RunResult PS2Runtime::run(const RunOptions &options)
         const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
         const float screenWidth = static_cast<float>(GetScreenWidth());
         const float screenHeight = static_cast<float>(GetScreenHeight());
-        // The PS2 scans 640x512 out to a 4:3 (or, with in-game widescreen, 16:9) television.
-        const std::string &aspectSetting = ps2x::hostSettings().aspect;
-        const float aspect = aspectSetting == "16:9" ? 16.0f / 9.0f
-                             : aspectSetting == "stretch" ? screenWidth / std::max(1.0f, screenHeight)
-                                                          : 4.0f / 3.0f;
+        // The PS2 scans 640x512 out to a 4:3 (or, with in-game widescreen, 16:9) television: the
+        // shape the game draws (settings_menu.h), whatever the setting says until its next start.
+        const float aspect = ps2x::hostSettings().aspect == "stretch" ? screenWidth / std::max(1.0f, screenHeight)
+                                                                       : ps2x::pictureAspect();
         const float dstWidth = std::min(screenWidth, screenHeight * aspect);
         const float dstHeight = dstWidth / aspect;
         const Rectangle srcRect{0.0f, 0.0f, srcWidth, picture.flipped ? -srcHeight : srcHeight};

@@ -1,17 +1,28 @@
 #include "runtime/settings_menu.h"
 
+#include "Kernel/Stubs/MemoryCard.h"
 #include "ps2_host_backend.h"
 #include "runtime/ee_idle_loops.h"
+#include "runtime/gamepad_rumble.h"
 #include "runtime/host_settings.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
 {
+    using Clock = std::chrono::steady_clock;
+
     enum class Page
     {
         Main,
@@ -34,6 +45,7 @@ namespace
         RowDeadzone,
         RowControls,
         RowClose,
+        RowQuit,
         MainRowCount,
     };
 
@@ -49,10 +61,25 @@ namespace
     // Keys the window uses itself.
     constexpr int kReservedKeys[] = {KEY_F1, KEY_F5, KEY_F7, KEY_F9, KEY_F11};
 
+    // ps2x::HostGamepad::buttons, in padButtonNames() order.
+    constexpr uint32_t PadUp = 1u << 0, PadDown = 1u << 1, PadLeft = 1u << 2, PadRight = 1u << 3,
+                       PadCross = 1u << 4, PadCircle = 1u << 5, PadSquare = 1u << 6, PadTriangle = 1u << 7,
+                       PadL1 = 1u << 8, PadR1 = 1u << 9, PadStart = 1u << 12, PadSelect = 1u << 13,
+                       PadGuide = 1u << ps2x::kGuideButton;
+
+    // What one pass of keyboard or gamepad input asks of the menu.
+    struct Input
+    {
+        bool up = false, down = false, left = false, right = false;
+        bool activate = false, back = false, clear = false;
+        bool toggle = false; // F1 or the Guide button
+        bool close = false;  // Start or Select, while the menu is open
+    };
+
     struct Menu
     {
         bool open = false;
-        bool releasing = false; // closed, but a key used in the menu may still be held
+        bool releasing = false; // closed, but a key or button used in the menu may still be held
         Page page = Page::Main;
         int row = 0;
         int column = 0;     // controls page: the first or second input of a button
@@ -62,18 +89,38 @@ namespace
         // Where the last draw put each row (and, on the controls page, each input cell).
         std::vector<Rectangle> rows;
         std::vector<Rectangle> cells;
+        float valueLeft = 0.0f, valueCenter = 0.0f; // the left arrow and the value column
+    };
+
+    // The gamepad as the menu reads it: the left stick, L1 and R1 also move like the D-pad, which
+    // repeats while held.
+    struct PadState
+    {
+        uint32_t buttons = 0u;
+        uint32_t held = 0u;
+        Clock::time_point repeatAt[4];
+        Clock::time_point selectSince; // Select pressed while the menu was closed
     };
 
     Menu g_menu;
+    PadState g_pad;
+    bool g_usingPad = false; // the hints show the gamepad's buttons, else the keyboard's
+    bool g_playStation = false;
     std::atomic<bool> g_captures{false};
     std::atomic<int> g_wheelNotches{0};
     float g_wheel = 0.0f;
     std::atomic<bool> g_escapeAsksToQuit{false};
     bool g_quitQuestion = false;
+    bool g_quitFromMenu = false;
+    bool g_waitingForSave = false; // quitting once the memory card is quiet
+    Clock::time_point g_waitStart;
     bool g_quitConfirmed = false;
-    Rectangle g_quitButtons[2] = {}; // quit, keep playing
+    Rectangle g_quitButtons[2] = {}; // no, yes
+    std::function<float()> g_gameAspect;
 
-    const Color kAccent{255, 170, 30, 255};
+    const Color kOrange{255, 140, 16, 255}; // the selected row, as in the game's menus
+    const Color kAmber{250, 178, 0, 255};   // hazard stripes
+    const Color kGrey{150, 150, 156, 255};
 
     void save()
     {
@@ -95,7 +142,13 @@ namespace
         for (int button = MOUSE_BUTTON_LEFT; button <= MOUSE_BUTTON_BACK; ++button)
             if (IsMouseButtonDown(button))
                 return true;
-        return false;
+        return g_pad.buttons != 0u;
+    }
+
+    void openMenu()
+    {
+        g_menu = Menu{};
+        g_menu.open = true;
     }
 
     void closeMenu()
@@ -104,6 +157,45 @@ namespace
         g_menu.releasing = true;
         g_menu.capturing = -1;
         g_menu.notice.clear();
+    }
+
+    void askToQuit(bool fromMenu)
+    {
+        g_quitQuestion = true;
+        g_quitFromMenu = fromMenu;
+    }
+
+    // Yes quits once the memory card is quiet (updateSettingsMenu); the game runs until then.
+    void answerQuit(bool quit)
+    {
+        g_quitQuestion = false;
+        if (quit)
+        {
+            closeMenu();
+            g_waitingForSave = true;
+            g_waitStart = Clock::now();
+        }
+        else if (!g_quitFromMenu)
+            g_menu.releasing = true;
+    }
+
+    // A save writes its files some frames apart: the card counts as busy until the game has run
+    // this long without changing it.
+    constexpr Clock::duration kCardQuiet = std::chrono::milliseconds(1500);
+    uint64_t g_cardChanges = 0u;
+    Clock::duration g_cardQuietFor = kCardQuiet;
+    Clock::time_point g_lastCardCheck;
+
+    bool cardBusy(Clock::time_point now)
+    {
+        const ps2_stubs::MemoryCardActivity card = ps2_stubs::memoryCardActivity();
+        if (card.writing || card.changes != g_cardChanges)
+            g_cardQuietFor = Clock::duration::zero();
+        else if (!ps2x::emulationPaused() && g_lastCardCheck != Clock::time_point{})
+            g_cardQuietFor += now - g_lastCardCheck;
+        g_cardChanges = card.changes;
+        g_lastCardCheck = now;
+        return g_cardQuietFor < kCardQuiet;
     }
 
     std::string onOff(bool value)
@@ -128,7 +220,8 @@ namespace
         case RowRefresh: return "Frame rate (next menu page)";
         case RowDeadzone: return "Stick dead zone";
         case RowControls: return "Keyboard and mouse controls";
-        default: return "Close (F1)";
+        case RowQuit: return "Quit game";
+        default: return "Continue";
         }
     }
 
@@ -171,12 +264,29 @@ namespace
         case RowKeepSpeed: return onOff(s.keepSpeed);
         case RowRefresh: return s.refreshRate + " Hz";
         case RowDeadzone: return std::to_string(int(s.stickDeadzone * 100.0f + 0.5f)) + "%";
-        case RowControls: return ">";
         default: return "";
         }
     }
 
-    // Changes a main-page value by one step; activate is Enter or a click.
+    // The line under the rows for the selected main-page row.
+    std::string mainNote(int row)
+    {
+        if (row == RowQuit)
+            return "Closes the game and goes back to the desktop";
+        if (row != RowAspect)
+            return "Saved to settings.ini at once";
+        const std::string &aspect = ps2x::hostSettings().aspect;
+        if (aspect == "stretch")
+            return "The picture fills the window";
+        const float game = ps2x::gameAspect();
+        const bool wide = aspect == "16:9";
+        if (game > 0.0f && (game > 1.5f) != wide)
+            return "The game changes to " + aspect + " at its next start and draws " + (wide ? "4:3" : "16:9") +
+                   " until then";
+        return wide ? "Real widescreen: the game draws a wider view" : "The picture of a 4:3 television";
+    }
+
+    // Changes a main-page value by one step; activate is Enter, the confirm button or a click.
     void changeMain(int row, int step, bool activate)
     {
         ps2x::HostSettings &s = ps2x::hostSettings();
@@ -255,6 +365,10 @@ namespace
                 g_menu.row = 0;
                 g_menu.column = 0;
             }
+            return;
+        case RowQuit:
+            if (activate)
+                askToQuit(true);
             return;
         default:
             if (activate)
@@ -337,75 +451,83 @@ namespace
         return -1;
     }
 
-    void updateMain()
+    bool mouseMoved()
     {
-        if (IsKeyPressed(KEY_ESCAPE))
+        return GetMouseDelta().x != 0.0f || GetMouseDelta().y != 0.0f;
+    }
+
+    void updateMain(const Input &in)
+    {
+        if (in.back)
         {
             closeMenu();
             return;
         }
-        if (pressed(KEY_UP))
+        if (in.up)
             g_menu.row = (g_menu.row + MainRowCount - 1) % MainRowCount;
-        if (pressed(KEY_DOWN))
+        if (in.down)
             g_menu.row = (g_menu.row + 1) % MainRowCount;
-        if (pressed(KEY_LEFT))
+        if (in.left)
             changeMain(g_menu.row, -1, false);
-        else if (pressed(KEY_RIGHT))
+        else if (in.right)
             changeMain(g_menu.row, 1, false);
-        else if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_SPACE))
+        else if (in.activate)
             changeMain(g_menu.row, 0, true);
         const int hovered = rowUnderMouse();
-        if (hovered >= 0 && (GetMouseDelta().x != 0.0f || GetMouseDelta().y != 0.0f))
+        if (hovered >= 0 && mouseMoved())
             g_menu.row = hovered;
+        const float x = GetMousePosition().x;
         if (hovered >= 0 && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-            changeMain(hovered, 1, true);
+            changeMain(hovered, x > g_menu.valueLeft && x < g_menu.valueCenter ? -1 : 1, true); // the left arrow lowers
         else if (hovered >= 0 && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))
             changeMain(hovered, -1, false);
     }
 
-    void updateControls()
+    void updateControls(const Input &in)
     {
         if (g_menu.capturing >= 0)
         {
-            updateCapture();
+            if (in.back) // the gamepad's back button; Escape is read by updateCapture
+                g_menu.capturing = -1;
+            else
+                updateCapture();
             return;
         }
-        if (IsKeyPressed(KEY_ESCAPE))
+        if (in.back)
         {
             g_menu.page = Page::Main;
             g_menu.row = RowControls;
             return;
         }
-        if (pressed(KEY_UP))
+        if (in.up)
             g_menu.row = (g_menu.row + kControlRowCount - 1) % kControlRowCount;
-        if (pressed(KEY_DOWN))
+        if (in.down)
             g_menu.row = (g_menu.row + 1) % kControlRowCount;
-        if (pressed(KEY_LEFT))
+        if (in.left)
             g_menu.column = (g_menu.column + 2) % 3;
-        if (pressed(KEY_RIGHT))
+        if (in.right)
             g_menu.column = (g_menu.column + 1) % 3;
-        const bool activate = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_SPACE);
-        if (activate && g_menu.row < 16)
+        if (in.activate && g_menu.row < 16)
             startCapture(g_menu.row, g_menu.column);
-        else if (activate && g_menu.row == kRowReset)
+        else if (in.activate && g_menu.row == kRowReset)
         {
             ps2x::hostSettings().keys = ps2x::HostSettings::defaultKeys();
             save();
         }
-        else if (activate)
+        else if (in.activate)
         {
             g_menu.page = Page::Main;
             g_menu.row = RowControls;
             return;
         }
-        if (g_menu.row < 16 && (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressed(KEY_DELETE)))
+        if (g_menu.row < 16 && in.clear)
         {
             ps2x::hostSettings().keys[g_menu.row][g_menu.column] = 0;
             save();
         }
 
         const Vector2 mouse = GetMousePosition();
-        const bool moved = GetMouseDelta().x != 0.0f || GetMouseDelta().y != 0.0f;
+        const bool moved = mouseMoved();
         for (size_t i = 0; i < g_menu.cells.size(); ++i)
             if (CheckCollisionPointRec(mouse, g_menu.cells[i]))
             {
@@ -438,142 +560,503 @@ namespace
         }
     }
 
-    void drawRowBackground(const Rectangle &rect, bool selected)
+    void updateQuitQuestion(const Input &in)
     {
-        if (selected)
-            DrawRectangleRec(rect, Color{255, 170, 30, 60});
+        const Vector2 mouse = GetMousePosition();
+        const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        if (in.activate || IsKeyPressed(KEY_Y) || (click && CheckCollisionPointRec(mouse, g_quitButtons[1])))
+            answerQuit(true);
+        else if (in.back || in.close || IsKeyPressed(KEY_N) || (click && CheckCollisionPointRec(mouse, g_quitButtons[0])))
+            answerQuit(false);
+    }
+
+    Input readKeys()
+    {
+        Input in;
+        in.up = pressed(KEY_UP);
+        in.down = pressed(KEY_DOWN);
+        in.left = pressed(KEY_LEFT);
+        in.right = pressed(KEY_RIGHT);
+        in.activate = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_SPACE);
+        in.back = IsKeyPressed(KEY_ESCAPE);
+        in.clear = IsKeyPressed(KEY_BACKSPACE) || IsKeyPressed(KEY_DELETE);
+        in.toggle = IsKeyPressed(KEY_F1);
+        return in;
+    }
+
+    // Holding Select opens the menu, as F1 does: Burnout does not use Select (held through a race
+    // it changes nothing), so the hold cannot clash with the game, and pads whose Guide button
+    // Windows or Steam keep for themselves can still open it.
+    constexpr Clock::duration kSelectHold = std::chrono::milliseconds(800);
+
+    Input readPad(Clock::time_point now, bool &selectHeld)
+    {
+        ps2x::HostGamepad pad = ps2x::readHostGamepad();
+        uint32_t held = pad.buttons;
+        if (pad.ly < -0.5f)
+            held |= PadUp;
+        if (pad.ly > 0.5f)
+            held |= PadDown;
+        if (pad.lx < -0.5f || (held & PadL1))
+            held |= PadLeft;
+        if (pad.lx > 0.5f || (held & PadR1))
+            held |= PadRight;
+        const uint32_t down = held & ~g_pad.held;
+        Input in;
+        bool *directions[4] = {&in.up, &in.down, &in.left, &in.right};
+        for (int i = 0; i < 4; ++i)
+        {
+            const uint32_t bit = 1u << i;
+            if ((down & bit) || ((held & bit) && now >= g_pad.repeatAt[i]))
+            {
+                *directions[i] = true;
+                g_pad.repeatAt[i] = now + std::chrono::milliseconds((down & bit) ? 400 : 80);
+            }
+        }
+        in.activate = (down & PadCross) != 0u;
+        in.back = (down & (PadCircle | PadTriangle)) != 0u; // triangle is the game's own back button
+        in.clear = (down & PadSquare) != 0u;
+        in.toggle = (down & PadGuide) != 0u;
+        in.close = (down & (PadStart | PadSelect)) != 0u;
+        if (!(held & PadSelect))
+            g_pad.selectSince = {};
+        else if (down & PadSelect)
+            g_pad.selectSince = g_menu.open ? Clock::time_point{} : now;
+        selectHeld = g_pad.selectSince != Clock::time_point{} && now - g_pad.selectSince >= kSelectHold;
+        if (selectHeld)
+            g_pad.selectSince = {};
+        if (down != 0u)
+        {
+            g_usingPad = true;
+            g_playStation = pad.playStation;
+        }
+        g_pad.buttons = pad.buttons;
+        g_pad.held = held;
+        return in;
+    }
+
+    // ---- Drawing, in the style of the game's own menus: hazard-stripe bars, white heavy italic
+    // capitals, the selected row in orange, chevrons around values and the pad's button symbols.
+
+    // A heavy italic from the system; no font is shipped. raylib's own font if none is found.
+    const std::string &menuFontFile()
+    {
+        static const std::string file = []
+        {
+            const char *windows = std::getenv("WINDIR");
+            const std::string fonts = std::string(windows ? windows : "C:/Windows") + "/Fonts/";
+            for (const std::string &candidate : {fonts + "verdanaz.ttf", fonts + "seguibli.ttf", fonts + "arialbi.ttf",
+                                                 std::string("/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"),
+                                                 std::string("/usr/share/fonts/TTF/DejaVuSans-BoldOblique.ttf"),
+                                                 std::string("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-BoldOblique.ttf"),
+                                                 std::string("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf"),
+                                                 std::string("/System/Library/Fonts/Supplemental/Verdana Bold Italic.ttf"),
+                                                 std::string("/Library/Fonts/Verdana Bold Italic.ttf")})
+            {
+                std::error_code error;
+                if (std::filesystem::is_regular_file(candidate, error))
+                    return candidate;
+            }
+            return std::string();
+        }();
+        return file;
+    }
+
+    // The font rasterized at each size drawn, for sharp text at any window size.
+    Font menuFont(float size)
+    {
+        static std::map<int, Font> fonts;
+        if (menuFontFile().empty())
+            return GetFontDefault();
+        const int pixels = std::max(8, int(size + 0.5f));
+        auto found = fonts.find(pixels);
+        if (found == fonts.end())
+        {
+            if (fonts.size() >= 12) // the window was resized: keep only new sizes
+            {
+                for (auto &entry : fonts)
+                    UnloadFont(entry.second);
+                fonts.clear();
+            }
+            Font font = LoadFontEx(menuFontFile().c_str(), pixels, nullptr, 0);
+            SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
+            found = fonts.emplace(pixels, font).first;
+        }
+        return found->second;
+    }
+
+    std::string capitals(std::string text)
+    {
+        for (char &c : text)
+            c = char(std::toupper(static_cast<unsigned char>(c)));
+        return text;
+    }
+
+    float textWidth(const std::string &text, float size)
+    {
+        return MeasureTextEx(menuFont(size), capitals(text).c_str(), size, size / 20.0f).x;
+    }
+
+    // In capitals with a drop shadow, or a black outline for titles over the stripes.
+    void drawText(const std::string &text, Vector2 at, float size, Color color, float rotation = 0.0f,
+                  bool outline = false)
+    {
+        const Font font = menuFont(size);
+        const std::string caps = capitals(text);
+        const float d = std::max(1.0f, size / 16.0f);
+        const Color shade = Fade(BLACK, 0.9f * float(color.a) / 255.0f);
+        if (outline)
+            for (const Vector2 offset : {Vector2{-d, -d}, Vector2{d, -d}, Vector2{-d, d}, Vector2{d, d}})
+                DrawTextPro(font, caps.c_str(), {at.x + offset.x, at.y + offset.y}, {0.0f, 0.0f}, rotation, size, size / 20.0f, shade);
+        DrawTextPro(font, caps.c_str(), {at.x + d, at.y + d}, {0.0f, 0.0f}, rotation, size, size / 20.0f, shade);
+        DrawTextPro(font, caps.c_str(), at, {0.0f, 0.0f}, rotation, size, size / 20.0f, color);
+    }
+
+    void triangle(Vector2 a, Vector2 b, Vector2 c, Color color)
+    {
+        // raylib skips triangles wound clockwise on screen
+        if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) > 0.0f)
+            std::swap(b, c);
+        DrawTriangle(a, b, c, color);
+    }
+
+    void quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color color)
+    {
+        triangle(a, b, c, color);
+        triangle(a, c, d, color);
+    }
+
+    // A bar of yellow and black stripes from origin, along a direction turned by angle degrees.
+    void drawStripes(Vector2 origin, float length, float thickness, float angle)
+    {
+        const float c = std::cos(angle * DEG2RAD), s = std::sin(angle * DEG2RAD);
+        const auto at = [&](float u, float v) { return Vector2{origin.x + u * c - v * s, origin.y + u * s + v * c}; };
+        quad(at(0.0f, 0.0f), at(length, 0.0f), at(length, thickness), at(0.0f, thickness), Color{8, 8, 8, 235});
+        const float inset = thickness * 0.1f, period = thickness * 0.95f, width = period * 0.48f;
+        for (float u = 0.0f; u + period < length; u += period)
+            quad(at(u + thickness * 0.8f, inset), at(u + thickness * 0.8f + width, inset),
+                 at(u + width, thickness - inset), at(u, thickness - inset), kAmber);
+    }
+
+    struct Layout
+    {
+        float width = 0.0f, height = 0.0f;
+        float left = 0.0f, span = 0.0f; // the content, centred in wide windows
+        float unit = 0.0f;              // a hundredth of the height
+    };
+
+    Layout layout()
+    {
+        Layout l;
+        l.width = float(GetScreenWidth());
+        l.height = float(GetScreenHeight());
+        l.span = std::min(l.width, l.height * 1.6f);
+        l.left = (l.width - l.span) * 0.5f;
+        l.unit = l.height / 100.0f;
+        return l;
+    }
+
+    // The tilted bar across the top with the title on it, as the game's pause menu.
+    void drawHeader(const Layout &l, const std::string &title, const std::string &subtitle)
+    {
+        const float thickness = 7.5f * l.unit;
+        const float angle = -std::atan2(12.0f * l.unit, l.width) * RAD2DEG;
+        const Vector2 origin{-0.05f * l.width, 10.5f * l.unit};
+        drawStripes(origin, l.width * 1.15f, thickness, angle);
+        const float c = std::cos(angle * DEG2RAD), s = std::sin(angle * DEG2RAD);
+        const float size = 7.5f * l.unit, u = l.left + 0.05f * l.span - origin.x;
+        drawText(title, {origin.x + u * c + 0.6f * size * s, origin.y + u * s - 0.6f * size * c}, size, WHITE, angle, true);
+        if (!subtitle.empty())
+        {
+            const float v = 0.45f * size;
+            drawText(subtitle, {origin.x + u * c - v * s, origin.y + u * s + v * c}, 3.2f * l.unit, WHITE, angle, true);
+        }
+    }
+
+    // A thin light line that fades out at both ends, above and below the game's panels.
+    void drawRule(const Layout &l, float y)
+    {
+        const int thick = std::max(2, int(0.35f * l.unit));
+        const int half = int(l.width / 2.0f);
+        const Color edge{235, 235, 240, 0}, middle{235, 235, 240, 230};
+        DrawRectangleGradientH(0, int(y) - thick / 2, half, thick, edge, middle);
+        DrawRectangleGradientH(half, int(y) - thick / 2, int(l.width) - half, thick, middle, edge);
+    }
+
+    void drawPanel(const Layout &l, float top, float bottom, float alpha = 0.72f)
+    {
+        DrawRectangle(0, int(top), int(l.width), int(bottom - top), Fade(BLACK, alpha));
+        drawRule(l, top);
+        drawRule(l, bottom);
+    }
+
+    enum class Glyph
+    {
+        Confirm,
+        Back,
+        Clear,
+        Change,
+    };
+
+    struct Hint
+    {
+        Glyph glyph;
+        std::string label;
+    };
+
+    const char *keyCaption(Glyph glyph)
+    {
+        switch (glyph)
+        {
+        case Glyph::Confirm: return "ENTER";
+        case Glyph::Back: return "ESC";
+        case Glyph::Clear: return "BACKSPACE";
+        default: return "";
+        }
+    }
+
+    // The width the glyph takes for button height 2 * r.
+    float glyphWidth(Glyph glyph, float r)
+    {
+        if (g_usingPad)
+            return 2.0f * r;
+        return glyph == Glyph::Change ? 2.6f * r : textWidth(keyCaption(glyph), r * 0.8f) + r;
+    }
+
+    void drawArrows(Vector2 c, float r, Color color)
+    {
+        const float h = r * 0.34f, gap = r * 0.12f, w = r * 0.38f;
+        triangle({c.x - gap, c.y - h}, {c.x - gap - w, c.y}, {c.x - gap, c.y + h}, color);
+        triangle({c.x + gap, c.y - h}, {c.x + gap + w, c.y}, {c.x + gap, c.y + h}, color);
+    }
+
+    // The gamepad's button, as the game draws it on PlayStation (a ring around the symbol), Xbox
+    // letters for other pads, or a key cap. x is the left edge; returns the width.
+    float drawGlyph(Glyph glyph, float x, float y, float r)
+    {
+        const float width = glyphWidth(glyph, r);
+        const Vector2 c{x + width / 2.0f, y};
+        if (!g_usingPad)
+        {
+            const Rectangle cap{x, y - r * 0.9f, width, r * 1.8f};
+            const float edge = std::max(1.0f, r * 0.12f);
+            DrawRectangleRounded(cap, 0.3f, 6, Color{225, 225, 230, 255});
+            DrawRectangleRounded({cap.x + edge, cap.y + edge, cap.width - 2 * edge, cap.height - 2 * edge}, 0.3f, 6,
+                                 Color{28, 28, 32, 255});
+            if (glyph == Glyph::Change)
+                drawArrows(c, r, WHITE);
+            else
+            {
+                const float size = r * 0.8f;
+                drawText(keyCaption(glyph), {c.x - textWidth(keyCaption(glyph), size) / 2.0f, c.y - size / 2.0f}, size, WHITE);
+            }
+            return width;
+        }
+        if (glyph == Glyph::Change || g_playStation)
+        {
+            DrawCircleV(c, r, Color{10, 10, 12, 255});
+            DrawRing(c, r * 0.8f, r, 0.0f, 360.0f, 40, Color{225, 225, 230, 255});
+            const float s = r * 0.38f, t = r * 0.17f;
+            if (glyph == Glyph::Confirm)
+            {
+                DrawLineEx({c.x - s, c.y - s}, {c.x + s, c.y + s}, t, Color{150, 165, 255, 255});
+                DrawLineEx({c.x - s, c.y + s}, {c.x + s, c.y - s}, t, Color{150, 165, 255, 255});
+            }
+            else if (glyph == Glyph::Back)
+                DrawRing(c, s - t / 2.0f, s + t / 2.0f, 0.0f, 360.0f, 32, Color{255, 105, 110, 255});
+            else if (glyph == Glyph::Clear)
+                DrawRectangleLinesEx({c.x - s * 0.85f, c.y - s * 0.85f, s * 1.7f, s * 1.7f}, t * 0.9f, Color{240, 140, 200, 255});
+            else
+                drawArrows(c, r, WHITE);
+            return width;
+        }
+        static const std::pair<const char *, Color> kLetters[] = {
+            {"A", Color{96, 176, 48, 255}}, {"B", Color{220, 48, 40, 255}}, {"X", Color{32, 112, 224, 255}}};
+        const auto &[letter, color] = kLetters[int(glyph)];
+        DrawCircleV(c, r, color);
+        DrawRing(c, r * 0.86f, r, 0.0f, 360.0f, 40, Fade(BLACK, 0.45f));
+        const float size = r * 1.3f;
+        DrawTextPro(menuFont(size), letter, {c.x - MeasureTextEx(menuFont(size), letter, size, 0.0f).x / 2.0f, c.y - size / 2.0f},
+                    {0.0f, 0.0f}, 0.0f, size, 0.0f, WHITE);
+        return width;
+    }
+
+    // The bottom bar with the buttons to press, on black at its left as in the game.
+    void drawFooter(const Layout &l, const std::vector<Hint> &hints)
+    {
+        const float top = 89.5f * l.unit, thickness = 8.5f * l.unit;
+        drawStripes({-thickness, top}, l.width + 2.0f * thickness, thickness, 0.0f);
+        const float r = 2.4f * l.unit, size = 3.1f * l.unit, gap = 2.5f * l.unit, y = top + thickness / 2.0f;
+        float end = l.left + 0.04f * l.span;
+        for (const Hint &hint : hints)
+            end += glyphWidth(hint.glyph, r) + 0.8f * r + textWidth(hint.label, size) + gap;
+        DrawRectangle(0, int(top), int(end), int(thickness + 1.0f), BLACK);
+        DrawRectangleGradientH(int(end), int(top), int(8.0f * l.unit), int(thickness + 1.0f), BLACK, Fade(BLACK, 0.0f));
+        float x = l.left + 0.04f * l.span;
+        for (const Hint &hint : hints)
+        {
+            x += drawGlyph(hint.glyph, x, y, r) + 0.8f * r;
+            drawText(hint.label, {x, y - size / 2.0f}, size, WHITE);
+            x += textWidth(hint.label, size) + gap;
+        }
+    }
+
+    void drawNote(const Layout &l, const std::string &note)
+    {
+        const float size = 2.8f * l.unit;
+        drawText(note, {(l.width - textWidth(note, size)) / 2.0f, 85.0f * l.unit}, size, Color{205, 205, 210, 255});
+    }
+
+    void drawChevron(Vector2 c, float size, bool right, Color color)
+    {
+        const float d = right ? 1.0f : -1.0f, t = size * 0.26f;
+        const Vector2 tip{c.x + d * size * 0.22f, c.y};
+        DrawLineEx({c.x - d * size * 0.22f, c.y - size * 0.45f}, tip, t, color);
+        DrawLineEx(tip, {c.x - d * size * 0.22f, c.y + size * 0.45f}, t, color);
+        DrawCircleV(tip, t / 2.0f, color);
+    }
+
+    // The value of a main-page row between its arrows; the volume as slanted bars like the game's.
+    void drawValue(int row, float y, float size, float half, bool selected)
+    {
+        const float center = g_menu.valueCenter;
+        const Color arrows = selected ? WHITE : kGrey;
+        const float spread = selected ? half + size * 0.15f : half;
+        if (row == RowControls)
+        {
+            drawChevron({center + spread, y}, size, true, arrows);
+            return;
+        }
+        if (row > RowControls)
+            return;
+        drawChevron({center - spread, y}, size, false, arrows);
+        drawChevron({center + spread, y}, size, true, arrows);
+        if (row == RowVolume)
+        {
+            const int steps = 20, filled = ps2x::hostSettings().volume / 5;
+            const float step = (half - size * 0.7f) * 2.0f / float(steps), w = step * 0.62f, h = size * 0.42f;
+            float x = center - step * float(steps) / 2.0f;
+            for (int i = 0; i < steps; ++i, x += step)
+                quad({x + h * 0.5f, y - h}, {x + h * 0.5f + w, y - h}, {x + w, y + h}, {x, y + h},
+                     i < filled ? Color{240, 92, 30, 255} : Color{86, 86, 92, 255});
+            return;
+        }
+        const std::string value = mainValue(row);
+        drawText(value, {center - textWidth(value, size) / 2.0f, y - size / 2.0f}, size, WHITE);
+    }
+
+    std::vector<Hint> pageHints()
+    {
+        if (g_menu.page == Page::Main)
+            return {{Glyph::Confirm, "Select"}, {Glyph::Change, "Change"}, {Glyph::Back, "Back"}};
+        if (g_menu.capturing >= 0)
+            return {{Glyph::Back, "Cancel"}};
+        return {{Glyph::Confirm, "Change"}, {Glyph::Change, "Input"}, {Glyph::Clear, "Clear"}, {Glyph::Back, "Back"}};
     }
 
     void drawMenu()
     {
-        const int width = GetScreenWidth(), height = GetScreenHeight();
-        DrawRectangle(0, 0, width, height, Fade(BLACK, 0.6f));
+        const Layout l = layout();
+        DrawRectangle(0, 0, int(l.width), int(l.height), Fade(BLACK, 0.5f));
         const bool controls = g_menu.page == Page::Controls;
+        drawHeader(l, controls ? "Controls" : "Settings", controls ? "Keyboard and mouse" : "");
+        const float top = 21.0f * l.unit, bottom = 82.5f * l.unit;
+        drawPanel(l, top, bottom);
         const int rowCount = controls ? kControlRowCount : MainRowCount;
-        // Rows, a title, a gap and three hint lines must fit.
-        const int font = std::clamp(height / (rowCount + 9) * 2 / 3, 10, 32);
-        const int rowHeight = font * 3 / 2;
-        const int panelWidth = std::min(width - 2 * font, font * 30);
-        const int panelHeight = rowHeight * (rowCount + 5);
-        const int left = (width - panelWidth) / 2, top = std::max(0, (height - panelHeight) / 2);
-        DrawRectangle(left, top, panelWidth, panelHeight, Color{20, 20, 24, 235});
-        DrawRectangleLines(left, top, panelWidth, panelHeight, kAccent);
-        const int pad = font;
-        DrawText(controls ? "CONTROLS - KEYBOARD AND MOUSE" : "SETTINGS", left + pad, top + font / 2, font, kAccent);
-
+        const float rowHeight = (bottom - top - 2.0f * l.unit) / float(rowCount);
+        const float size = std::min(rowHeight * 0.6f, 4.0f * l.unit);
+        const float labelX = l.left + 0.07f * l.span, half = 0.15f * l.span;
+        g_menu.valueCenter = l.left + 0.72f * l.span;
+        g_menu.valueLeft = g_menu.valueCenter - half - size;
         g_menu.rows.assign(size_t(rowCount), Rectangle{});
         g_menu.cells.clear();
-        int y = top + rowHeight * 2;
-        for (int row = 0; row < rowCount; ++row, y += rowHeight)
+        for (int row = 0; row < rowCount; ++row)
         {
-            const Rectangle rect{float(left + pad / 2), float(y - font / 4), float(panelWidth - pad), float(rowHeight)};
-            g_menu.rows[size_t(row)] = rect;
+            const float rowTop = top + l.unit + float(row) * rowHeight, y = rowTop + rowHeight / 2.0f;
+            g_menu.rows[size_t(row)] = Rectangle{l.left + 0.04f * l.span, rowTop, 0.92f * l.span, rowHeight};
             const bool selected = row == g_menu.row;
+            const float labelSize = selected && g_menu.capturing < 0 ? size * 1.12f : size;
+            const std::string label = !controls ? mainLabel(row)
+                                      : row == kRowReset ? "Reset to defaults"
+                                      : row == kRowBack ? "Back"
+                                                        : kButtonLabels[row];
+            drawText(label, {labelX, y - labelSize / 2.0f}, labelSize, selected ? kOrange : WHITE);
             if (!controls)
             {
-                drawRowBackground(rect, selected);
-                DrawText(mainLabel(row).c_str(), left + pad, y, font, selected ? WHITE : LIGHTGRAY);
-                const std::string value = selected && row < RowControls ? "< " + mainValue(row) + " >" : mainValue(row);
-                DrawText(value.c_str(), left + panelWidth - pad - MeasureText(value.c_str(), font), y, font,
-                         selected ? kAccent : LIGHTGRAY);
+                drawValue(row, y, size, half, selected);
                 continue;
             }
             if (row >= 16)
-            {
-                drawRowBackground(rect, selected);
-                DrawText(row == kRowReset ? "Reset to defaults" : "Back (Esc)", left + pad, y, font,
-                         selected ? WHITE : LIGHTGRAY);
                 continue;
-            }
-            DrawText(kButtonLabels[row], left + pad, y, font, selected ? WHITE : LIGHTGRAY);
-            const int cellWidth = (panelWidth - 2 * pad) * 23 / 100;
+            // Three inputs a button.
+            const float gap = 0.012f * l.span, cellsLeft = l.left + 0.38f * l.span;
+            const float cellWidth = (l.left + 0.96f * l.span - cellsLeft - 2.0f * gap) / 3.0f;
             for (int column = 0; column < 3; ++column)
             {
-                const Rectangle cell{float(left + panelWidth - pad - (3 - column) * (cellWidth + pad / 2)),
-                                     float(y - font / 4), float(cellWidth), float(rowHeight - 2)};
+                const Rectangle cell{cellsLeft + float(column) * (cellWidth + gap), rowTop + rowHeight * 0.1f, cellWidth,
+                                     rowHeight * 0.8f};
                 g_menu.cells.push_back(cell);
                 const bool current = selected && column == g_menu.column;
-                DrawRectangleRec(cell, current ? Color{255, 170, 30, 70} : Color{255, 255, 255, 18});
+                DrawRectangleRec(cell, current ? Color{255, 140, 16, 60} : Color{255, 255, 255, 16});
+                if (current)
+                    DrawRectangleLinesEx(cell, std::max(1.0f, 0.25f * l.unit), kOrange);
                 const int input = ps2x::hostSettings().keys[size_t(row)][size_t(column)];
-                const std::string text = g_menu.capturing == row && current ? "press..."
+                const std::string text = g_menu.capturing == row && current ? "Press..."
                                          : input == 0                        ? "-"
                                                                              : ps2x::inputName(input);
-                const int cellFont = MeasureText(text.c_str(), font) > cellWidth - font / 2 ? font * 2 / 3 : font;
-                DrawText(text.c_str(), int(cell.x) + font / 3, y + (font - cellFont) / 2, cellFont, current ? kAccent : LIGHTGRAY);
+                const float textSize = textWidth(text, size * 0.85f) > cellWidth - size ? size * 0.6f : size * 0.85f;
+                drawText(text, {cell.x + (cellWidth - textWidth(text, textSize)) / 2.0f, y - textSize / 2.0f}, textSize,
+                         current ? kOrange : Color{215, 215, 220, 255});
             }
         }
-
-        y += rowHeight / 2;
-        const char *hints[3];
+        std::string note;
         if (!controls)
-        {
-            hints[0] = "Up/Down: choose   Left/Right or click: change   Enter: open";
-            hints[1] = g_menu.row == RowAspect ? "16:9 widens the game's view from its next start"
-                                               : "Saved to settings.ini at once";
-            hints[2] = "Esc or F1: back to the game (paused while this is open)";
-        }
+            note = mainNote(g_menu.row);
         else if (g_menu.capturing >= 0)
-        {
-            hints[0] = "Press a key, a mouse button or turn the wheel";
-            hints[1] = g_menu.notice.empty() ? "Esc: cancel" : g_menu.notice.c_str();
-            hints[2] = "";
-        }
+            note = g_menu.notice.empty() ? "Press a key, a mouse button or turn the wheel" : g_menu.notice;
         else
-        {
-            hints[0] = "Enter or click: change   Left/Right: first, second or third input";
-            hints[1] = "Backspace or right click: clear   A key presses one button only";
-            hints[2] = "Esc: back. Gamepads keep their own layout";
-        }
-        for (const char *hint : hints)
-        {
-            DrawText(hint, left + pad, y, font * 3 / 4, GRAY);
-            y += rowHeight * 3 / 4;
-        }
+            note = "A key presses one button only. Gamepads keep their own layout";
+        drawNote(l, note);
+        drawFooter(l, pageHints());
     }
 
-    void updateQuitQuestion()
-    {
-        const Vector2 mouse = GetMousePosition();
-        const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_Y) ||
-            (click && CheckCollisionPointRec(mouse, g_quitButtons[0])))
-            g_quitConfirmed = true;
-        else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_N) ||
-                 (click && CheckCollisionPointRec(mouse, g_quitButtons[1])))
-        {
-            g_quitQuestion = false;
-            g_menu.releasing = true;
-        }
-    }
-
+    // The game's question style: a black band between two lines, the choices under the text.
     void drawQuitQuestion()
     {
-        const int width = GetScreenWidth(), height = GetScreenHeight();
-        DrawRectangle(0, 0, width, height, Fade(BLACK, 0.6f));
-        const int font = std::clamp(height / 24, 14, 40);
-        const int panelWidth = std::min(width - 2 * font, font * 18), panelHeight = font * 6;
-        const int left = (width - panelWidth) / 2, top = (height - panelHeight) / 2;
-        DrawRectangle(left, top, panelWidth, panelHeight, Color{20, 20, 24, 240});
-        DrawRectangleLines(left, top, panelWidth, panelHeight, kAccent);
-        const char *title = "Quit the game?";
-        DrawText(title, left + (panelWidth - MeasureText(title, font)) / 2, top + font, font, WHITE);
-        const char *labels[2] = {"Quit (Enter)", "Keep playing (Esc)"};
-        const int buttonWidth = (panelWidth - 3 * font) / 2;
+        const Layout l = layout();
+        if (!g_quitFromMenu)
+            DrawRectangle(0, 0, int(l.width), int(l.height), Fade(BLACK, 0.5f));
+        drawPanel(l, 36.0f * l.unit, 66.0f * l.unit, 0.92f); // hides the menu's rows behind it
+        const std::string question = "Quit the game and go back to the desktop?";
+        const std::string detail = "Anything the game has not saved will be lost";
+        const float size = 4.0f * l.unit, small = 2.9f * l.unit;
+        drawText(question, {(l.width - textWidth(question, size)) / 2.0f, 42.0f * l.unit}, size, WHITE);
+        drawText(detail, {(l.width - textWidth(detail, small)) / 2.0f, 48.5f * l.unit}, small, Color{205, 205, 210, 255});
+        const float r = 2.8f * l.unit, y = 58.5f * l.unit, labelSize = 3.6f * l.unit;
+        const Hint choices[2] = {{Glyph::Back, "No"}, {Glyph::Confirm, "Yes"}};
         for (int i = 0; i < 2; ++i)
         {
-            g_quitButtons[i] = Rectangle{float(left + font + i * (buttonWidth + font)), float(top + font * 3),
-                                         float(buttonWidth), float(font * 2)};
+            const float width = glyphWidth(choices[i].glyph, r) + 0.8f * r + textWidth(choices[i].label, labelSize);
+            const float x = l.width * (i == 0 ? 0.36f : 0.64f) - width / 2.0f;
+            g_quitButtons[i] = Rectangle{x - r, y - 2.0f * r, width + 2.0f * r, 4.0f * r};
             const bool hover = CheckCollisionPointRec(GetMousePosition(), g_quitButtons[i]);
-            DrawRectangleRec(g_quitButtons[i], hover ? Color{255, 170, 30, 90} : Color{255, 255, 255, 25});
-            const int labelFont = font * 2 / 3;
-            DrawText(labels[i], int(g_quitButtons[i].x) + (buttonWidth - MeasureText(labels[i], labelFont)) / 2,
-                     int(g_quitButtons[i].y) + (font * 2 - labelFont) / 2, labelFont, i == 0 ? kAccent : LIGHTGRAY);
+            const float labelX = x + drawGlyph(choices[i].glyph, x, y, r) + 0.8f * r;
+            drawText(choices[i].label, {labelX, y - labelSize / 2.0f}, labelSize, hover ? kOrange : WHITE);
         }
+    }
+
+    void drawSaving()
+    {
+        const Layout l = layout();
+        drawPanel(l, 70.0f * l.unit, 82.0f * l.unit, 0.92f);
+        const std::string title = "Saving to the memory card", detail = "The game closes when the save is done";
+        const float size = 3.6f * l.unit, small = 2.8f * l.unit;
+        drawText(title, {(l.width - textWidth(title, size)) / 2.0f, 72.5f * l.unit}, size, kOrange);
+        drawText(detail, {(l.width - textWidth(detail, small)) / 2.0f, 77.0f * l.unit}, small, WHITE);
     }
 
     void drawFps(uint64_t framesShown)
     {
-        using Clock = std::chrono::steady_clock;
         static Clock::time_point start = Clock::now();
         static uint64_t startFrames = framesShown;
         static int fps = 0;
@@ -597,26 +1080,49 @@ namespace ps2x
 {
     void updateSettingsMenu()
     {
-        if (g_quitQuestion)
-            updateQuitQuestion();
-        else if (!g_menu.open && g_escapeAsksToQuit.load(std::memory_order_acquire) && IsKeyPressed(KEY_ESCAPE))
-            g_quitQuestion = true;
-        else if (IsKeyPressed(KEY_F1))
+        const auto now = Clock::now();
+        bool selectHeld = false;
+        const Input pad = readPad(now, selectHeld);
+        Input in = g_menu.capturing >= 0 ? Input{} : readKeys(); // a key being bound is not a command
+        if ((g_menu.capturing < 0 && GetKeyPressed() != 0) || mouseMoved() || IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+            g_usingPad = false;
+        in.up |= pad.up;
+        in.down |= pad.down;
+        in.left |= pad.left;
+        in.right |= pad.right;
+        in.activate |= pad.activate;
+        in.back |= pad.back;
+        in.clear |= pad.clear;
+        in.toggle |= pad.toggle;
+        in.close |= pad.close;
+
+        const bool busy = cardBusy(now);
+        if (g_waitingForSave)
         {
-            if (g_menu.open)
-                closeMenu();
-            else
-            {
-                g_menu = Menu{};
-                g_menu.open = true;
-            }
+            // The game runs on until its save is written (a save never takes this long).
+            g_quitConfirmed = !busy || now - g_waitStart >= std::chrono::seconds(10);
+            if (g_quitConfirmed)
+                std::cout << "[menu] quit after the memory card " << (busy ? "stayed busy for 10 s" : "save") << std::endl;
         }
+        else if (g_quitQuestion)
+        {
+            updateQuitQuestion(in);
+            g_quitConfirmed = g_waitingForSave && !busy; // yes, with no save under way: at once
+            if (g_waitingForSave && busy)
+                std::cout << "[menu] quit: waiting for the memory card save" << std::endl;
+        }
+        else if (!g_menu.open && g_escapeAsksToQuit.load(std::memory_order_acquire) && IsKeyPressed(KEY_ESCAPE))
+            askToQuit(false);
+        else if (!g_menu.open && (in.toggle || selectHeld))
+            openMenu();
+        else if (g_menu.open && (in.toggle || in.close))
+            closeMenu();
         else if (g_menu.open)
         {
             if (g_menu.page == Page::Main)
-                updateMain();
+                updateMain(in);
             else
-                updateControls();
+                updateControls(in);
         }
         if (!g_menu.open && g_menu.releasing && !menuKeyHeld())
             g_menu.releasing = false;
@@ -638,6 +1144,24 @@ namespace ps2x
     {
         g_pictureWidth = width;
         g_pictureHeight = height;
+    }
+
+    void setGameAspectProbe(std::function<float()> probe)
+    {
+        g_gameAspect = std::move(probe);
+    }
+
+    float gameAspect()
+    {
+        return g_gameAspect ? g_gameAspect() : 0.0f;
+    }
+
+    float pictureAspect()
+    {
+        const float game = gameAspect();
+        if (game > 0.0f)
+            return game;
+        return hostSettings().aspect == "16:9" ? 16.0f / 9.0f : 4.0f / 3.0f;
     }
 
     int takeMouseWheelNotch()
@@ -669,11 +1193,16 @@ namespace ps2x
 
     void requestQuitConfirmation()
     {
+        if (g_waitingForSave)
+            return;
         // A second close request while asking quits.
         if (g_quitQuestion)
-            g_quitConfirmed = true;
-        g_quitQuestion = true;
-        g_menu.open = false;
+            answerQuit(true);
+        else
+        {
+            g_menu.open = false;
+            askToQuit(false);
+        }
     }
 
     bool quitConfirmed()
@@ -694,5 +1223,7 @@ namespace ps2x
             drawMenu();
         if (g_quitQuestion)
             drawQuitQuestion();
+        if (g_waitingForSave)
+            drawSaving();
     }
 }

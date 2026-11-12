@@ -486,6 +486,12 @@ int main(int argc, char** argv) {
             if (!runtime.hasFunction(address) && runtime.registerFunction(address, &continueFrequencySkip))
                 g_continuation = address;
         burnout::installFrameRate(runtime);
+        // The window keeps the shape the game draws: 16:9 while the view manager's flag (0x43E7C0
+        // + 0xD) is set. The game sets it once, at boot, from the console's screen size
+        // (FUN_001b48f8), and a save state keeps the flag it was saved with. Read only.
+        ps2x::setGameAspectProbe([rdram = runtime.memory().getRDRAM()] {
+            return rdram[0x43E7CDu] == 1u ? 16.0f / 9.0f : 4.0f / 3.0f;
+        });
         traceCalls(runtime, options.traceCalls);
         // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
         // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores

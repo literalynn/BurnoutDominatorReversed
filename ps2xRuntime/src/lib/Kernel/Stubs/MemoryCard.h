@@ -37,6 +37,14 @@ namespace ps2_stubs
     };
 
     MemoryCardDebugSnapshot getMemoryCardDebugSnapshot();
+    // For a clean quit: changes counts the commands that changed a card so far (writes, deletions,
+    // new folders...); writing says whether a file is open for writing.
+    struct MemoryCardActivity
+    {
+        uint64_t changes = 0u;
+        bool writing = false;
+    };
+    MemoryCardActivity memoryCardActivity();
     void sceMcChangeThreadPriority(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void sceMcChdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void sceMcClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);

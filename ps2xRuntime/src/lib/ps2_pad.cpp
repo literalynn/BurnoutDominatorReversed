@@ -4,8 +4,11 @@
 #include "runtime/host_settings.h"
 #include "runtime/settings_menu.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <utility>
 
 #if defined(PS2X_HAS_SDL2)
@@ -35,12 +38,18 @@ namespace
     constexpr uint16_t PAD_L1 = 0x0400u;
     constexpr uint16_t PAD_R2 = 0x0200u;
     constexpr uint16_t PAD_L2 = 0x0100u;
+    // In padButtonNames() order (host_settings.h).
+    constexpr uint16_t kPadMasks[16] = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_CROSS, PAD_CIRCLE,
+                                        PAD_SQUARE, PAD_TRIANGLE, PAD_L1, PAD_R1, PAD_L2, PAD_R2,
+                                        PAD_START, PAD_SELECT, PAD_L3, PAD_R3};
 
     // Sticks in -1..1 and the D-pad, face, shoulder and stick buttons as PAD_* bits.
     struct GamepadInput
     {
         uint16_t pressed = 0u;
         float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
+        bool guide = false;
+        bool playStation = false;
     };
 
 #if defined(PS2X_HAS_SDL2)
@@ -102,6 +111,9 @@ namespace
         for (const auto &[button, mask] : kButtons)
             if (SDL_GameControllerGetButton(controller, button))
                 input.pressed |= mask;
+        input.guide = SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_GUIDE) != 0;
+        const SDL_GameControllerType type = SDL_GameControllerGetType(controller);
+        input.playStation = type == SDL_CONTROLLER_TYPE_PS3 || type == SDL_CONTROLLER_TYPE_PS4 || type == SDL_CONTROLLER_TYPE_PS5;
         constexpr Sint16 kTriggerPressed = 8000;
         if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > kTriggerPressed)
             input.pressed |= PAD_L2;
@@ -143,6 +155,9 @@ namespace
         for (const auto &[button, mask] : kButtons)
             if (IsGamepadButtonDown(gamepad, button))
                 input.pressed |= mask;
+        input.guide = IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE);
+        const std::string name = GetGamepadName(gamepad);
+        input.playStation = name.find("PS") != std::string::npos || name.find("Dual") != std::string::npos;
         input.lx = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X);
         input.ly = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y);
         input.rx = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X);
@@ -150,6 +165,22 @@ namespace
         return true;
     }
 #endif
+
+    // The game thread reads the pad while the game runs, the settings menu (window thread) also
+    // while it is paused: one read at a time, and the menu reuses a read a few milliseconds old.
+    std::mutex g_padMutex;
+    GamepadInput g_lastPad;
+    bool g_lastConnected = false;
+    std::chrono::steady_clock::time_point g_lastRead;
+
+    bool pollGamepad(GamepadInput &input)
+    {
+        std::lock_guard<std::mutex> lock(g_padMutex);
+        g_lastConnected = readGamepad(input);
+        g_lastPad = input;
+        g_lastRead = std::chrono::steady_clock::now();
+        return g_lastConnected;
+    }
 }
 
 bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
@@ -170,9 +201,11 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
 
     // The first connected gamepad and the keyboard both drive the DualShock 2, at any time.
     GamepadInput pad;
-    if (readGamepad(pad))
+    if (pollGamepad(pad))
     {
-        clearBit(pad.pressed);
+        // Not while the settings menu has the pad: a button that closed it may still be held.
+        if (!ps2x::settingsMenuCapturesInput())
+            clearBit(pad.pressed);
 
         // Radial dead zone, then the remaining range spread over 0..255.
         const float deadzone = ps2x::hostSettings().stickDeadzone;
@@ -194,9 +227,6 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     // settings menu has them.
     if (!ps2x::settingsMenuCapturesInput())
     {
-        static constexpr uint16_t kMasks[16] = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_CROSS, PAD_CIRCLE,
-                                                PAD_SQUARE, PAD_TRIANGLE, PAD_L1, PAD_R1, PAD_L2, PAD_R2,
-                                                PAD_START, PAD_SELECT, PAD_L3, PAD_R3};
         const bool alt = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
         // A wheel notch holds its binding for three polls, then leaves three released.
         static int wheelHeld = 0, wheelGap = 0, wheelDirection = 0;
@@ -224,7 +254,7 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
                                   : input > 0                ? IsKeyDown(input)
                                                              : false;
                 if (down)
-                    clearBit(kMasks[button]);
+                    clearBit(kPadMasks[button]);
             }
     }
 
@@ -233,9 +263,35 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     return true;
 }
 
+ps2x::HostGamepad ps2x::readHostGamepad()
+{
+    GamepadInput pad;
+    HostGamepad out;
+    {
+        std::unique_lock<std::mutex> lock(g_padMutex);
+        if (std::chrono::steady_clock::now() - g_lastRead < std::chrono::milliseconds(15))
+            pad = g_lastPad, out.connected = g_lastConnected;
+        else
+        {
+            lock.unlock();
+            out.connected = pollGamepad(pad);
+        }
+    }
+    out.playStation = pad.playStation;
+    out.lx = pad.lx;
+    out.ly = pad.ly;
+    for (int i = 0; i < 16; ++i)
+        if (pad.pressed & kPadMasks[i])
+            out.buttons |= 1u << i;
+    if (pad.guide)
+        out.buttons |= 1u << kGuideButton;
+    return out;
+}
+
 void ps2x::setGamepadRumble(bool small, uint8_t large)
 {
 #if defined(PS2X_HAS_SDL2)
+    std::lock_guard<std::mutex> lock(g_padMutex); // the menu's reads may close a lost pad
     if (!g_controller || !ps2x::hostSettings().vibration)
         return;
     // The game sets the motors when they change; a long duration keeps them running until then.

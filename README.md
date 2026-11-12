@@ -147,7 +147,7 @@ Each PS2 button takes up to three keys, mouse buttons or wheel directions: chang
 
 | Key | |
 |---|---|
-| **F1** | settings menu (the game pauses) |
+| **F1** · gamepad: hold **Select**, or **Guide** | settings menu (the game pauses), with *Quit game* |
 | **F11** · **Alt+Enter** | full screen |
 | **F5** · **F7** | save · load state |
 | **F9** | mark a glitch: notes the moment in the log and saves a screenshot and a save state in `marks/` |
@@ -164,7 +164,7 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 | `window_width`, `window_height` | 1280 × 960 | start-up window size |
 | `fullscreen` | false | borderless full screen |
 | `vsync`, `fps_limit` | true, 0 | display sync and cap |
-| `aspect` | 4:3 | `4:3`, `16:9` or `stretch`. With `16:9` the game draws a wider view from its next start (a save state keeps the view it was saved with); `stretch` fills the window with the 4:3 picture |
+| `aspect` | 16:9 | `16:9`, `4:3` or `stretch`. With `16:9` the game draws a wider view. A change applies from the game's next start (a save state keeps the view it was saved with); until then the window keeps the shape the game draws. `stretch` fills the window with the picture |
 | `smooth_scaling` | true | bilinear enlargement |
 | `super_sampling` | 4 | samples per pixel: 1, 2, 4, 8 or 16 |
 | `high_resolution` | true | a higher resolution built from the samples: 2x (1280 pixels wide) with 4 or 8 samples, 4x (2560) with 16 |

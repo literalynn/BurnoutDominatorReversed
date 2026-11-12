@@ -2,6 +2,7 @@
 #include "ps2_runtime.h"
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "Kernel/Stubs/MemoryCard.h"
 #include "runtime/host_settings.h"
 #include "runtime/host_audio.h"
 
@@ -590,6 +591,44 @@ void register_ps2_runtime_io_tests()
             t.Equals(syncMc(test.rdram, &cmd), 0, "sceMcClose should succeed");
         });
 
+        tc.Run("memoryCardActivity counts card changes and files open for writing", [](TestCase &t)
+        {
+            TestContext test;
+            clearContext(test.ctx);
+            ps2_stubs::sceMcInit(test.rdram.data(), &test.ctx, nullptr);
+
+            const uint32_t fileAddr = GUEST_STRING_AREA_START + 0x700;
+            const uint32_t writeBufAddr = GUEST_BUFFER_AREA_START + 0x800;
+            const std::string payload = "save";
+            writeGuestString(test.rdram.data(), fileAddr, "/activity.bin");
+            std::memcpy(test.rdram.data() + writeBufAddr, payload.data(), payload.size());
+            const ps2_stubs::MemoryCardActivity before = ps2_stubs::memoryCardActivity();
+            t.IsTrue(!before.writing, "no file is open for writing");
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 6, fileAddr);
+            setRegU32(test.ctx, 7, PS2_FIO_WRITE_CREATE_TRUNC);
+            ps2_stubs::sceMcOpen(test.rdram.data(), &test.ctx, nullptr);
+            int32_t cmd = 0;
+            const int32_t fd = syncMc(test.rdram, &cmd);
+            t.IsTrue(fd >= 0, "sceMcOpen should succeed");
+            t.IsTrue(ps2_stubs::memoryCardActivity().writing, "a file open for writing counts");
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 4, static_cast<uint32_t>(fd));
+            setRegU32(test.ctx, 5, writeBufAddr);
+            setRegU32(test.ctx, 6, static_cast<uint32_t>(payload.size()));
+            ps2_stubs::sceMcWrite(test.rdram.data(), &test.ctx, nullptr);
+            t.Equals(syncMc(test.rdram, &cmd), static_cast<int32_t>(payload.size()), "sceMcWrite should write");
+            t.IsTrue(ps2_stubs::memoryCardActivity().changes > before.changes, "a write changes the card");
+
+            clearContext(test.ctx);
+            setRegU32(test.ctx, 4, static_cast<uint32_t>(fd));
+            ps2_stubs::sceMcClose(test.rdram.data(), &test.ctx, nullptr);
+            t.Equals(syncMc(test.rdram, &cmd), 0, "sceMcClose should succeed");
+            t.IsTrue(!ps2_stubs::memoryCardActivity().writing, "a closed file no longer counts");
+        });
+
         tc.Run("sceMcGetDir includes dot entries and file metadata", [](TestCase &t)
         {
             TestContext test;
@@ -749,13 +788,14 @@ void register_ps2_runtime_io_tests()
             settings.fxaa = true;
             settings.hudSmoothing = false;
             settings.keepSpeed = false;
-            settings.aspect = "16:9";
+            settings.aspect = "4:3";
             settings.volume = 40;
             settings.refreshRate = "144";
             settings.keys[4] = {ps2x::kMouseInput, 'J', ps2x::kMouseWheelDown};
             settings.keys[12] = {0, 0, 0};
             t.IsTrue(ps2x::writeHostSettings(path), "defaults are written");
             settings = ps2x::HostSettings{};
+            t.Equals(settings.aspect, std::string("16:9"), "a new settings file is 16:9");
             std::string errors;
             t.IsTrue(ps2x::loadHostSettings(path, errors), "the written file loads");
             t.Equals(errors, std::string(), "the written file has no bad line");
@@ -764,7 +804,7 @@ void register_ps2_runtime_io_tests()
             t.IsTrue(settings.fxaa, "fxaa round-trips");
             t.IsTrue(!settings.hudSmoothing, "hud_smoothing round-trips");
             t.IsTrue(!settings.keepSpeed, "keep_speed round-trips");
-            t.Equals(settings.aspect, std::string("16:9"), "aspect round-trips");
+            t.Equals(settings.aspect, std::string("4:3"), "aspect round-trips");
             t.Equals(settings.volume, 40, "volume round-trips");
             t.Equals(settings.refreshRate, std::string("144"), "a frame rate above 60 round-trips");
             t.Equals(settings.keys[4][0], ps2x::kMouseInput, "a mouse button binding round-trips");

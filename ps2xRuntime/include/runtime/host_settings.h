@@ -15,7 +15,7 @@ namespace ps2x
         bool fullscreen = false;   // borderless window on the current monitor
         bool vsync = true;         // presentation waits for the monitor refresh
         int fpsLimit = 0;          // presentation loop limit, 0 = none (monitor refresh with vsync)
-        std::string aspect = "4:3"; // 4:3, 16:9 (in-game widescreen) or stretch
+        std::string aspect = "16:9"; // 16:9 (in-game widescreen), 4:3 or stretch
         bool smoothScaling = true; // bilinear filtering when the image is enlarged
         int superSampling = 4;     // paraLLEl-GS SSAA: 1, 2, 4, 8 or 16
         bool progressiveScan = true; // whole frames instead of interlaced fields (no line combing)

@@ -75,6 +75,7 @@ namespace ps2_stubs
             FILE *file = nullptr;
             int32_t port = 0;
             std::filesystem::path hostPath;
+            bool writing = false;
         };
 
         struct McPortState
@@ -93,6 +94,7 @@ namespace ps2_stubs
         int32_t g_mcLastResult = 0;
         std::unordered_map<int32_t, McOpenFile> g_mcFiles;
         std::array<McPortState, 2> g_mcPorts{};
+        uint64_t g_mcChanges = 0u; // memoryCardActivity()
         int32_t g_cvMcFileCursor = 0;
 
         constexpr int32_t kCvMcSaveFileBytes = 0x838;
@@ -369,6 +371,11 @@ namespace ps2_stubs
             g_mcLastCmd = cmd;
             g_mcLastResult = result;
             g_mcCommandPending = true;
+            if (cmd == kMcCmdWrite || cmd == kMcCmdMkdir || cmd == kMcCmdSetFileInfo || cmd == kMcCmdDelete ||
+                cmd == kMcCmdFormat || cmd == kMcCmdUnformat || cmd == kMcCmdRename)
+            {
+                ++g_mcChanges;
+            }
         }
 
         // libmc 3020 starts a command only if PollSema on its semaphore succeeds
@@ -499,6 +506,18 @@ namespace ps2_stubs
 
             return std::fopen(hostPath.string().c_str(), mode);
         }
+    }
+
+    MemoryCardActivity memoryCardActivity()
+    {
+        std::lock_guard<std::mutex> lock(g_mcStateMutex);
+        MemoryCardActivity activity;
+        activity.changes = g_mcChanges;
+        for (const auto &[fd, file] : g_mcFiles)
+        {
+            activity.writing = activity.writing || file.writing;
+        }
+        return activity;
     }
 
     MemoryCardDebugSnapshot getMemoryCardDebugSnapshot()
@@ -1084,6 +1103,10 @@ namespace ps2_stubs
                             if (result < 0)
                             {
                                 std::fclose(file);
+                            }
+                            else
+                            {
+                                g_mcFiles[result].writing = (flags & PS2_FIO_O_WRONLY) != 0u; // also O_RDWR
                             }
                         }
                     }
