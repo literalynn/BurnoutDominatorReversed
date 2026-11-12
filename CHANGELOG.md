@@ -2,6 +2,19 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.3.0 (November 13, 2026)
+
+- **No Visual Studio needed on Windows**: when no C++ compiler is installed, the launcher offers to download Microsoft's C++ Build Tools, CMake and Ninja into the game's folder (about 500 MB, 1.25 GB once unpacked) once you accept Microsoft's licence. Nothing is installed on the system and no administrator rights are needed; deleting the folder removes them. A Visual Studio you already have is still used.
+- **Skip any video**: while a video plays, hold Start (or the key bound to it) for a second and it ends at once, the way it ends when you watch it to the end, including the Basic Training video the game shows once per profile and does not let you skip. One hold skips all three videos at start-up. Setting "Skip videos".
+- **Button prompts for your controller**: the ✕ ○ □ △ and L1/R1 symbols become A B X Y and LB RB LT RT on Xbox and other gamepads, or the key you bound on the keyboard, and they change as soon as you use another device. Setting "Button prompts": Auto, PlayStation, Xbox or Keyboard (a PlayStation pad that shows up as an Xbox pad, through DSX for example, needs "PlayStation").
+- **Brighter car lights**, optional: "Car lights" at 150 % or 200 % makes headlights and tail lights brighter, to see traffic sooner. It brightens every car, yours and the rivals' included. Off by default.
+- **A new F1 menu** in the game's own font, art and sounds, usable with a gamepad: hold Select (or press the Guide button) to open it. It has a **Quit game** entry, which asks first and waits for a save in progress to finish before closing the game.
+- **16:9 without stretching**: the window now always shows the picture in the shape the game draws. Switching "Picture shape" while playing no longer stretches the 4:3 view; the game draws 16:9 from its next start. New installations start in 16:9, in a 1280 × 720 window.
+- Videos play with half the processor time they took.
+- **Builds on PCs with less memory**: the installation no longer stops with "compiler is out of heap space". It compiles fewer files at once when the PC has little memory.
+- **Free up disk space**: once the game is built, a small button in the launcher's Installation card deletes the files only building needs (about 12 GB). The game still plays, but the next update has to build the whole game again (30 to 90 minutes) instead of only what changed.
+- Above 60 frames a second, the menus' animations keep the console's speed: the scrolling text of the World Tour pages no longer runs four times too fast at 240.
+
 ## 1.2.3 (November 11, 2026)
 
 - **Browse no longer closes the launcher**: choosing the ISO, or a folder of saves, in the Browse window closed the launcher's window as soon as the choice was made.
