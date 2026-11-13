@@ -36,6 +36,16 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef _WIN32
+// Laptops with two GPUs: run the window's OpenGL on the dedicated one, where Vulkan already runs
+// paraLLEl-GS (Granite picks the discrete GPU), so frames stay on that GPU instead of a CPU copy
+// per frame to the integrated one (NVIDIA Optimus, AMD PowerXpress read these exports).
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 namespace {
 struct Options {
     std::filesystem::path elf, iso, disc, saves, dumpFrames;

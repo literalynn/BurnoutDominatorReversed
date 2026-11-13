@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## Laptops with two GPUs draw the window on the dedicated one (November 13, 2026)
+
+- Outside the upstream tree, `src/burnout_main.cpp`: the executable exports `NvOptimusEnablement` and `AmdPowerXpressRequestHighPerformance` (1), which NVIDIA Optimus and AMD PowerXpress read to run an application's OpenGL on the dedicated GPU. Granite already creates the Vulkan device on the discrete GPU (`device_score`), so on such a laptop paraLLEl-GS ran there while the window's OpenGL ran on the integrated GPU: the LUIDs differ, so instead of shared frames every frame was read back to host memory and uploaded again to the other GPU (5 MiB a frame at 2x, 18 at 4x). Checked with `dumpbin /exports`; this desktop drives its screens from the NVIDIA card, where nothing changes, and no hybrid laptop was available to measure.
+
 ## AMD graphics cards no longer crash at the first textured frame (November 13, 2026)
 
 - `cmake/ParallelGS.cmake`: paraLLEl-GS is pinned to `cc6184a` instead of `3a66c19`, the next and only later upstream commit ("out var on struct with hw pointers crashes AMD vulkan compiler on windows"): `sampler_feedback.comp` no longer passes its `TextureAnalysis` struct, which holds buffer device addresses, as an `out` parameter, and `slangmosh.hpp` carries the recompiled SPIR-V. Nothing else changes in that commit; the source patches of `ParallelGSPatches.cmake` and the shaders `tools/pgs_shader.py` builds still apply.
