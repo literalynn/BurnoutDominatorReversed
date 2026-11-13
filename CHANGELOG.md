@@ -2,6 +2,13 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.4.0 (November 13, 2026)
+
+- **AMD graphics cards no longer crash at start**: on Radeon cards the game closed about a second after starting, when it drew its first textured picture (AMD's shader compiler crashed on one of the graphics shaders; the graphics library now avoids it). GitHub issue 13.
+- **Adaptive resolution**: when the graphics card cannot keep up, the picture steps down (4x, then 2x, then the PS2's resolution) and goes back up once the card has room, instead of the game slowing down. It is on for new installations. On an existing one, turn on "Adaptive resolution" in the launcher's settings or in the F1 menu, which says when the picture is lowered.
+- **Fewer stutters on a first start**: at start-up the game now prepares only the graphics shaders it really uses, in a few seconds. It used to spend minutes of processor time on thousands it never uses, and still froze for a fifth of a second each time a race showed something new for the first time. This mattered on the first start and after a graphics driver update, and most on small processors.
+- **Laptops with two graphics chips** (NVIDIA Optimus, AMD switchable graphics) now draw the window on the dedicated card, where the game already renders, instead of copying every frame to the integrated one.
+
 ## 1.3.0 (November 13, 2026)
 
 - **No Visual Studio needed on Windows**: when no C++ compiler is installed, the launcher offers to download Microsoft's C++ Build Tools, CMake and Ninja into the game's folder (about 500 MB, 1.25 GB once unpacked) once you accept Microsoft's licence. Nothing is installed on the system and no administrator rights are needed; deleting the folder removes them. A Visual Studio you already have is still used.
