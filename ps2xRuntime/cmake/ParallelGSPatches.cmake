@@ -41,11 +41,6 @@ parallel_gs_replace("\tprim_attr.tex2 = prim_state.tex2;\n"
     "\tprim_attr.tex2 = prim_state.tex2;\n\textern bool bdr_smooth_ui; // defined further down; GCC and Clang need it declared before this template body\n\tconst bool bdr_smooth = bdr_smooth_ui && prim.desc.TME && ctx.tex1.desc.MMAG == TEX1Bits::LINEAR &&\n\t                        (ctx.tex0.desc.PSM == PSMT8 || ctx.tex0.desc.PSM == PSMT4);\n\tif (bdr_smooth && !quad && !is_line)\n\t\tprim_attr.tex |= 1u << 27;\n")
 parallel_gs_replace("\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_RASTER;\n\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_ATTRIBUTE;\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);"
     "\t\tif (!bdr_smooth)\n\t\t\tprim_attr.state |= (1u << STATE_BIT_SNAP_RASTER) | (1u << STATE_BIT_SNAP_ATTRIBUTE);\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);")
-# GPU time of each pass type, for adaptive_resolution and the BDR_PGS_TIMESTAMPS printout
-# (gs_parallel_backend.cpp). Granite returns no query on a GPU without timestamps, which
-# log_timestamps would read: only where the device has them.
-parallel_gs_replace("\tif (!renderer.init(device, options))\n\t\treturn false;\n"
-    "\tif (!renderer.init(device, options))\n\t\treturn false;\n\tif (device->get_gpu_properties().limits.timestampComputeAndGraphics)\n\t\trenderer.set_enable_timestamps(true);\n")
 parallel_gs_use_patched(${patch_file} gs_interface_patched.cpp)
 
 # compute_page_rect: max_block_x/y are taken modulo the blocks of a page, so

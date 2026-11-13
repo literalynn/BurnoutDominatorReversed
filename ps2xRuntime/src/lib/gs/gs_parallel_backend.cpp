@@ -376,8 +376,11 @@ namespace
             bool highResolution = false;
             bool operator==(const Quality &other) const { return samples == other.samples && highResolution == other.highResolution; }
         };
+        bool timestampsOn = false;
+        unsigned presents = 0;
+        unsigned adaptiveFrames = 0, adaptiveTimedFrames = 0; // frames in the measuring window, and those timed
         ps2x::AdaptiveResolution adaptive;
-        Quality adaptiveFrom;                                     // the player's choice the steps go down from
+        Quality adaptiveFrom;                                    // the player's choice the steps go down from
         std::chrono::steady_clock::time_point adaptiveSince = {}; // start of the measuring window
         double adaptiveGpuSeconds = 0.0;                          // GPU time accumulated at its start
 
@@ -419,18 +422,22 @@ namespace
                 adaptiveFrom = chosen;
                 adaptiveSince = now;
                 adaptiveGpuSeconds = gpuSeconds();
+                adaptiveFrames = adaptiveTimedFrames = 0;
             }
-            else if (now - adaptiveSince >= std::chrono::seconds(1))
+            else if (now - adaptiveSince >= std::chrono::seconds(1) && adaptiveTimedFrames > 0)
             {
+                // The timed frames stand for all of them.
                 const double gpu = gpuSeconds(), wall = std::chrono::duration<double>(now - adaptiveSince).count();
+                const double busy = (gpu - adaptiveGpuSeconds) * adaptiveFrames / adaptiveTimedFrames;
                 const int before = adaptive.step();
-                if (adaptive.update(gpu - adaptiveGpuSeconds, wall, count) != before)
+                if (adaptive.update(busy, wall, count) != before)
                     std::printf("[gs] adaptive resolution: %d sample%s a pixel%s (GPU busy %d%% of the last second)\n",
                                 steps[adaptive.step()].samples, steps[adaptive.step()].samples > 1 ? "s" : "",
                                 steps[adaptive.step()].highResolution ? ", high resolution" : "",
-                                int(100.0 * (gpu - adaptiveGpuSeconds) / wall + 0.5));
+                                int(100.0 * busy / wall + 0.5));
                 adaptiveSince = now;
                 adaptiveGpuSeconds = gpu;
+                adaptiveFrames = adaptiveTimedFrames = 0;
             }
             ps2x::g_adaptiveResolutionStep = adaptive.step();
             return steps[adaptive.step()];
@@ -597,6 +604,23 @@ namespace
             traceCall('P', 0, reinterpret_cast<const uint8_t *>(&request), sizeof(request));
             gs.flush();
             const ps2x::HostSettings &settings = ps2x::hostSettings();
+            // paraLLEl-GS times its passes only while something reads the times, and for
+            // adaptive_resolution one frame in four: each timestamp is driver work on this thread
+            // (timing every frame cost it 6% in a race). Granite returns no query on a GPU without
+            // timestamps.
+            static const bool gpuTimes = [] { const char *v = std::getenv("BDR_PGS_TIMESTAMPS"); return v && *v && *v != '0'; }();
+            const bool timed = (settings.adaptiveResolution || gpuTimes) &&
+                               vulkan.device.get_gpu_properties().limits.timestampComputeAndGraphics;
+            const bool timestamps = timed && (gpuTimes || presents++ % 4 == 0);
+            adaptiveFrames += timed;
+            adaptiveTimedFrames += timestamps;
+            if (timestamps != timestampsOn)
+            {
+                ParallelGS::DebugMode mode;
+                mode.timestamps = timestamps;
+                gs.set_debug_mode(mode);
+                timestampsOn = timestamps;
+            }
             const Quality quality = chooseQuality(settings);
             if (quality.samples != superSampling)
             {
@@ -658,8 +682,7 @@ namespace
                 }
             }
             const ParallelGS::ScanoutResult scanout = gs.vsync(info);
-            static const bool gpuTimes = [] { const char *v = std::getenv("BDR_PGS_TIMESTAMPS"); return v && *v && *v != '0'; }();
-            if (gpuTimes)
+            if (gpuTimes && timestampsOn)
                 printGpuTimes();
             if (!scanout.image || scanout.image->get_format() != VK_FORMAT_R8G8B8A8_UNORM)
                 return {};
