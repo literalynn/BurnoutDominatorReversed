@@ -2,6 +2,13 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.5.0 (November 13, 2026)
+
+- **Faster installation and updates**: the game's code is now translated once instead of almost twice, so there is half as much to compile and the game file is a third smaller. The installer no longer builds test programs players never use (about 20 minutes saved on a first installation) and skips graphics routines the game already has in a faster form. This update translates and builds the whole game again, once.
+- **Smoother loading on hard disks**: the game reads the disc image ahead of what it asks for, so music, the track being driven and files being loaded wait less for the disk.
+- The game uses a little less processor time: about 6% less in a race.
+- Save states made with this version cannot be loaded by older versions; older save states still load.
+
 ## 1.4.0 (November 13, 2026)
 
 - **AMD graphics cards no longer crash at start**: on Radeon cards the game closed about a second after starting, when it drew its first textured picture (AMD's shader compiler crashed on one of the graphics shaders; the graphics library now avoids it). GitHub issue 13.
