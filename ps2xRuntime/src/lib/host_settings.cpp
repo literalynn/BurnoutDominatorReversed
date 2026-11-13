@@ -128,6 +128,8 @@ namespace ps2x
                 return parseBool(value, s.progressiveScan);
             if (key == "high_resolution")
                 return parseBool(value, s.highResolution);
+            if (key == "adaptive_resolution")
+                return parseBool(value, s.adaptiveResolution);
             if (key == "fxaa")
                 return parseBool(value, s.fxaa);
             if (key == "hud_smoothing")
@@ -286,6 +288,9 @@ namespace ps2x
                 "# wide) with super_sampling 4 or 8 (8 smooths the edges), four times (2560) with 16.\n"
                 "# F1 > Resolution changes both.\n"
                 "high_resolution = " << (s.highResolution ? "true" : "false") << "\n"
+                "# adaptive_resolution lowers the resolution (4x to 2x to the PS2's) while the graphics card\n"
+                "# cannot keep up, and raises it again once the card has room.\n"
+                "adaptive_resolution = " << (s.adaptiveResolution ? "true" : "false") << "\n"
                 "# fxaa smooths the edges of the finished picture; hud_smoothing makes the HUD and menu art\n"
                 "# smooth instead of blocky at 2x and 4x.\n"
                 "fxaa = " << (s.fxaa ? "true" : "false") << "\n"

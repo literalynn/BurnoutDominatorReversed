@@ -3,6 +3,7 @@
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
 #include "Kernel/Stubs/MemoryCard.h"
+#include "runtime/adaptive_resolution.h"
 #include "runtime/car_lights.h"
 #include "runtime/host_settings.h"
 #include "runtime/host_audio.h"
@@ -791,6 +792,7 @@ void register_ps2_runtime_io_tests()
             settings.fxaa = true;
             settings.hudSmoothing = false;
             settings.carLights = 150;
+            settings.adaptiveResolution = true;
             settings.keepSpeed = false;
             settings.videoSkip = false;
             settings.aspect = "4:3";
@@ -810,6 +812,7 @@ void register_ps2_runtime_io_tests()
             t.IsTrue(settings.fxaa, "fxaa round-trips");
             t.IsTrue(!settings.hudSmoothing, "hud_smoothing round-trips");
             t.Equals(settings.carLights, 150, "car_lights round-trips");
+            t.IsTrue(settings.adaptiveResolution, "adaptive_resolution round-trips");
             t.IsTrue(!settings.keepSpeed, "keep_speed round-trips");
             t.IsTrue(!settings.videoSkip, "video_skip round-trips");
             t.Equals(settings.aspect, std::string("4:3"), "aspect round-trips");
@@ -845,6 +848,38 @@ void register_ps2_runtime_io_tests()
                      "bad and unknown lines are reported");
             std::filesystem::remove(path);
             settings = saved;
+        });
+
+        tc.Run("adaptive resolution steps down while the GPU is busy and back up once it has room", [](TestCase &t)
+        {
+            ps2x::AdaptiveResolution a;
+            a.update(0.95, 1.0, 0);
+            t.Equals(a.update(0.95, 1.0, 0), 0, "at the PS2's resolution there is no step down");
+            a.update(0.5, 1.0, 2);
+            t.Equals(a.update(0.95, 1.0, 2), 0, "one busy second is not enough");
+            t.Equals(a.update(0.5, 1.0, 2), 0, "a quiet second starts the count again");
+            t.Equals(a.update(0.95, 1.0, 2), 0, "busy again: one second");
+            t.Equals(a.update(0.95, 1.0, 2), 1, "two busy seconds in a row: one step down");
+            t.Equals(a.update(0.99, 1.0, 2), 1, "the next step needs two more busy seconds");
+            t.Equals(a.update(0.99, 1.0, 2), 2, "the second step down");
+            t.Equals(a.update(0.99, 1.0, 2), 2, "no step below the last");
+            int seconds = 0;
+            while (a.step() == 2 && seconds < 200)
+                a.update(0.3, 1.0, 2), ++seconds; // 2.5 x 0.3 = 0.75: the step above would be too busy
+            t.Equals(a.step(), 2, "no step up while the step above would be too busy");
+            seconds = 0;
+            while (a.step() == 2 && seconds < 200)
+                a.update(0.2, 1.0, 2), ++seconds;
+            t.IsTrue(a.step() == 1 && seconds >= 8 && seconds <= 70, "a step up after the wait and eight quiet seconds");
+            a.update(0.95, 1.0, 2);
+            a.update(0.95, 1.0, 2);
+            t.Equals(a.step(), 2, "too busy again: back down");
+            seconds = 0;
+            while (a.step() == 2 && seconds < 2000)
+                a.update(0.1, 1.0, 2), ++seconds;
+            t.IsTrue(seconds >= 120, "each step down doubles the wait before the next step up");
+            t.Equals(a.update(0.1, 1.0, 0), 0, "fewer steps (a lower choice of the player) clamp the step");
+            t.Equals(a.update(0.95, 0.0, 2), 0, "an empty window changes nothing");
         });
 
         tc.Run("car_lights scales the colour of the noted car light glows only", [](TestCase &t)

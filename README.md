@@ -165,6 +165,7 @@ The launcher's Settings tab, the game's **F1** menu and `settings.ini` (in the i
 | `smooth_scaling` | true | bilinear enlargement |
 | `super_sampling` | 4 | samples per pixel: 1, 2, 4, 8 or 16 |
 | `high_resolution` | true | a higher resolution built from the samples: 2x (1280 pixels wide) with 4 or 8 samples, 4x (2560) with 16 |
+| `adaptive_resolution` | true (new installations) | lowers the resolution, down to the PS2's, while the graphics card cannot keep up, and raises it again once it can |
 | `fxaa` | false | FXAA on the finished picture |
 | `hud_smoothing` | true | the HUD and the menus' art and text smooth instead of blocky at 2x and 4x |
 | `car_lights` | 100 | brightness of every car's light glows (headlights, tail lights, indicators) in percent: `100` (original), `150` or `200` to see traffic from further away |

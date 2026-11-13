@@ -2,6 +2,7 @@
 
 #include "Kernel/Stubs/MemoryCard.h"
 #include "ps2_host_backend.h"
+#include "runtime/adaptive_resolution.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/gamepad_rumble.h"
 #include "runtime/host_settings.h"
@@ -37,6 +38,7 @@ namespace
         RowVolume,
         RowResolution,
         RowAntiAliasing,
+        RowAdaptive,
         RowAspect,
         RowFps,
         RowFullscreen,
@@ -328,6 +330,7 @@ namespace
         case RowVolume: return "Sound volume";
         case RowResolution: return "Resolution";
         case RowAntiAliasing: return "Anti-aliasing";
+        case RowAdaptive: return "Adaptive resolution";
         case RowAspect: return "Picture shape";
         case RowFps: return "Show FPS";
         case RowFullscreen: return "Full screen (F11)";
@@ -376,6 +379,8 @@ namespace
             const bool supersampling = resolutionScale(s) == 1 && s.superSampling >= 8;
             return supersampling ? (s.fxaa ? "Supersampling + FXAA" : "Supersampling") : (s.fxaa ? "FXAA" : "Off");
         }
+        case RowAdaptive:
+            return !s.adaptiveResolution ? "Off" : ps2x::g_adaptiveResolutionStep.load() ? "On - lowered now" : "On";
         case RowAspect: return s.aspect == "stretch" ? "Stretch" : s.aspect;
         case RowFps: return onOff(s.showFps);
         case RowFullscreen: return onOff(IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
@@ -401,6 +406,8 @@ namespace
     {
         if (row == RowQuit)
             return "Closes the game and goes back to the desktop";
+        if (row == RowAdaptive)
+            return "Lowers the resolution while the graphics card cannot keep up";
         if (row != RowAspect)
             return "Saved to settings.ini at once";
         const std::string &aspect = ps2x::hostSettings().aspect;
@@ -444,6 +451,10 @@ namespace
                 s.superSampling = next >= 2 ? 8 : 4;
             break;
         }
+
+        case RowAdaptive:
+            s.adaptiveResolution = !s.adaptiveResolution;
+            break;
 
         case RowAspect:
         {

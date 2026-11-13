@@ -20,6 +20,9 @@ namespace ps2x
         int superSampling = 4;     // paraLLEl-GS SSAA: 1, 2, 4, 8 or 16
         bool progressiveScan = true; // whole frames instead of interlaced fields (no line combing)
         bool highResolution = true;  // 2x the PS2 resolution from 4 or 8 samples a pixel, 4x from 16
+        // Lower the resolution while the GPU cannot keep up (runtime/adaptive_resolution.h). Off for
+        // settings files written before it existed; the runner turns it on for a new file.
+        bool adaptiveResolution = false;
         bool fxaa = false;           // FXAA on the frame before it is scaled to the window
         bool hudSmoothing = true;    // the HUD's bilinear art interpolated per sample at 2x and 4x (no menu row)
         int carLights = 100;         // brightness of the cars' light glows in percent: 100 (original), 150 or 200

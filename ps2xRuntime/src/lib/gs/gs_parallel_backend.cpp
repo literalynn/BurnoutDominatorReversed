@@ -7,6 +7,7 @@
 #include "ps2x/state_archive.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/ps2_gs_memory.h"
+#include "runtime/adaptive_resolution.h"
 #include "runtime/host_settings.h"
 #include "runtime/shared_frames.h"
 #include "runtime/ps2_memory.h"
@@ -19,9 +20,14 @@
 #include "thread_id.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 
 namespace ParallelGS
 {
@@ -338,6 +344,98 @@ namespace
             return false;
         }
 
+        // BDR_PGS_TIMESTAMPS=1: GPU milliseconds a frame of each paraLLEl-GS pass type, every 300 frames.
+        void printGpuTimes()
+        {
+            static constexpr const char *names[] = {"sync", "copy", "palette", "upload", "setup", "binning", "shading", "readback", "vsync"};
+            static_assert(std::size(names) == size_t(ParallelGS::TimestampType::Count));
+            static double last[std::size(names)] = {};
+            static unsigned frames = 0;
+            if (++frames < 300)
+                return;
+            std::string line = "[pgs-gpu] ms a frame:";
+            double total = 0.0;
+            for (size_t i = 0; i < std::size(names); ++i)
+            {
+                const double now = gs.get_accumulated_timestamps(ParallelGS::TimestampType(i));
+                const double ms = (now - last[i]) * 1000.0 / frames;
+                last[i] = now;
+                total += ms;
+                char part[48];
+                std::snprintf(part, sizeof(part), " %s %.3f", names[i], ms);
+                line += part;
+            }
+            std::printf("%s, total %.3f\n", line.c_str(), total);
+            frames = 0;
+        }
+
+        // The picture's samples a pixel and scan-out resolution.
+        struct Quality
+        {
+            int samples = 1;
+            bool highResolution = false;
+            bool operator==(const Quality &other) const { return samples == other.samples && highResolution == other.highResolution; }
+        };
+        ps2x::AdaptiveResolution adaptive;
+        Quality adaptiveFrom;                                     // the player's choice the steps go down from
+        std::chrono::steady_clock::time_point adaptiveSince = {}; // start of the measuring window
+        double adaptiveGpuSeconds = 0.0;                          // GPU time accumulated at its start
+
+        double gpuSeconds() const
+        {
+            // BDR_ADAPTIVE_GPU_SCALE=N counts the GPU time N times: a GPU N times slower, for tests.
+            static const double scale = [] {
+                const char *value = std::getenv("BDR_ADAPTIVE_GPU_SCALE");
+                const double n = value ? std::atof(value) : 0.0;
+                return n > 0.0 ? n : 1.0;
+            }();
+            double total = 0.0;
+            for (int type = 0; type < int(ParallelGS::TimestampType::Count); ++type)
+                total += gs.get_accumulated_timestamps(ParallelGS::TimestampType(type));
+            return total * scale;
+        }
+
+        // The player's resolution, or with adaptive_resolution a step below it while the GPU cannot
+        // keep up: 4x (16 samples) or 2x with 8 to 2x with 4, then to the PS2's with one sample.
+        Quality chooseQuality(const ps2x::HostSettings &settings)
+        {
+            const Quality chosen{settings.superSampling, settings.highResolution};
+            if (!settings.adaptiveResolution || !vulkan.device.get_gpu_properties().limits.timestampComputeAndGraphics)
+            {
+                adaptiveSince = {};
+                ps2x::g_adaptiveResolutionStep = 0;
+                return chosen;
+            }
+            Quality steps[3] = {chosen};
+            int count = 0;
+            if (chosen.highResolution && chosen.samples > 4)
+                steps[++count] = Quality{4, true};
+            if (chosen.samples > 1)
+                steps[++count] = Quality{1, false};
+            const auto now = std::chrono::steady_clock::now();
+            if (!(chosen == adaptiveFrom) || adaptiveSince == std::chrono::steady_clock::time_point{})
+            {
+                adaptive = {};
+                adaptiveFrom = chosen;
+                adaptiveSince = now;
+                adaptiveGpuSeconds = gpuSeconds();
+            }
+            else if (now - adaptiveSince >= std::chrono::seconds(1))
+            {
+                const double gpu = gpuSeconds(), wall = std::chrono::duration<double>(now - adaptiveSince).count();
+                const int before = adaptive.step();
+                if (adaptive.update(gpu - adaptiveGpuSeconds, wall, count) != before)
+                    std::printf("[gs] adaptive resolution: %d sample%s a pixel%s (GPU busy %d%% of the last second)\n",
+                                steps[adaptive.step()].samples, steps[adaptive.step()].samples > 1 ? "s" : "",
+                                steps[adaptive.step()].highResolution ? ", high resolution" : "",
+                                int(100.0 * (gpu - adaptiveGpuSeconds) / wall + 0.5));
+                adaptiveSince = now;
+                adaptiveGpuSeconds = gpu;
+            }
+            ps2x::g_adaptiveResolutionStep = adaptive.step();
+            return steps[adaptive.step()];
+        }
+
     public:
         explicit ParallelBackend(GSRegisters &registers) : priv(registers)
         {
@@ -498,15 +596,16 @@ namespace
             Lock lock(mutex);
             traceCall('P', 0, reinterpret_cast<const uint8_t *>(&request), sizeof(request));
             gs.flush();
-            if (const int samples = ps2x::hostSettings().superSampling; samples != superSampling)
+            const ps2x::HostSettings &settings = ps2x::hostSettings();
+            const Quality quality = chooseQuality(settings);
+            if (quality.samples != superSampling)
             {
-                gs.set_super_sampling_rate(ParallelGS::SuperSampling(samples), true, true);
-                superSampling = samples;
+                gs.set_super_sampling_rate(ParallelGS::SuperSampling(quality.samples), true, true);
+                superSampling = quality.samples;
             }
             // See ParallelGSPatches.cmake. Only when the samples make a higher resolution: at the
             // PS2's own, averaging them would just blur the art.
-            const ps2x::HostSettings &settings = ps2x::hostSettings();
-            ParallelGS::bdr_smooth_ui = settings.hudSmoothing && settings.highResolution && settings.superSampling >= 4;
+            ParallelGS::bdr_smooth_ui = settings.hudSmoothing && quality.highResolution && quality.samples >= 4;
             auto &p = gs.get_priv_register_state();
             p.qwords_lo[0] = request.pmode;
             p.qwords_lo[2] = priv.smode1;
@@ -528,7 +627,7 @@ namespace
             // the super samples.
             info.force_progressive = ps2x::hostSettings().progressiveScan;
             info.anti_blur = ps2x::hostSettings().progressiveScan;
-            info.high_resolution_scanout = ps2x::hostSettings().highResolution;
+            info.high_resolution_scanout = quality.highResolution;
             if (std::getenv("BDR_PGS_TRACE"))
                 std::printf("[pgs-present] pmode=%llx smode1=%llx smode2=%llx dispfb1=%llx display1=%llx dispfb2=%llx display2=%llx bg=%llx\n",
                             (unsigned long long)request.pmode, (unsigned long long)priv.smode1, (unsigned long long)request.smode2,
@@ -559,6 +658,9 @@ namespace
                 }
             }
             const ParallelGS::ScanoutResult scanout = gs.vsync(info);
+            static const bool gpuTimes = [] { const char *v = std::getenv("BDR_PGS_TIMESTAMPS"); return v && *v && *v != '0'; }();
+            if (gpuTimes)
+                printGpuTimes();
             if (!scanout.image || scanout.image->get_format() != VK_FORMAT_R8G8B8A8_UNORM)
                 return {};
             if (const int slot = shareFrames ? ps2x::shared_frames::beginFrame() : -1; slot >= 0)

@@ -557,8 +557,11 @@ int main(int argc, char** argv) {
         const auto options = parse(argc, argv);
         // The window, the GS backend and the pad read these settings when they start.
         std::string settingsErrors;
-        if (!ps2x::loadHostSettings(options.settings, settingsErrors) && !options.headless)
+        if (!ps2x::loadHostSettings(options.settings, settingsErrors) && !options.headless) {
+            // A new installation adapts to its graphics card; files from before keep their behaviour.
+            ps2x::hostSettings().adaptiveResolution = true;
             ps2x::writeHostSettings(options.settings);
+        }
         std::cerr << settingsErrors;
         // The save messages speak of this computer instead of the memory card and the console.
         burnout::registerPcTexts();
