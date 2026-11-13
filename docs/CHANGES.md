@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The installer builds only the translator before translating (November 13, 2026)
+
+- Outside the upstream tree, `tools/install.py`: before translating the game it builds `ps2_recomp` alone (`tools/project.py build --target`, repeatable), not every tool and test, which compiled the runtime a second time with the CPU GS backend the game does not use: on a fresh tree, about 20 minutes to 46 seconds at low priority with 6 jobs. The tests stay in `project.py build` without `--game`.
+
 ## No compiled VU routine for programs translated natively (November 13, 2026)
 
 - `ps2xRuntime/CMakeLists.txt`, `tools/compile_vu_programs.py --native-programs`: in an MSVC x86-64 build with native VU programs (`PS2X_VU_NATIVE_LIST`), routines reached only from a native translation's starts are left out, since the native code runs there: 68 routines (8,458 instruction pairs) instead of 118 (16,025); their shards compile in about 5.7 minutes instead of 9.3 at low priority. In the race, the menu, the car select and the glacier track no pair is interpreted at a native start. `tests/native/vu1_native_tests.cpp` and `docs/NATIVE_RENDERER.md`: in such a build the comparison pass runs the interpreter.

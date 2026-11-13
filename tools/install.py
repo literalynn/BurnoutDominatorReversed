@@ -566,10 +566,11 @@ def setup(args: argparse.Namespace) -> int:
         say("Configuring the tools (downloading dependencies)")
         project(env, "configure", *cmake, *toolchain["generator"])
         toolchain["generator"] = []
-    # Always built: after an update, only the changed sources are compiled again.
-    say("Building the tools and the tests (10 to 30 minutes the first time)" if not recompiler
-        else "Updating the tools (only changed files are rebuilt)")
-    project(env, "build", *cmake, "--jobs", str(args.jobs))
+    # Always built: after an update, only the changed sources are compiled again. Only the
+    # translator: the tests would compile the runtime once more, for a GS backend the game does not use.
+    say("Building the translator (a few minutes the first time)" if not recompiler
+        else "Updating the translator (only changed files are rebuilt)")
+    project(env, "build", *cmake, "--target", "ps2_recomp", "--jobs", str(args.jobs))
     recompiler = find_recompiler(build_dir)
     if not recompiler:
         raise SetupError(f"ps2_recomp not found in {build_dir} after the build.")

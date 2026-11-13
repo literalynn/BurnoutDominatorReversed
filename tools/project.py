@@ -362,23 +362,26 @@ def msbuild(build_dir: Path, target: str, jobs: int) -> None:
         extra_env={"_CL_": (os.environ.get("_CL_", "") + f" /MP{jobs}").strip()})
 
 
+TOOLS_AND_TESTS = ["ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests",
+                   "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests",
+                   "burnout_overrides_tests", "vu1_native_tests"]
+
+
 def build(args) -> None:
     foreign = foreign_build_tree(args.build_dir)
     if foreign:
         # Building it would compile the other checkout's sources.
         raise RuntimeError(f"{args.build_dir} was configured for another checkout ({foreign}). "
                            "Run configure first (tools/install.py does it).")
+    targets = args.target or (["ps2EntryRunner"] if args.game else TOOLS_AND_TESTS)
     cache = args.build_dir / "CMakeCache.txt"
     if os.name == "nt" and cache.is_file() and "CMAKE_GENERATOR:INTERNAL=Visual Studio" in cache.read_text(encoding="utf-8", errors="replace"):
         follow_visual_studio_update(args.build_dir)
-        targets = ["ps2EntryRunner"] if args.game else [
-            "ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests",
-            "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests", "vu1_native_tests"]
         for target in targets:
             msbuild(args.build_dir.resolve(), target, min(args.jobs, 64))
         return
     command = [args.cmake, "--build", str(args.build_dir.resolve()), "--config", "Release", "--parallel", str(args.jobs), "--target"]
-    command += ["ps2EntryRunner"] if args.game else ["ps2_recomp", "ps2_analyzer", "ps2x_tests", "ps2_iop_emulator_tests", "ps2_iop_import_tests", "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests", "ps2_iso9660_tests", "ps2_spu2_tests", "burnout_overrides_tests", "vu1_native_tests"]
+    command += targets
     run(command, "native-build.log")
 
 
@@ -564,6 +567,8 @@ def main() -> int:
                            help="GS backend of the game: paraLLEl-GS on Vulkan (default) or the CPU rasterizer")
         else:
             p.add_argument("--jobs", default=4, type=int)
+            p.add_argument("--target", action="append",
+                           help="Build only this CMake target (repeatable); default: the game, or the tools and every test")
         p.set_defaults(func=function)
     p = sub.add_parser("run")
     p.add_argument("--exe", type=Path, help="Defaults to the game executable in <work>/build")
