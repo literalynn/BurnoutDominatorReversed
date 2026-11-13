@@ -1,5 +1,6 @@
 # paraLLEl-GS (Arntzen Software, LGPLv3): a GS emulated with Vulkan compute.
-# Pinned to the commit used by upstream PS2Recomp pull request #285.
+# Pinned one commit after the one upstream PS2Recomp pull request #285 used: cc6184a fixes the
+# sampler feedback shader that crashed AMD's Windows shader compiler.
 # FETCHCONTENT_SOURCE_DIR_PARALLEL_GS can point at a local checkout.
 include(FetchContent)
 set(PARALLEL_GS_STANDALONE ON CACHE BOOL "Build parallel-gs as a library" FORCE)
@@ -13,7 +14,7 @@ endif()
 
 FetchContent_Declare(parallel_gs
     GIT_REPOSITORY https://github.com/Arntzen-Software/parallel-gs.git
-    GIT_TAG 3a66c1976170cbc2cb53a3593fabbc7c4b2ccfbd
+    GIT_TAG cc6184af7e0c03da603045ca371ffa5dae9b0655
     GIT_SUBMODULES_RECURSE TRUE
     EXCLUDE_FROM_ALL
 )
