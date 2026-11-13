@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## No compiled VU routine for programs translated natively (November 13, 2026)
+
+- `ps2xRuntime/CMakeLists.txt`, `tools/compile_vu_programs.py --native-programs`: in an MSVC x86-64 build with native VU programs (`PS2X_VU_NATIVE_LIST`), routines reached only from a native translation's starts are left out, since the native code runs there: 68 routines (8,458 instruction pairs) instead of 118 (16,025); their shards compile in about 5.7 minutes instead of 9.3 at low priority. In the race, the menu, the car select and the glacier track no pair is interpreted at a native start. `tests/native/vu1_native_tests.cpp` and `docs/NATIVE_RENDERER.md`: in such a build the comparison pass runs the interpreter.
+- `tests/python/test_compile_vu_programs.py`: the native starts read from the list.
+
 ## The disc is read ahead (November 13, 2026)
 
 - `ps2xRuntime/include/runtime/disc_read_ahead.h`, `ps2xRuntime/src/lib/disc_read_ahead.cpp` (new), `ps2xRuntime/src/lib/ps2_iop_host.cpp` and `.h`: reads of the disc image go through `DiscReadAhead`, which reads the 512 KiB after each read (more after a larger one) on a thread of its own, in 64 KiB chunks, and keeps the last 16 MiB; the next read of a stream finds its bytes in memory. The game's reads stay synchronous and the bytes are the same. In a race, 119 of 124 reads are served from it (`BDR_TRACE_CDVD=1` prints the count at exit). Meant for hard disks, where a seek costs about 10 ms; this PC has only NVMe drives, where no difference is measurable. `ps2xTest/src/ps2_runtime_io_tests.cpp`: the bytes after each read come back unchanged.

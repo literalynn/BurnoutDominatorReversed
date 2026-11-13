@@ -539,18 +539,25 @@ if(PS2X_VU_PROGRAM_PROFILES)
     foreach(PROFILE ${PS2X_VU_PROGRAM_PROFILES})
         list(APPEND PS2X_VU_PROGRAM_LISTS "${PROFILE}/entries.txt")
     endforeach()
-    add_custom_command(
-        OUTPUT "${PS2X_VU_PROGRAM_INCLUDE}" "${PS2X_VU_PROGRAM_EXTERN_INCLUDE}" ${PS2X_VU_PROGRAM_SOURCES}
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/compile_vu_programs.py"
-                --output "${PS2X_VU_PROGRAM_INCLUDE}" --shards ${PS2X_VU_PROGRAM_SHARDS}
-                --max-routine-pairs ${PS2X_VU_PROGRAM_MAX_PAIRS}
-                ${PS2X_VU_PROGRAM_PROFILES}
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/compile_vu_programs.py" ${PS2X_VU_PROGRAM_LISTS}
-        VERBATIM)
     # Native VU1 programs (runtime/ps2_vu1_native.h), translated from the same code images:
     # the ones the project's list names.
     set(PS2X_VU_NATIVE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/../data/vu_native_programs.txt" CACHE FILEPATH
         "VU1 programs to translate to C++ (tools/translate_vu_programs.py); empty: none")
+    # No routine for the starts those programs run: the MSVC build requires AVX2 (ReleaseMode.cmake),
+    # so the translations always run there. Elsewhere a CPU without FMA3 runs the routines.
+    set(PS2X_VU_PROGRAM_NATIVE_ARGS)
+    if(MSVC AND PS2X_VU_NATIVE_X86_64 AND PS2X_VU_NATIVE_LIST)
+        set(PS2X_VU_PROGRAM_NATIVE_ARGS --native-programs "${PS2X_VU_NATIVE_LIST}")
+    endif()
+    add_custom_command(
+        OUTPUT "${PS2X_VU_PROGRAM_INCLUDE}" "${PS2X_VU_PROGRAM_EXTERN_INCLUDE}" ${PS2X_VU_PROGRAM_SOURCES}
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/compile_vu_programs.py"
+                --output "${PS2X_VU_PROGRAM_INCLUDE}" --shards ${PS2X_VU_PROGRAM_SHARDS}
+                --max-routine-pairs ${PS2X_VU_PROGRAM_MAX_PAIRS} ${PS2X_VU_PROGRAM_NATIVE_ARGS}
+                ${PS2X_VU_PROGRAM_PROFILES}
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/compile_vu_programs.py" ${PS2X_VU_PROGRAM_LISTS}
+                ${PS2X_VU_NATIVE_LIST}
+        VERBATIM)
     if(PS2X_VU_NATIVE_LIST)
         # The table, then the translations in PS2X_VU_NATIVE_SHARDS files compiled in parallel. One
         # file's memory grows with the programs in it: 16 files keep the longest programs apart.

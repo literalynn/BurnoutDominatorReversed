@@ -191,6 +191,20 @@ def load_images(directories, parser):
     return images, entries
 
 
+def native_starts(images, listing):
+    """(image, entry) starts that a native translation runs, by the lines of
+    data/vu_native_programs.txt: <name> <start> <first> <end> <FNV-1a 64 of code[first:end]> [vu0]."""
+    programs = []
+    for line in Path(listing).read_text().splitlines():
+        fields = line.split("#", 1)[0].split()
+        if fields:
+            programs.append((int(fields[1], 16) // 8, int(fields[2], 16) // 8, int(fields[3], 16) // 8,
+                             int(fields[4], 16), fields[5:] == ["vu0"]))
+    return {(name, start) for name, pairs in images.items()
+            for start, first, end, checksum, vu0 in programs
+            if vu0 == pairs[0].vu0 and fnv(pair.word for pair in pairs[first:end]) == checksum}
+
+
 def constant_target(pairs, block_start, jump_index):
     """Resolve a register jump set by IADDIU from VI0 earlier in its block."""
     reg = (pairs[jump_index].lower >> 11) & 15
@@ -664,6 +678,9 @@ def main():
     parser.add_argument("--shards", type=int, default=4)
     parser.add_argument("--max-routine-pairs", type=int, default=MAX_ROUTINE_PAIRS,
                         help="pairs compiled as one function; longer routines are cut into chunks")
+    parser.add_argument("--native-programs", type=Path,
+                        help="data/vu_native_programs.txt: leave out the routines only the starts of these "
+                             "programs reach, for builds that always run the translations")
     parser.add_argument("profiles", type=Path, nargs="*")
     args = parser.parse_args()
     if args.shards < 1:
@@ -672,7 +689,8 @@ def main():
         parser.error(f"--max-routine-pairs must be at least {MAX_BLOCK_PAIRS}")
 
     images, entries = load_images(args.profiles, parser)
-    routines = {}
+    native = native_starts(images, args.native_programs) if args.native_programs else set()
+    routines, needed = {}, set()
     for name, entry in entries:
         pairs = images[name]
         work, seen = [entry], set()
@@ -683,6 +701,8 @@ def main():
             seen.add(start)
             routine = Routine(pairs, start)
             routines.setdefault(routine.key(), routine)
+            if (name, entry) not in native:
+                needed.add(routine.key())
             work.extend(routine.calls)
 
     # The status register is only seen through FSEQ, FSAND and FSOR (the runtime
@@ -691,6 +711,10 @@ def main():
     status_unseen = not any(routine.pairs[index].reads_flags(STATUS_READERS)
                             for routine in routines.values() if not routine.pairs[0].vu0
                             for index in routine.footprint())
+    # Left out after that test, so the routines kept are compiled as before. A translation that
+    # declines a start (ps2_vu_native::run) leaves it to the interpreter.
+    left_out = len(routines) - len(needed)
+    routines = {key: routine for key, routine in routines.items() if key in needed}
 
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -740,6 +764,7 @@ def main():
     pair_total = sum(len(r.footprint()) for r in routines.values())
     print(f"compile_vu_programs: {len(routines)} routines, {pair_total} pairs from "
           f"{len(entries)} entries in {len(images)} images"
+          f"{f'; {left_out} left to native translations' if left_out else ''}"
           f"{'; VU1 status unread' if status_unseen else ''}")
 
 

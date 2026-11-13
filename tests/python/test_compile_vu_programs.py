@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
 
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "compile_vu_programs.py"
@@ -55,6 +56,18 @@ class KickBounds(unittest.TestCase):
         self.assertEqual(kick.stall_bound(), 5 + cvp.KICK_WAIT)
         for lower, upper in ((NOP_LOWER, NOP_UPPER), (FMAND, NOP_UPPER), (XGKICK, NOP_UPPER | 0x80000000)):
             self.assertFalse(cvp.Pair(lower, upper).kicks())
+
+
+class NativeStarts(unittest.TestCase):
+    def test_a_listed_program_names_its_start_on_the_images_that_hold_its_code(self):
+        program = loop(FMAND).pairs
+        other = [cvp.Pair(NOP_LOWER, NOP_UPPER)] * cvp.PAIRS
+        checksum = cvp.fnv(pair.word for pair in program[0:11])
+        with tempfile.TemporaryDirectory() as folder:
+            listing = Path(folder) / "native.txt"
+            listing.write_text(f"# comment\ntest 0028 0000 0058 {checksum:016x}\nvu0test 0000 0000 0058 {checksum:016x} vu0\n")
+            starts = cvp.native_starts({"a": program, "b": other}, listing)
+        self.assertEqual(starts, {("a", 5)})
 
 
 if __name__ == "__main__":

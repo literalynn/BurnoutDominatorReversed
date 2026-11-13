@@ -4,7 +4,9 @@
 // shadow mode, once stepped by the interpreter and once by the compiled routines, and the
 // translation's GIF packets, VU memory, registers and cycles must be the microcode's. Without captures, or in a
 // build without translations, there is nothing to compare. BDR_VU_NATIVE_BENCH=N then times N
-// rounds of the starts with the compiled routines and with the translations.
+// rounds of the starts with the compiled routines and with the translations. An MSVC build
+// compiles no routine for these starts (compile_vu_programs.py --native-programs): the
+// interpreter runs them in both passes.
 
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_vu1.h"
