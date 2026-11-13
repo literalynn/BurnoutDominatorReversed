@@ -209,7 +209,7 @@ Not yet. The game's own debug "Unlock All" is empty in the released game; progre
 
 | PS2 | Here |
 |---|---|
-| **EE**, the main MIPS R5900 processor that runs the game's code | translated ahead of time into C++ by [PS2Recomp](https://github.com/ran-j/PS2Recomp) (about 51,000 functions), then compiled |
+| **EE**, the main MIPS R5900 processor that runs the game's code | translated ahead of time into C++ by [PS2Recomp](https://github.com/ran-j/PS2Recomp) (about 13,500 functions), then compiled |
 | **VU0** and **VU1**, the vector units that transform and light every vertex | their microprograms are translated to C++ as well, with an interpreter for the rest |
 | **GS**, the graphics chip | [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs), on the GPU through Vulkan |
 | **IOP**, the I/O processor with its sound, disc and pad modules | emulated, running the game's own modules |

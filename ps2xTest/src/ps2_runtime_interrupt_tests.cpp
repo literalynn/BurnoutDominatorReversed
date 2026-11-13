@@ -2,8 +2,11 @@
 #include "ps2_runtime.h"
 #include "ps2_syscalls.h"
 #include "runtime/ee_scheduler.h"
+#include "Stubs/SIF.h"
+#include "ps2x/state_archive.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -11,10 +14,16 @@
 #include <exception>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 using namespace ps2_syscalls;
+
+namespace ps2_stubs
+{
+    void serializeSifState(ps2x::StateArchive &archive); // ps2_save_state.cpp declares it the same way
+}
 
 namespace
 {
@@ -78,6 +87,11 @@ namespace
     constexpr uint32_t kStackReuseWorkerPc = 0x00160620u;
     constexpr uint32_t kStackReuseWorkerResumePc = 0x00160630u;
     constexpr uint32_t kStackReuseHandlerPc = 0x00160640u;
+    constexpr uint32_t kSifGpMainPc = 0x00160700u;
+    constexpr uint32_t kSifGpResumePc = 0x00160710u;
+    constexpr uint32_t kSifGpHandlerPc = 0x00160720u;
+    constexpr uint32_t kSifGpRegistrationGp = 0x00432D00u;
+    constexpr uint32_t kSifGpCommand = 0x80000012u;
     constexpr uint32_t kStackReuseWorkerCount = 80u; // more than the 64 stacks above 0x01F00000
 
     constexpr uint32_t kTimer2Count = 0x10001000u;
@@ -426,6 +440,72 @@ namespace
         ExitDeleteThread(rdram, ctx, runtime);
     }
 
+    uint32_t g_sifHandlerGp = 0u;
+
+    // Main: registers a SIF command handler with its gp, receives the command, waits a VSync.
+    void schedulerSifGpMain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        setRegU32(*ctx, 28, kSifGpRegistrationGp);
+        setRegU32(*ctx, 4, kSifGpCommand);
+        setRegU32(*ctx, 5, kSifGpHandlerPc);
+        setRegU32(*ctx, 6, 0u);
+        ps2_stubs::sceSifAddCmdHandler(rdram, ctx, runtime);
+        const std::array<uint32_t, 4> packet{0x10u, 0u, kSifGpCommand, 0u};
+        ps2_stubs::dispatchSifCommand(rdram, runtime, kSifGpCommand, packet.data(), sizeof(packet));
+        EeScheduler &scheduler = runtime->eeScheduler();
+        ctx->pc = kSifGpResumePc;
+        scheduler.waitVSync(scheduler.currentVSyncTick());
+    }
+
+    void schedulerSifGpResume(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        ctx->pc = 0u;
+        runtime->requestStop();
+    }
+
+    // The SIF section of a save state with one command handler; version 5 had no gp.
+    std::vector<uint8_t> sifStateWithHandler(bool withGp, uint32_t gp)
+    {
+        ps2x::StateArchive archive = ps2x::StateArchive::writer();
+        archive.tag("SIFS");
+        uint32_t nextTransferId = 7u;
+        archive.value(nextTransferId);
+        std::unordered_map<uint32_t, uint32_t> noRegisters;
+        archive.podMap(noRegisters);
+        archive.podMap(noRegisters);
+        uint64_t handlers = 1u;
+        uint32_t cid = kSifGpCommand, function = kSifGpHandlerPc, argument = 0x55u;
+        archive.value(handlers);
+        archive.value(cid);
+        archive.value(function);
+        archive.value(argument);
+        if (withGp)
+            archive.value(gp);
+        uint32_t buffer = 0u;
+        bool initialized = true;
+        archive.value(buffer);
+        archive.value(buffer);
+        archive.value(initialized);
+        return archive.data();
+    }
+
+    // Loads a SIF section, then saves it again.
+    std::vector<uint8_t> resaveSifState(std::vector<uint8_t> data, uint32_t version, bool &atEnd)
+    {
+        ps2x::StateArchive reader = ps2x::StateArchive::reader(std::move(data), version);
+        ps2_stubs::serializeSifState(reader);
+        atEnd = reader.atEnd();
+        ps2x::StateArchive writer = ps2x::StateArchive::writer();
+        ps2_stubs::serializeSifState(writer);
+        return writer.data();
+    }
+
+    void schedulerSifGpHandler(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        g_sifHandlerGp = getRegU32(ctx, 28);
+        ctx->pc = 0u;
+    }
+
     void schedulerStackReuseHandler(uint8_t *, R5900Context *ctx, PS2Runtime *)
     {
         const uint32_t sp = getRegU32(ctx, 29);
@@ -693,6 +773,35 @@ void register_ps2_runtime_interrupt_tests()
             t.IsFalse(exhausted, "each created and deleted thread must not keep an invocation stack");
             t.Equals(g_stackReuseHandlerRuns, kStackReuseWorkerCount, "every worker callback should run once");
             t.IsTrue(g_stackReuseSps.size() <= 2u, "workers should reuse the stacks of deleted workers");
+        });
+
+        tc.Run("SIF command handlers run with the gp they were registered with", [](TestCase &t)
+        {
+            TestEnv env;
+            ps2_stubs::resetSifState();
+            env.runtime.registerFunction(kSifGpMainPc, schedulerSifGpMain);
+            env.runtime.registerFunction(kSifGpResumePc, schedulerSifGpResume);
+            env.runtime.registerFunction(kSifGpHandlerPc, schedulerSifGpHandler);
+
+            g_sifHandlerGp = 0u;
+            R5900Context mainContext{}; // gp 0 until main sets it
+            mainContext.pc = kSifGpMainPc;
+            env.runtime.eeScheduler().reset(env.rdram.data(), mainContext);
+            env.runtime.eeScheduler().run();
+            ps2_stubs::resetSifState();
+
+            t.Equals(g_sifHandlerGp, kSifGpRegistrationGp,
+                     "the handler reads its data through the gp of the code that registered it");
+        });
+
+        tc.Run("save states keep a SIF command handler's gp from version 6", [](TestCase &t)
+        {
+            bool atEnd = false;
+            const std::vector<uint8_t> v6 = sifStateWithHandler(true, kSifGpRegistrationGp);
+            t.IsTrue(resaveSifState(v6, 6u, atEnd) == v6 && atEnd, "a version 6 state keeps the gp");
+            t.IsTrue(resaveSifState(sifStateWithHandler(false, 0u), 5u, atEnd) == sifStateWithHandler(true, 0u) && atEnd,
+                     "a version 5 state loads, its handler without a gp");
+            ps2_stubs::resetSifState();
         });
 
         tc.Run("iSignalSema defers selection until IRQ return", [](TestCase &t)

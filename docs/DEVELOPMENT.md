@@ -62,7 +62,7 @@ Save states hold the whole machine (EE, VU, GS VRAM, IOP, SPU2 and the runtime's
 
 Exit codes: `124` = time limit reached (an observation, not a pass), `3` = missing guest function, `1` = failure. More diagnostics are driven by environment variables (`BDR_STATUS_DETAIL`, `BDR_TRACE_SIF`, `BDR_TRACE_IPU`, `BDR_PROFILE`…), listed in [BOOT.md §10](BOOT.md#10-observation-tools).
 
-Editing `ps2xRuntime/include/ps2_runtime.h` (or another header included by the generated code) rebuilds the ~51,000 generated files; prefer changes in `.cpp` files or in `src/`.
+Editing `ps2xRuntime/include/ps2_runtime.h` (or another header included by the generated code) rebuilds the ~13,500 generated files; prefer changes in `.cpp` files or in `src/`.
 
 ## Compiled VU microprograms
 

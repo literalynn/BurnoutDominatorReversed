@@ -20,7 +20,7 @@ Thanks for helping. This project aims at a faithful native version of the game, 
 3. If you have the disc, check the game itself with a bounded run, e.g. `python tools/project.py run --headless --seconds 60 --status-ms 2000 --log mytest.log --tail 120`. Exit code 124 only means the time limit was reached.
 4. Add a test for new non-trivial logic (runtime, IOP, recompiler or tools).
 
-Changing a header included by the generated code (for example `ps2xRuntime/include/ps2_runtime.h`) rebuilds about 51,000 files; prefer changes in `.cpp` files.
+Changing a header included by the generated code (for example `ps2xRuntime/include/ps2_runtime.h`) rebuilds about 13,500 files; prefer changes in `.cpp` files.
 
 ## Commits and pull requests
 

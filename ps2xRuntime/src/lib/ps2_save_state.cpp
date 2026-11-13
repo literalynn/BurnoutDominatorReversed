@@ -26,7 +26,8 @@ namespace ps2_stubs
 namespace
 {
     constexpr char kStateMagic[8] = {'B', 'D', 'R', 'S', 'T', 'A', 'T', 'E'};
-    constexpr uint32_t kStateVersion = 5u; // 4: the VBlank rate of a game run faster than the console; 5: SPU2 reverb
+    constexpr uint32_t kStateVersion = 6u; // 4: the VBlank rate of a game run faster than the console; 5: SPU2 reverb;
+                                           // 6: the gp of SIF command handlers
 
     void serializePendingTransfers(ps2x::StateArchive &archive, std::vector<PS2Memory::PendingTransfer> &transfers)
     {

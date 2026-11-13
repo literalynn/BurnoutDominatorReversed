@@ -115,6 +115,7 @@ def generate(args) -> None:
     if map_path and not map_path.is_file():
         raise RuntimeError(f"Missing function map: {map_path}")
     augmentation = None
+    routed: list[str] = []
     if map_path and args.augment:
         # Ghidra misses code reached only through pointers (vtables, callbacks).
         # Written to the work directory, never next to a map kept in the checkout.
@@ -124,8 +125,10 @@ def generate(args) -> None:
         run([sys.executable, str(AUGMENTER), str(elf), str(map_path),
              str(LOCAL / "analysis" / (LOCK["boot_path"] + ".json")), str(augmented), str(report)],
             "augment-function-map.log")
-        augmentation = {key: value for key, value in json.loads(report.read_text(encoding="utf-8")).items()
-                        if key not in ("entries", "rejected")}
+        details = json.loads(report.read_text(encoding="utf-8"))
+        # Entry points inside a function: the recompiler gives that function a resume case for each.
+        routed = details.get("routed", [])
+        augmentation = {key: value for key, value in details.items() if key not in ("entries", "rejected", "routed")}
         augmentation["report"] = str(report)
         map_path = augmented
     cfg = LOCAL / "burnout.toml"
@@ -138,7 +141,7 @@ def generate(args) -> None:
         "single_file_output = false\nlow_memory_mode = true\noutput_worker_threads = 1\n"
         "patch_syscalls = false\npatch_cop0 = false\npatch_cache = false\n"
         "stubs = []\nskip = []\n"
-        f"entry_points = [{toml_string('entry@' + LOCK['entry'])}]\n",
+        f"entry_points = [{', '.join(toml_string(e) for e in ['entry@' + LOCK['entry']] + routed)}]\n",
         encoding="utf-8",
     )
     run([str(args.tool.resolve()), str(cfg)], "recompile.log")

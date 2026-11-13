@@ -55,6 +55,24 @@ namespace
         }
     }
 
+    // The context of the generated function the scheduler runs, null between them. At a
+    // checkpoint its pc is where the code goes next: the target of a backward branch.
+    R5900Context *g_runningContext = nullptr;
+
+    // A declared polling loop (ee_idle_loops.h) at the context's pc: one pass costs the EE
+    // cycles to the next event, at most one device batch.
+    uint32_t idleLoopCycles(uint8_t *rdram, const R5900Context *context, uint64_t eeCycle, uint64_t next,
+                            uint32_t cycles, uint32_t batch)
+    {
+        if (!context)
+            return cycles;
+        const ps2x::IdleCheck idle = ps2x::idleLoopAt(context->pc);
+        if (!idle || !idle(rdram, *context))
+            return cycles;
+        const uint64_t untilEvent = next == 0u ? batch : next > eeCycle ? next - eeCycle : 0u;
+        return static_cast<uint32_t>(std::clamp<uint64_t>(untilEvent, cycles, batch));
+    }
+
     // BDR_WATCH_WORD=0xADDR[:0xVALUE]: after every dispatched guest function,
     // compare the guest word at ADDR (with VALUE: report when it becomes
     // VALUE; without: report every change) and print the functions that ran.
@@ -545,15 +563,10 @@ void EeScheduler::run()
         }
         PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
 
-        uint32_t dispatchCycles = kGuestDispatchCycles;
-        if (const ps2x::IdleCheck idle = ps2x::idleLoopAt(context.pc); idle && idle(m_rdram, context))
-        {
-            // A declared polling loop: skip to the next event, within one device batch.
-            const uint64_t next = m_nextDeadlineCycle.load(std::memory_order_acquire);
-            const uint64_t untilEvent = next == 0u ? kDeviceBatchCycles : next > m_eeCycle ? next - m_eeCycle : 0u;
-            dispatchCycles = static_cast<uint32_t>(
-                std::clamp<uint64_t>(untilEvent, kGuestDispatchCycles, kDeviceBatchCycles));
-        }
+        // A declared polling loop: skip to the next event, within one device batch.
+        const uint32_t dispatchCycles = idleLoopCycles(m_rdram, &context, m_eeCycle,
+                                                       m_nextDeadlineCycle.load(std::memory_order_acquire),
+                                                       kGuestDispatchCycles, kDeviceBatchCycles);
         if (checkpointDue(dispatchCycles))
         {
             continue;
@@ -570,7 +583,9 @@ void EeScheduler::run()
                 g_dispatchRecords[g_dispatchNext++ % kDispatchHistory] =
                     DispatchRecord{m_currentThreadId, context.pc, getRegU32(&context, 29), getRegU32(&context, 31)};
             }
+            g_runningContext = &context;
             function(m_rdram, &context, &m_runtime);
+            g_runningContext = nullptr;
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
             // A runtime handler bound over a library function does the whole call and leaves pc
@@ -589,11 +604,13 @@ void EeScheduler::run()
         }
         catch (const EeDispatcherTransfer &)
         {
+            g_runningContext = nullptr;
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
         }
         catch (...)
         {
+            g_runningContext = nullptr;
             m_guestExecuting.store(false, std::memory_order_release);
             m_running.store(false, std::memory_order_release);
             publishSnapshot();
@@ -726,7 +743,8 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
         if (m_deviceCycleDebt + elapsed < kDeviceBatchCycles && m_pendingEeTimerInterrupts == 0u &&
             cycle < m_sliceEndCycle && (nextEventCycle == 0u || cycle < nextEventCycle) &&
             (!g_countRuns || (m_currentThreadId != 0 && m_currentThreadId == m_cachedThreadId)) &&
-            !m_checkpointPending.load(std::memory_order_acquire) && !m_stopRequested.load(std::memory_order_acquire))
+            !m_checkpointPending.load(std::memory_order_acquire) && !m_stopRequested.load(std::memory_order_acquire) &&
+            (!g_runningContext || !ps2x::idleLoopAt(g_runningContext->pc)))
         {
             m_eeCycle = cycle;
             if (g_countRuns) // a cached id always has its thread
@@ -745,6 +763,10 @@ __attribute__((noinline))
 #endif
 bool EeScheduler::checkpointDueSlow(uint32_t cycles) noexcept
 {
+    // A backward branch inside a generated function to a declared polling loop: the pass costs
+    // what a dispatch to it costs (run). The scheduler's own dispatch runs with no context set.
+    cycles = idleLoopCycles(m_rdram, g_runningContext, m_eeCycle, m_nextDeadlineCycle.load(std::memory_order_acquire),
+                            cycles, kDeviceBatchCycles);
     chargeCycles(static_cast<uint32_t>(scaledCycles(cycles, g_eeCycleScalePercent.load(std::memory_order_relaxed))));
 
     if (m_checkpointPending.load(std::memory_order_acquire) ||

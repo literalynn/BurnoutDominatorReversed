@@ -52,6 +52,7 @@ namespace ps2_stubs
         {
             uint32_t function = 0u;
             uint32_t argument = 0u;
+            uint32_t gp = 0u; // the registering code's, as libsif keeps {handler, data, gp}
         };
 
         std::unordered_map<uint32_t, SifCmdHandler> g_sifCmdHandlers;
@@ -297,6 +298,10 @@ namespace ps2_stubs
             SET_GPR_U32(&invocation.context, 5, registered.argument);
             SET_GPR_U32(&invocation.context, 6, 0u);
             SET_GPR_U32(&invocation.context, 7, 0u);
+            // Not the snapshot's gp: it is refreshed every few thousand dispatches only. 0: the
+            // handler comes from a state saved before version 6, which kept no gp.
+            if (registered.gp != 0u)
+                SET_GPR_U32(&invocation.context, 28, registered.gp);
             SET_GPR_U32(&invocation.context, 29, 0u);
             SET_GPR_U32(&invocation.context, 31, 0u);
             invocation.onComplete = [runtime, packetAddress](const R5900Context &, R5900Context &)
@@ -373,7 +378,7 @@ namespace ps2_stubs
         const uint32_t handler = getRegU32(ctx, 5);
         const uint32_t argument = getRegU32(ctx, 6);
         std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);
-        g_sifCmdHandlers[cid] = SifCmdHandler{handler, argument};
+        g_sifCmdHandlers[cid] = SifCmdHandler{handler, argument, getRegU32(ctx, 28)};
         setReturnS32(ctx, 0);
     }
 
@@ -936,7 +941,13 @@ namespace ps2_stubs
         std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);
         archive.podMap(g_sifRegs);
         archive.podMap(g_sifSregs);
-        archive.podMap(g_sifCmdHandlers);
+        archive.map(g_sifCmdHandlers, [](ps2x::StateArchive &a, SifCmdHandler &handler)
+                    {
+                        a.value(handler.function);
+                        a.value(handler.argument);
+                        if (!a.loading() || a.version() >= 6u)
+                            a.value(handler.gp);
+                    });
         archive.value(g_sifCmdBuffer);
         archive.value(g_sifSysCmdBuffer);
         archive.value(g_sifCmdInitialized);

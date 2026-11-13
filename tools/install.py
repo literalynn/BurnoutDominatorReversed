@@ -30,7 +30,7 @@ ISO_RECORD_NAME = "iso_verified.json"  # same record as project.verified_iso()
 GENERATORS = {18: "Visual Studio 18 2026", 17: "Visual Studio 17 2022"}
 GIB = 1024 ** 3
 EXTRACTION_BYTES = 4_700_000_000  # every file of the disc
-TRANSLATION_BYTES = 2 * GIB       # generated C++, about 51,000 files
+TRANSLATION_BYTES = 2 * GIB       # generated C++: about 13,500 files, 240 MB
 BUILD_BYTES = 10 * GIB            # tools, runtime and game build tree
 JOB_BYTES = 3 * GIB               # one compiler on the game's code (2.7 GB at most); CMake limits the VU programs'
 # Inputs that project.py generate records in generation.json. The source map

@@ -13,9 +13,16 @@ Candidates, all limited to 4-aligned addresses inside .text:
     non-zero word of a gap, and the first one after each jr/j + delay slot).
 
 A candidate is kept when its first instructions use valid R5900 opcodes. Rows
-for candidates inside an existing function end with that function; rows in a
-gap end at the next known function. Translating a few data words as code is
-harmless (it is never called); a missing entry point stops the game.
+for candidates in a gap end at the next known function. Translating a few data
+words as code is harmless (it is never called); a missing entry point stops the
+game.
+
+Candidates inside a function, and the entry_* labels Ghidra exports inside one,
+become entry points of that function instead of rows (the report's "routed"
+list, the recompiler's entry_points): a row would be translated again from
+there to the function's end, which made 41% of all translated instructions.
+The recompiler gives the function a resume case for each of them and registers
+it at that address.
 
 Usage: augment_function_map.py <ELF> <map.csv> <analysis.json> <out.csv> <report.json>
 """
@@ -89,15 +96,17 @@ def main() -> int:
     functions = sorted({(int(r["Start"], 16), int(r["End"], 16)) for r in rows
                         if not r["Name"].startswith(("entry_", "LAB_"))})
     starts = [s for s, _ in functions]
+    reach = []  # the furthest end of the functions up to each one: Ghidra nests caseD_ blocks in functions
+    for _, end in functions:
+        reach.append(max(end, reach[-1] if reach else 0))
 
     def containing(address: int):
+        """The innermost function around address."""
         i = bisect.bisect_right(starts, address) - 1
-        while i >= 0:
+        while i >= 0 and reach[i] > address:
             start, end = functions[i]
             if start <= address < end:
                 return start, end
-            if end <= address:
-                return None
             i -= 1
         return None
 
@@ -159,9 +168,17 @@ def main() -> int:
             continue
         added.append({"address": address, "end": end, "inside": parent is not None, "reasons": why})
 
-    out_rows = rows + [{"Name": f"ptr_{a['address']:08x}", "Start": f"0x{a['address']:08X}",
-                        "End": f"0x{a['end']:08X}", "Size": str(a["end"] - a["address"])}
-                       for a in added]
+    def nested(row: dict) -> bool:
+        start, end = int(row["Start"], 16), int(row["End"], 16)
+        parent = containing(start)
+        return parent is not None and parent[0] < start and end <= parent[1]
+
+    labels = [r for r in rows if r["Name"].startswith("entry_") and nested(r)]
+    routed = sorted({int(r["Start"], 16) for r in labels} | {a["address"] for a in added if a["inside"]})
+    out_rows = [r for r in rows if not (r["Name"].startswith("entry_") and nested(r))] + [
+        {"Name": f"ptr_{a['address']:08x}", "Start": f"0x{a['address']:08X}",
+         "End": f"0x{a['end']:08X}", "Size": str(a["end"] - a["address"])}
+        for a in added if not a["inside"]]
     out_rows.sort(key=lambda r: (int(r["Start"], 16), r["Name"]))
     with out_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["Name", "Start", "End", "Size"], lineterminator="\n")
@@ -174,7 +191,9 @@ def main() -> int:
         "added": len(added),
         "added_in_gaps": sum(not a["inside"] for a in added),
         "added_inside_functions": sum(a["inside"] for a in added),
+        "labels_inside_functions": len(labels),
         "rejected_invalid_opcodes": len(rejected),
+        "routed": [f"0x{address:08X}" for address in routed],
         "entries": [{"address": f"0x{a['address']:08X}", "end": f"0x{a['end']:08X}",
                      "inside_function": a["inside"], "reasons": a["reasons"]} for a in added],
         "rejected": rejected,
@@ -182,6 +201,7 @@ def main() -> int:
     report_path.write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     print(f"{len(rows)} rows + {len(added)} entry points "
           f"({report['added_in_gaps']} in gaps, {report['added_inside_functions']} inside functions); "
+          f"{len(labels)} entry_ labels inside functions; {len(routed)} entry points routed to their function; "
           f"{len(rejected)} rejected -> {out_path}")
     return 0
 
