@@ -2,9 +2,11 @@
 
 #include "ps2x/iop/iop_host.h"
 #include "runtime/disc_patches.h"
+#include "runtime/disc_read_ahead.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -106,6 +108,7 @@ private:
         std::FILE *stream = nullptr;
         uint64_t size = 0u;
         std::vector<ps2x::DiscOverlay> overlays; // patched disc files (disc_patches.h)
+        std::unique_ptr<ps2x::DiscReadAhead> readAhead; // the disc image only
     };
     mutable std::mutex m_hostFileMutex;
     std::unordered_map<uint64_t, HostFile> m_hostFiles;

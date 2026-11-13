@@ -4,6 +4,7 @@
 #include "ps2_stubs.h"
 #include "Kernel/Stubs/MemoryCard.h"
 #include "runtime/adaptive_resolution.h"
+#include "runtime/disc_read_ahead.h"
 #include "runtime/car_lights.h"
 #include "runtime/host_settings.h"
 #include "runtime/host_audio.h"
@@ -176,6 +177,47 @@ void register_ps2_runtime_io_tests()
 {
     MiniTest::Case("PS2RuntimeIO", [](TestCase &tc)
     {
+        tc.Run("disc read ahead serves the bytes that follow each read, unchanged", [](TestCase &t)
+        {
+            const std::filesystem::path file = std::filesystem::temp_directory_path() / "ps2x_read_ahead_test.bin";
+            std::vector<uint8_t> bytes(3u * 1024u * 1024u + 1000u);
+            for (size_t i = 0; i < bytes.size(); ++i)
+                bytes[i] = static_cast<uint8_t>((i * 2654435761u) >> 13);
+            {
+                std::ofstream out(file, std::ios::binary);
+                out.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            }
+            {
+                ps2x::DiscReadAhead ahead(file, bytes.size());
+                t.IsTrue(ahead.valid(), "the file opens");
+                // A stream read 32 KiB at a time, as the game reads its music: every read after the
+                // first finds its bytes read ahead.
+                std::vector<uint8_t> buffer(32u * 1024u);
+                bool same = true;
+                uint32_t reads = 0;
+                for (uint64_t offset = 1024u * 1024u + 4096u; offset + buffer.size() <= bytes.size(); offset += buffer.size(), ++reads)
+                {
+                    if (!ahead.read(offset, buffer.data(), buffer.size()))
+                        std::memcpy(buffer.data(), bytes.data() + offset, buffer.size());
+                    same = same && std::memcmp(buffer.data(), bytes.data() + offset, buffer.size()) == 0;
+                    ahead.readAfter(offset, buffer.size());
+                }
+                t.IsTrue(same, "the bytes are the file's");
+                t.Equals(ahead.reads(), static_cast<uint64_t>(reads), "every read is counted");
+                t.Equals(ahead.hits(), static_cast<uint64_t>(reads - 1u), "only the first read misses");
+
+                // The end of the file, then bytes past it and bytes never read ahead.
+                const size_t tail = 1000u;
+                ahead.readAfter(bytes.size() - tail - 100u, 100u);
+                t.IsTrue(ahead.read(bytes.size() - tail, buffer.data(), tail) &&
+                             std::memcmp(buffer.data(), bytes.data() + bytes.size() - tail, tail) == 0,
+                         "the last bytes are read ahead");
+                t.IsFalse(ahead.read(bytes.size() - 10u, buffer.data(), 20u), "nothing past the end");
+                t.IsFalse(ahead.read(0u, buffer.data(), 100u), "bytes never queued are left to the caller");
+            }
+            std::filesystem::remove(file);
+        });
+
         tc.Run("ROM0 ROMVER is exposed as the 14-byte firmware pseudo-file", [](TestCase &t)
         {
             TestContext test;

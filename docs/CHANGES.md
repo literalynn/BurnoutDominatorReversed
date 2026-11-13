@@ -2,6 +2,10 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## The disc is read ahead (November 13, 2026)
+
+- `ps2xRuntime/include/runtime/disc_read_ahead.h`, `ps2xRuntime/src/lib/disc_read_ahead.cpp` (new), `ps2xRuntime/src/lib/ps2_iop_host.cpp` and `.h`: reads of the disc image go through `DiscReadAhead`, which reads the 512 KiB after each read (more after a larger one) on a thread of its own, in 64 KiB chunks, and keeps the last 16 MiB; the next read of a stream finds its bytes in memory. The game's reads stay synchronous and the bytes are the same. In a race, 119 of 124 reads are served from it (`BDR_TRACE_CDVD=1` prints the count at exit). Meant for hard disks, where a seek costs about 10 ms; this PC has only NVMe drives, where no difference is measurable. `ps2xTest/src/ps2_runtime_io_tests.cpp`: the bytes after each read come back unchanged.
+
 ## Burnout's GS pipelines are compiled at start-up, upstream's list no longer (November 13, 2026)
 
 - `cmake/ParallelGSPatches.cmake` (`gs_renderer.cpp`, `kick_compilation_tasks`): at start-up paraLLEl-GS has the driver compile pipelines on half the CPU's threads; the driver keeps them in its cache, so this costs on a first run, after a driver update or a new build. Its list crossed 13 colour and depth formats, 8 variant flag sets, the feedback textures and (with our earlier patch) every rate the interface can set: 4,800 pipelines and 480 CPU seconds at 4 samples here, about a minute on eight threads, several minutes of a small CPU's cores while the player is in the front end. It still missed most of what Burnout draws: `VARIANT_FLAG_HAS_PRIMITIVE_RANGE_BIT` (any pass with a depth test), PSMZ32 depth, PSMCT16 colour, PSMZ24 drawn as colour, the triangle setup (never precompiled) and PSMT8H uploads. The GS submission thread compiled each of those when first drawn, 0.1 to 0.23 s for a shading pipeline on an RTX 5090: 39 compilations, 6.3 s of stalls, in the first 30 s of a race loaded from a state with a fresh driver cache.

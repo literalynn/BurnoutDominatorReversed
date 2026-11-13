@@ -331,13 +331,22 @@ uint64_t PS2IopHostAdapter::openHostFile(std::string_view path)
 
     const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
     std::vector<ps2x::DiscOverlay> overlays = ps2x::discOverlaysFor(hostPath, paths.cdImage, paths.cdRoot);
+    std::unique_ptr<ps2x::DiscReadAhead> readAhead;
+    if (!paths.cdImage.empty() && std::filesystem::equivalent(hostPath, paths.cdImage, error))
+    {
+        readAhead = std::make_unique<ps2x::DiscReadAhead>(hostPath, size);
+        if (!readAhead->valid())
+        {
+            readAhead.reset();
+        }
+    }
     std::lock_guard<std::mutex> lock(m_hostFileMutex);
     uint64_t handle = m_nextHostFileHandle++;
     if (handle == 0u)
     {
         handle = m_nextHostFileHandle++;
     }
-    m_hostFiles.emplace(handle, HostFile{stream, size, std::move(overlays)});
+    m_hostFiles.emplace(handle, HostFile{stream, size, std::move(overlays), std::move(readAhead)});
     return handle;
 }
 
@@ -373,24 +382,36 @@ bool PS2IopHostAdapter::readHostFile(uint64_t handle,
         return false;
     }
 
-#if defined(_WIN32)
-    if (offset > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
-        _fseeki64(it->second.stream, static_cast<int64_t>(offset), SEEK_SET) != 0)
-#else
-    if (offset > static_cast<uint64_t>(std::numeric_limits<off_t>::max()) ||
-        fseeko(it->second.stream, static_cast<off_t>(offset), SEEK_SET) != 0)
-#endif
+    ps2x::DiscReadAhead *readAhead = it->second.readAhead.get();
+    if (readAhead && readAhead->read(offset, destination, size))
     {
-        return false;
+        bytesRead = size;
     }
-
-    bytesRead = size == 0u
-                    ? 0u
-                    : std::fread(destination, 1u, size, it->second.stream);
-    if (bytesRead < size && std::ferror(it->second.stream))
+    else
     {
-        std::clearerr(it->second.stream);
-        return false;
+#if defined(_WIN32)
+        if (offset > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
+            _fseeki64(it->second.stream, static_cast<int64_t>(offset), SEEK_SET) != 0)
+#else
+        if (offset > static_cast<uint64_t>(std::numeric_limits<off_t>::max()) ||
+            fseeko(it->second.stream, static_cast<off_t>(offset), SEEK_SET) != 0)
+#endif
+        {
+            return false;
+        }
+
+        bytesRead = size == 0u
+                        ? 0u
+                        : std::fread(destination, 1u, size, it->second.stream);
+        if (bytesRead < size && std::ferror(it->second.stream))
+        {
+            std::clearerr(it->second.stream);
+            return false;
+        }
+    }
+    if (readAhead)
+    {
+        readAhead->readAfter(offset, bytesRead);
     }
     ps2x::applyDiscOverlays(it->second.overlays, offset, destination, bytesRead);
     return true;
@@ -399,6 +420,7 @@ bool PS2IopHostAdapter::readHostFile(uint64_t handle,
 void PS2IopHostAdapter::closeHostFile(uint64_t handle)
 {
     std::FILE *stream = nullptr;
+    std::unique_ptr<ps2x::DiscReadAhead> readAhead; // stopped outside the lock
     {
         std::lock_guard<std::mutex> lock(m_hostFileMutex);
         const auto it = m_hostFiles.find(handle);
@@ -407,6 +429,7 @@ void PS2IopHostAdapter::closeHostFile(uint64_t handle)
             return;
         }
         stream = it->second.stream;
+        readAhead = std::move(it->second.readAhead);
         m_hostFiles.erase(it);
     }
     if (stream)
