@@ -196,7 +196,7 @@ Sampler::Sampler() {
     state_ = std::make_unique<State>();
     state_->samples.reserve(kMaxSamples);
     if (const char* callers = std::getenv("BDR_PROFILE_CALLERS"))
-        state_->callers = std::clamp(std::atoi(callers), 0, 16);
+        state_->callers = std::clamp(std::atoi(callers), 0, 40);
     state_->stacks.reserve(kMaxSamples / 8u * static_cast<size_t>(state_->callers));
     State* state = state_.get();
     state->worker = std::thread([this, state] {
@@ -234,7 +234,7 @@ Sampler::Sampler() {
                 break;
             CONTEXT context{};
             context.ContextFlags = state->callers ? CONTEXT_FULL : CONTEXT_CONTROL;
-            uint64_t pcs[17] = {};
+            uint64_t pcs[41] = {};
             if (GetThreadContext(target, &context))
                 pcs[0] = context.Rip;
             if (pcs[0] != 0 && state->callers)
