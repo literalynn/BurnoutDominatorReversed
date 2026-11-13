@@ -29,7 +29,7 @@ The game is complete and playable from start to finish. The project is a work in
 | **Windows 10 / 11** | The main platform: installer, launcher and game tested. |
 | **Linux** | Builds in CI with GCC and Clang and is played by contributors; less tested than Windows. The launcher's window is built on your PC at its first start (if that fails, the launcher opens in your browser). |
 | **macOS, Android** | Not supported yet. |
-| **Speed** | Developed on a Ryzen 7 9800X3D with an RTX 5090: races at full speed at 60 frames a second, about 240 at 240 Hz and 300 at 300 Hz. A player with a Ryzen 7 9800X3D and an RTX 5070 Ti reported 60 in races. Smaller PCs are untested; one fast core matters most. |
+| **Speed** | Developed on a Ryzen 7 9800X3D with an RTX 5090: races at full speed at 60 frames a second, about 240 at 240 Hz and 300 at 300 Hz. A player with a Ryzen 7 9800X3D and an RTX 5070 Ti reported 60 in races. Smaller PCs were imitated on that PC: with the whole game held to one thread of the processor, a race still runs at 60 frames a second with no sound dropouts; on the processor's own integrated graphics (a Radeon with 2 compute units), 45 to 55 frames a second at the PS2's resolution, the race keeping its speed. Real small PCs are untested; one fast core matters most. |
 | **Accuracy** | Nothing in the game is skipped or faked. The main processor's float results were compared with a real console's: they match except some additions and multiplications that differ in the last bit. The vector units' arithmetic and the sound's reverb have not been compared with a console yet. |
 
 **Known issues**
