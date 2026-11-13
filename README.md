@@ -74,7 +74,7 @@ The game is complete and playable from start to finish. The project is a work in
 |---|---|
 | **Game** | your own Burnout Dominator ISO, European release (`SLES-54627`). Other releases are not supported. |
 | **System** | Windows 10 or 11, 64-bit, or Linux (x86-64). |
-| **Processor** | x86-64, four threads or more; single-thread speed matters most. FMA3 (Intel since 2013, AMD since 2012) is used when present. |
+| **Processor** | x86-64, four threads or more; single-thread speed matters most. On Windows, AVX2 is required (Intel since 2013, AMD since 2015): the build compiles for it. On Linux, FMA3 is used when present. |
 | **Graphics** | a card with Vulkan. Two and four times the PS2's resolution need a dedicated card. |
 | **Memory** | 16 GB or more to build the game: a few of its files take up to 8 GB each to compile. With less memory the build compiles fewer of them at once. |
 | **Disk** | 25 GB free. Once the game is built, *Free up disk space* in the launcher deletes the build files (about 12 GB); the game still plays, but the next update then builds it all again (30 to 90 minutes). |
