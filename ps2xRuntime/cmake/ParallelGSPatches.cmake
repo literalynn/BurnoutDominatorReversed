@@ -119,5 +119,39 @@ parallel_gs_replace("\tsize_t num_tasks = tasks.size();\n\tsize_t target_threads
     "\t// The copy, upload and binning pipelines first (they are needed at once), each key once (with\n\t// wave64 every rate has the same subgroup size); each thread takes every target_threads-th task,\n\t// so that they all follow that order.\n\tstd::rotate(tasks.begin(), tasks.begin() + bdr_ubershader_end, tasks.end());\n\tstd::unordered_set<Util::Hash> seen;\n\ttasks.erase(std::remove_if(tasks.begin(), tasks.end(), [&](const Vulkan::DeferredPipelineCompile &task) {\n\t\treturn !seen.insert(task.hash).second;\n\t}), tasks.end());\n\tsize_t target_threads = std::max<size_t>(1, (std::thread::hardware_concurrency() + 1) / 2);\n\n\tfor (size_t thread_index = 0; thread_index < target_threads; thread_index++)\n\t{\n\t\tstd::vector<Vulkan::DeferredPipelineCompile> deferred;\n\t\tfor (size_t i = thread_index; i < tasks.size(); i += target_threads)\n\t\t\tdeferred.push_back(tasks[i]);\n")
 parallel_gs_replace("\tinit_luts();\n\n\tkick_compilation_tasks();\n"
     "\tinit_luts();\n\n\tbdr_precompile_options = options;\n\tkick_compilation_tasks();\n")
+# The page tracker's patch below leaves VRAM pages stale in host memory only when host memory has a
+# copy of its own.
+parallel_gs_replace("void GSRenderer::init_vram(const GSOptions &options)\n"
+    "extern bool bdr_separate_host_vram; // page_tracker.cpp\n\nvoid GSRenderer::init_vram(const GSOptions &options)\n")
+parallel_gs_replace("\t\tdevice->set_name(*buffers.cpu, \"vram-cpu\");\n"
+    "\t\tdevice->set_name(*buffers.cpu, \"vram-cpu\");\n\t\tbdr_separate_host_vram = true;\n")
 parallel_gs_use_patched(${patch_file} gs_renderer_patched.cpp)
 target_include_directories(parallel-gs PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/shaders")
+
+# VRAM goes back to host memory when the host looks at it, not at every submission. paraLLEl-GS
+# copied every page the GPU wrote (render passes, copies, uploads) to its host copy of VRAM at each
+# submission (FINISH, each present), so that a read from the host would find it there: 0.35 ms of
+# the 2.2 ms an RTX 5090 spent on a race frame at 4 samples a pixel, in the middle of the frame's
+# GPU work. Burnout reads nothing back during a race. Such a page is now left stale: whatever looks
+# at the host copy of a stale page (a host read or write, a FIFO readback, a texture taken from the
+# host copy, an upload written on the CPU) sees it as having GPU work not yet submitted, so it
+# submits with FlushReason::HostAccess and waits, and that submission copies every stale page back.
+# A UMA device shares one buffer between them and copies nothing: nothing changes there.
+set(patch_file gs/page_tracker.cpp)
+file(READ "${parallel_gs_SOURCE_DIR}/${patch_file}" patch_source)
+parallel_gs_replace("bool PageTracker::page_has_host_write_timeline_update(const PageRect &rect) const\n{"
+    "// A flag bit paraLLEl-GS leaves unused: the host copy of the page is older than the GPU's.\nstatic constexpr PageStateFlags BDR_PAGE_HOST_STALE_BIT = 1u << 31;\n// Set by GSRenderer::init when host memory has a copy of VRAM of its own (a discrete GPU).\nbool bdr_separate_host_vram = false;\n\nbool PageTracker::page_has_host_write_timeline_update(const PageRect &rect) const\n{")
+parallel_gs_replace("\t\t\tif ((state.need_host_write_timeline_mask & rect.block_mask) != 0)\n"
+    "\t\t\tif ((state.need_host_write_timeline_mask & rect.block_mask) != 0 || (state.flags & BDR_PAGE_HOST_STALE_BIT) != 0)\n")
+parallel_gs_replace("\t\t\tif ((state.need_host_read_timeline_mask & rect.block_mask) != 0)\n"
+    "\t\t\tif ((state.need_host_read_timeline_mask & rect.block_mask) != 0 || (state.flags & BDR_PAGE_HOST_STALE_BIT) != 0)\n")
+# The unsynced CPU upload of gs_interface.cpp writes the host copy of pages that are not sensitive.
+parallel_gs_replace("\t\t\tif (((state.cached_read_block_mask | state.copy_write_block_mask | state.copy_read_block_mask) & rect.block_mask) != 0)\n"
+    "\t\t\tif (((state.cached_read_block_mask | state.copy_write_block_mask | state.copy_read_block_mask) & rect.block_mask) != 0 ||\n\t\t\t    (state.flags & BDR_PAGE_HOST_STALE_BIT) != 0)\n")
+parallel_gs_replace("\t\t\tif (state.punchthrough_host_write_mask == 0 ||\n"
+    "\t\t\tif (state.punchthrough_host_write_mask == 0 || (state.flags & BDR_PAGE_HOST_STALE_BIT) != 0 ||\n")
+parallel_gs_replace("\t\tif (page.need_host_read_timeline_mask != 0)\n\t\t{\n\t\t\tpage.host_read_timeline = timeline;\n\t\t\tcb.sync_vram_host_page(page_index);\n\t\t}\n"
+    "\t\tif (page.need_host_read_timeline_mask != 0)\n\t\t{\n\t\t\tpage.host_read_timeline = timeline;\n\t\t\tif (bdr_separate_host_vram)\n\t\t\t\tpage.flags |= BDR_PAGE_HOST_STALE_BIT;\n\t\t\telse\n\t\t\t\tcb.sync_vram_host_page(page_index);\n\t\t}\n")
+parallel_gs_replace("\taccessed_readback_pages.clear();\n\n\tcb.flush(PAGE_TRACKER_FLUSH_WRITE_BACK_BIT, reason);\n"
+    "\taccessed_readback_pages.clear();\n\n\t// The host is about to look at its copy: the stale pages come back with this submission.\n\tif (reason == FlushReason::HostAccess)\n\t{\n\t\tfor (uint32_t page_index = 0; page_index < page_state.size(); page_index++)\n\t\t{\n\t\t\tauto &page = page_state[page_index];\n\t\t\tif ((page.flags & BDR_PAGE_HOST_STALE_BIT) != 0)\n\t\t\t{\n\t\t\t\tpage.flags &= ~BDR_PAGE_HOST_STALE_BIT;\n\t\t\t\tpage.host_read_timeline = timeline;\n\t\t\t\tpage.host_write_timeline = timeline;\n\t\t\t\tcb.sync_vram_host_page(page_index);\n\t\t\t}\n\t\t}\n\t}\n\n\tcb.flush(PAGE_TRACKER_FLUSH_WRITE_BACK_BIT, reason);\n")
+parallel_gs_use_patched(${patch_file} page_tracker_patched.cpp)
