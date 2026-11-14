@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -21,8 +22,11 @@ namespace
     class AsyncBackend final : public GSRasterBackend
     {
     public:
-        explicit AsyncBackend(std::unique_ptr<GSRasterBackend> inner) : m_inner(std::move(inner))
+        explicit AsyncBackend(std::unique_ptr<GSRasterBackend> inner)
+            : m_inner(std::move(inner)), m_readbacks(dynamic_cast<GSDeferredReadback *>(m_inner.get()))
         {
+            if (m_readbacks)
+                m_readbacks->deferReadbacks();
             m_thread = std::thread([this] { run(); });
         }
 
@@ -98,6 +102,13 @@ namespace
             m_drained.wait(lock, [this] { return m_queuedPresents <= 1u; });
             PresentationFrame frame = std::move(m_presented);
             m_presented = {};
+            const int readback = std::exchange(m_presentedReadback, -1);
+            lock.unlock();
+            // The frame's GPU work and readback were submitted, not waited for: the thread records
+            // the next frame meanwhile. The frontend calls Present under a lock, so the next
+            // Present, which could reuse the readback's buffer, is not queued before it is read.
+            if (readback >= 0)
+                frame = m_readbacks->finishReadback(readback);
             return frame;
         }
 
@@ -264,9 +275,11 @@ namespace
                     case Kind::Present:
                     {
                         PresentationFrame frame = m_inner->Present(requests[nextRequest++]);
+                        const int readback = m_readbacks ? m_readbacks->takeReadback() : -1;
                         {
                             std::lock_guard<std::mutex> presented(m_mutex);
                             m_presented = std::move(frame);
+                            m_presentedReadback = readback;
                             --m_queuedPresents;
                         }
                         m_drained.notify_all();
@@ -285,6 +298,7 @@ namespace
         }
 
         std::unique_ptr<GSRasterBackend> m_inner;
+        GSDeferredReadback *m_readbacks; // m_inner's, if it is one
         mutable std::mutex m_mutex;
         mutable std::condition_variable m_pushed;
         mutable std::condition_variable m_drained;
@@ -292,6 +306,7 @@ namespace
         std::vector<uint8_t> m_bytes;                  // the queued jobs' data, back to back
         std::vector<GSPresentationRequest> m_requests; // the queued presentations'
         PresentationFrame m_presented; // the last frame presented, until Present takes it
+        int m_presentedReadback = -1;  // and the readback to finish it with
         size_t m_queuedBytes = 0u;
         uint32_t m_queuedPresents = 0u; // queued or running
         bool m_busy = false;

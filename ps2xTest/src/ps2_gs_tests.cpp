@@ -22,6 +22,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace ps2_syscalls;
@@ -1304,6 +1305,65 @@ void register_ps2_gs_tests()
                 async->Present(GSPresentationRequest{});
                 t.IsTrue(slow.presented.load() >= call - 1, "every earlier frame is presented when Present returns");
             }
+        });
+
+        // paraLLEl-GS leaves a frame's readback to the async wrapper's Present, which returns
+        // the frame finished: the thread that presents does not wait for the GPU.
+        tc.Run("async GS backend: Present finishes a deferred readback", [](TestCase &t)
+        {
+            struct DeferredPresents final : GSRasterBackend, GSDeferredReadback
+            {
+                bool deferred = false;
+                int presented = 0, pending = -1; // on the async thread
+                std::atomic<int> finished{0};
+                void Initialize(uint8_t *, uint32_t) override {}
+                void Reset() override {}
+                void Submit(const GSPrimitiveBatch &) override {}
+                void LoadClut(const GSTex0Reg &, const GSTexClutReg &) override {}
+                void BeginTransfer(const GSTransferCommand &) override {}
+                void UploadImage(const uint8_t *, uint32_t) override {}
+                void Flush() override {}
+                void TextureFlush() override {}
+                void Sync(GSSyncReason) override {}
+                PresentationFrame Present(const GSPresentationRequest &) override
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    pending = ++presented;
+                    return {};
+                }
+                bool ClearFramebuffer(const GSContext &, uint32_t) override { return false; }
+                uint32_t ConsumeLocalToHostBytes(uint8_t *, uint32_t) override { return 0u; }
+                uint32_t ReadVram(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) const override { return 0u; }
+                void WriteVram(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) override {}
+                void SnapshotVram(std::vector<uint8_t> &) const override {}
+                GSTransferSnapshot GetTransferSnapshot() const override { return {}; }
+                void deferReadbacks() override { deferred = true; }
+                int takeReadback() override { return std::exchange(pending, -1); }
+                PresentationFrame finishReadback(int readback) override
+                {
+                    ++finished;
+                    PresentationFrame frame;
+                    frame.width = frame.height = 1u;
+                    frame.pixels.assign(4u, static_cast<uint8_t>(readback));
+                    return frame;
+                }
+            };
+            auto inner = std::make_unique<DeferredPresents>();
+            DeferredPresents &fake = *inner;
+            std::unique_ptr<GSRasterBackend> async = CreateAsyncGSBackend(std::move(inner));
+            t.IsTrue(fake.deferred, "the wrapper asks for deferred readbacks");
+            int frames = 0;
+            for (int call = 1; call <= 4; ++call)
+            {
+                const PresentationFrame frame = async->Present(GSPresentationRequest{});
+                if (frame)
+                {
+                    ++frames;
+                    t.IsTrue(frame.pixels[0] + 1 >= call, "a frame is this presentation's or the previous one's");
+                }
+            }
+            t.IsTrue(frames >= 2, "frames come back with their pixels");
+            t.Equals(fake.finished.load(), frames, "every frame returned was finished, once");
         });
 
         // BDR_PGS_REPLAY=file (recorded with BDR_PGS_RECORD): feeds the same GS

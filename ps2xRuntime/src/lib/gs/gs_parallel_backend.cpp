@@ -28,6 +28,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace ParallelGS
 {
@@ -131,7 +132,7 @@ namespace
         }
     };
 
-    class ParallelBackend final : public GSRasterBackend, private ParallelGS::SignalInterface
+    class ParallelBackend final : public GSRasterBackend, public GSDeferredReadback, private ParallelGS::SignalInterface
     {
         // Every GSInterface and Device call is serialized, presentation included.
         mutable std::recursive_mutex mutex;
@@ -156,6 +157,10 @@ namespace
         };
         Readback readbacks[2];
         unsigned readbackIndex = 0;
+        // At the console's rate the caller may finish the readback itself (GSDeferredReadback):
+        // GsSubmit waited about 8% of a frame for the GPU on a 2-CU iGPU.
+        bool deferred = false;
+        int deferredReadback = -1;
         // Frames shared with the window instead (runtime/shared_frames.h): an image a slot, and
         // the last frame's copy, which the next Present waits for as it would for a readback.
         bool shareFrames = false;
@@ -693,21 +698,7 @@ namespace
             const uint32_t height = scanout.image->get_height();
             const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
             auto &device = vulkan.device;
-            // The frontend gives its previous frame's buffer back: a new one of 1 to 5 MiB
-            // a frame mapped fresh pages, and freeing it unmapped them on the GS worker.
-            PresentationFrame frame;
-            const auto copyOut = [&](Readback &ready) {
-                ready.fence->wait();
-                ready.pending = false;
-                frame.width = ready.width;
-                frame.height = ready.height;
-                const size_t readyBytes = size_t(ready.width) * ready.height * 4;
-                frame.pixels = ps2x::takeTransferBuffer(readyBytes);
-                const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
-                // A plain copy, alpha included: the window draws frames opaque and frame dumps set it.
-                frame.pixels.assign(mapped, mapped + readyBytes);
-                device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
-            };
+            const unsigned submitted = readbackIndex;
             Readback &current = readbacks[readbackIndex];
             if (!current.buffer || current.buffer->get_create_info().size != bytes)
             {
@@ -731,11 +722,44 @@ namespace
 
             Readback &previous = readbacks[readbackIndex ^ 1u];
             readbackIndex ^= 1u;
-            if (ps2x::vblankRate() == 0u)
-                copyOut(current);
-            else if (previous.pending)
-                copyOut(previous);
-            // else no frame (the first one at this rate): the frontend keeps the one it shows.
+            if (ps2x::vblankRate() != 0u)
+            {
+                // No frame the first time at this rate: the frontend keeps the one it shows.
+                if (!previous.pending)
+                    return {};
+                previous.pending = false;
+                return readBack(previous);
+            }
+            current.pending = false;
+            if (deferred)
+            {
+                deferredReadback = int(submitted);
+                return {};
+            }
+            return readBack(current);
+        }
+
+        void deferReadbacks() override { deferred = true; }
+        int takeReadback() override { return std::exchange(deferredReadback, -1); }
+        // Without the lock: Present writes this readback again two presentations later only
+        // (GSDeferredReadback), and fence waits and host maps are thread-safe in Granite.
+        PresentationFrame finishReadback(int readback) override { return readBack(readbacks[readback]); }
+
+        // The frontend gives its previous frame's buffer back: a new one of 1 to 5 MiB a frame
+        // mapped fresh pages, and freeing it unmapped them on the GS worker.
+        PresentationFrame readBack(Readback &ready)
+        {
+            auto &device = vulkan.device;
+            ready.fence->wait();
+            PresentationFrame frame;
+            frame.width = ready.width;
+            frame.height = ready.height;
+            const size_t readyBytes = size_t(ready.width) * ready.height * 4;
+            frame.pixels = ps2x::takeTransferBuffer(readyBytes);
+            const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
+            // A plain copy, alpha included: the window draws frames opaque and frame dumps set it.
+            frame.pixels.assign(mapped, mapped + readyBytes);
+            device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
             return frame;
         }
 
