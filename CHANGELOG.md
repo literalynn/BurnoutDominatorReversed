@@ -2,6 +2,11 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.5.1 (November 14, 2026)
+
+- **Less work for the graphics card**: after each frame, the game no longer copies the graphics memory back from the card when nothing reads it: about 16% less graphics card time a frame at the default quality on NVIDIA cards.
+- **Faster on AMD and Intel graphics**: the game prepares the next frame while the graphics card finishes the current one, instead of waiting for it: about 6% faster on a small integrated chip, and up to a quarter faster at 16 samples a pixel. The picture is not shown any later.
+
 ## 1.5.0 (November 13, 2026)
 
 - **Faster installation and updates**: the game's code is now translated once instead of almost twice, so there is half as much to compile and the game file is a third smaller. The installer no longer builds test programs players never use (about 20 minutes saved on a first installation) and skips graphics routines the game already has in a faster form. This update translates and builds the whole game again, once.
