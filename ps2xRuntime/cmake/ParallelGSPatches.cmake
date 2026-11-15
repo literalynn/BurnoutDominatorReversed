@@ -178,7 +178,9 @@ parallel_gs_replace("\taccessed_readback_pages.clear();\n\n\tcb.flush(PAGE_TRACK
 # A render pass that crosses a submission threshold (GSRenderer::check_flush_stats: 4096 primitives,
 # image memory, ...) only marks memory pressure, which was acted on at the next TEX0 write or draw kick:
 # the next pass got its first primitive, then was flushed and submitted on its own, a render pass of one
-# primitive (about 3 a race frame, a GPU drain each). The flush now submits at once, the next pass empty.
+# primitive (about 3 a race frame, a GPU drain each). A flush for a hazard, a frame buffer change or a full
+# pass now submits at once, the next pass empty. Not a submission's own flush (mark_submission_timeline),
+# which submits next anyway: a submission nested in it would signal its timeline value before its readbacks.
 parallel_gs_replace("\tcb.flush(PAGE_TRACKER_FLUSH_FB_ALL, reason);\n\n\tTRACE(\"TRACKER || FLUSH RENDER PASS\\n\");\n"
-    "\tcb.flush(PAGE_TRACKER_FLUSH_FB_ALL, reason);\n\n\tif (reason != FlushReason::PressureFlush)\n\t\tflush_if_memory_pressure();\n\n\tTRACE(\"TRACKER || FLUSH RENDER PASS\\n\");\n")
+    "\tcb.flush(PAGE_TRACKER_FLUSH_FB_ALL, reason);\n\n\tif (reason == FlushReason::TextureHazard || reason == FlushReason::CopyHazard ||\n\t    reason == FlushReason::FBPointer || reason == FlushReason::Overflow)\n\t\tflush_if_memory_pressure();\n\n\tTRACE(\"TRACKER || FLUSH RENDER PASS\\n\");\n")
 parallel_gs_use_patched(${patch_file} page_tracker_patched.cpp)
