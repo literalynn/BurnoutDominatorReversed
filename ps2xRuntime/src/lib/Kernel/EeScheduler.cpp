@@ -2390,7 +2390,14 @@ void EeScheduler::processDueDeadlines()
                 const auto dropped = std::chrono::duration_cast<std::chrono::nanoseconds>((hostNow - period) - scheduled.hostDeadline);
                 if (g_countRuns && !deterministicTiming() && !m_fastForward &&
                     dropped > std::chrono::nanoseconds::zero() && dropped < kCountStallLimit)
-                    g_countLagCycles += hostDurationToEeCycles(std::min<std::chrono::nanoseconds>(dropped, 2 * period));
+                {
+                    const uint64_t lag = hostDurationToEeCycles(std::min<std::chrono::nanoseconds>(dropped, 2 * period));
+                    g_countLagCycles += lag;
+                    // The IOP runs through the lag too: on a console it never waits for the EE's frames.
+                    // Otherwise the SPU2 played at the emulated speed while the race kept its own, its
+                    // sound time-stretched and, below half speed, broken up (GitHub issue 14).
+                    m_runtime.advanceIopEeCycles(lag);
+                }
                 scheduleEvent(scheduled.deadlineCycle + vblankPeriodCycles(pal),
                               base + period,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
