@@ -2,6 +2,11 @@
 
 Complete base kept from `ran-j/PS2Recomp`, at the commit given in `UPSTREAM.json`, under its GPLv3 license. Game files and their translation stay in directories ignored by Git.
 
+## paraLLEl-GS submits at a threshold without a render pass of one primitive (November 15, 2026)
+
+- `cmake/ParallelGSPatches.cmake` (`page_tracker.cpp`): a render pass whose flush crosses a submission threshold (`GSRenderer::check_flush_stats`: 4,096 primitives, image memory and the like) only marks memory pressure, which paraLLEl-GS acted on at the next TEX0 write or draw kick, after the next pass had its first primitive: that pass was flushed with `FlushReason::PressureFlush` and submitted alone, a render pass of one primitive (about 3 a race frame, each a GPU drain and a frame buffer upload at every sample). `PageTracker::flush_render_pass` now submits right after such a flush, while the next pass is still empty.
+- Measured headless on an RTX 5090 at 16 samples a pixel and high resolution, 1,500 VSyncs of the deterministic race, 4 runs each: GPU time 3.84 to 3.66 ms a frame (4.5% less, shading 2.82 to 2.68 ms), wall time 2% less. The race, a glacier race, another race, a crash camera, the menu and the results screen hash the same as before, apart from the frames that differ between two runs of the same build.
+
 ## Less GPU work at 16 samples a pixel: opaque blends, overlapped uploads, blur strips (November 15, 2026)
 
 - `cmake/ParallelGSPatches.cmake` (`gs_interface.cpp`): Burnout draws most of its 3D with the blend (Cs - Cd) * FIX / 128 + Cd and FIX 0x80, which the ubershader computes as floor((Cs - Cd) * 0x80 / 128) + Cd = floor(Cs) whatever the integer Cd. Such a primitive replaces the pixel like an opaque one, but the blend kept it from getting the opaque state bit, so every layer of a pixel was shaded instead of the last visible one. It now gets the bit when it also tests and writes Z (its tiles are super-sampled with or without the bit then, `binning.comp`) and has no AA1. 3.5% less shading time.

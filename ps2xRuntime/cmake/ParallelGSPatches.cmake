@@ -175,4 +175,10 @@ parallel_gs_replace("\t\tif (page.need_host_read_timeline_mask != 0)\n\t\t{\n\t\
     "\t\tif (page.need_host_read_timeline_mask != 0)\n\t\t{\n\t\t\tpage.host_read_timeline = timeline;\n\t\t\tif (bdr_separate_host_vram)\n\t\t\t\tpage.flags |= BDR_PAGE_HOST_STALE_BIT;\n\t\t\telse\n\t\t\t\tcb.sync_vram_host_page(page_index);\n\t\t}\n")
 parallel_gs_replace("\taccessed_readback_pages.clear();\n\n\tcb.flush(PAGE_TRACKER_FLUSH_WRITE_BACK_BIT, reason);\n"
     "\taccessed_readback_pages.clear();\n\n\t// The host is about to look at its copy: the stale pages come back with this submission.\n\tif (reason == FlushReason::HostAccess)\n\t{\n\t\tfor (uint32_t page_index = 0; page_index < page_state.size(); page_index++)\n\t\t{\n\t\t\tauto &page = page_state[page_index];\n\t\t\tif ((page.flags & BDR_PAGE_HOST_STALE_BIT) != 0)\n\t\t\t{\n\t\t\t\tpage.flags &= ~BDR_PAGE_HOST_STALE_BIT;\n\t\t\t\tpage.host_read_timeline = timeline;\n\t\t\t\tpage.host_write_timeline = timeline;\n\t\t\t\tcb.sync_vram_host_page(page_index);\n\t\t\t}\n\t\t}\n\t}\n\n\tcb.flush(PAGE_TRACKER_FLUSH_WRITE_BACK_BIT, reason);\n")
+# A render pass that crosses a submission threshold (GSRenderer::check_flush_stats: 4096 primitives,
+# image memory, ...) only marks memory pressure, which was acted on at the next TEX0 write or draw kick:
+# the next pass got its first primitive, then was flushed and submitted on its own, a render pass of one
+# primitive (about 3 a race frame, a GPU drain each). The flush now submits at once, the next pass empty.
+parallel_gs_replace("\tcb.flush(PAGE_TRACKER_FLUSH_FB_ALL, reason);\n\n\tTRACE(\"TRACKER || FLUSH RENDER PASS\\n\");\n"
+    "\tcb.flush(PAGE_TRACKER_FLUSH_FB_ALL, reason);\n\n\tif (reason != FlushReason::PressureFlush)\n\t\tflush_if_memory_pressure();\n\n\tTRACE(\"TRACKER || FLUSH RENDER PASS\\n\");\n")
 parallel_gs_use_patched(${patch_file} page_tracker_patched.cpp)
