@@ -760,6 +760,19 @@ namespace
             // A plain copy, alpha included: the window draws frames opaque and frame dumps set it.
             frame.pixels.assign(mapped, mapped + readyBytes);
             device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
+            // BDR_FRAME_HASH=1 prints a hash of every frame read back: two builds' lists check a
+            // renderer change pixel for pixel (which frames a run presents varies, their pictures not).
+            static const bool hashFrames = std::getenv("BDR_FRAME_HASH") != nullptr;
+            if (hashFrames)
+            {
+                uint64_t hash = 1469598103934665603ull, word = 0;
+                for (size_t i = 0; i + 8 <= readyBytes; i += 8)
+                {
+                    std::memcpy(&word, frame.pixels.data() + i, 8);
+                    hash = (hash ^ word) * 1099511628211ull;
+                }
+                std::printf("[frame-hash] %ux%u %016llx\n", ready.width, ready.height, static_cast<unsigned long long>(hash));
+            }
             return frame;
         }
 

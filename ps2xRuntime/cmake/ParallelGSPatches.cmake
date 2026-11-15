@@ -41,6 +41,20 @@ parallel_gs_replace("\tprim_attr.tex2 = prim_state.tex2;\n"
     "\tprim_attr.tex2 = prim_state.tex2;\n\textern bool bdr_smooth_ui; // defined further down; GCC and Clang need it declared before this template body\n\tconst bool bdr_smooth = bdr_smooth_ui && prim.desc.TME && ctx.tex1.desc.MMAG == TEX1Bits::LINEAR &&\n\t                        (ctx.tex0.desc.PSM == PSMT8 || ctx.tex0.desc.PSM == PSMT4);\n\tif (bdr_smooth && !quad && !is_line)\n\t\tprim_attr.tex |= 1u << 27;\n")
 parallel_gs_replace("\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_RASTER;\n\t\tprim_attr.state |= 1u << STATE_BIT_SNAP_ATTRIBUTE;\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);"
     "\t\tif (!bdr_smooth)\n\t\t\tprim_attr.state |= (1u << STATE_BIT_SNAP_RASTER) | (1u << STATE_BIT_SNAP_ATTRIBUTE);\n\t\tprim_attr.state &= ~(1u << STATE_BIT_MULTISAMPLE);")
+# Burnout draws most of its 3D with the blend (Cs - Cd) * FIX / 128 + Cd and FIX 0x80, which
+# the ubershader computes as floor(Cs - Cd) + Cd = floor(Cs) whatever the integer Cd: such
+# primitives are opaque, so a layer hidden by a later one is no longer shaded. Only when they test
+# and write Z: their tiles are super-sampled then with or without the opaque bit (binning.comp).
+parallel_gs_replace("\t// AA1 implies alpha-blending of some sort.\n\tif (prim.desc.ABE || prim.desc.AA1)\n"
+    "\t// AA1 implies alpha-blending of some sort.\n\tconst uint32_t bdr_z_test_write = (1u << STATE_BIT_Z_TEST) | (1u << STATE_BIT_Z_WRITE);\n\tconst bool bdr_blend_copies_source = !prim.desc.AA1 && (p.state & bdr_z_test_write) == bdr_z_test_write &&\n\t\tctx.alpha.desc.A == BLEND_RGB_SOURCE && ctx.alpha.desc.B == BLEND_RGB_DEST &&\n\t\tctx.alpha.desc.C == BLEND_ALPHA_FIX && ctx.alpha.desc.FIX == 0x80 && ctx.alpha.desc.D == BLEND_RGB_DEST;\n\tif ((prim.desc.ABE || prim.desc.AA1) && !bdr_blend_copies_source)\n")
+# Burnout's blur and zoom effects draw a buffer onto itself in strips 32 pixels wide. The page
+# tracker marks the render pass's whole bounding box as written, page by page, so nearly every
+# strip read a page written by an earlier one and ended the pass: about 60 tiny passes a race
+# frame, each a GPU drain and a texture upload at every sample. A texture read from the pass's
+# own frame buffer is now a hazard only when an earlier primitive's bounding box overlaps its
+# rect: 3% less GPU time and 4% less wall time at 16 samples, same pixels.
+parallel_gs_replace("void GSInterface::texture_page_rects_read_full()\n{\n\tauto &tex = state_tracker.tex;\n"
+    "void GSInterface::texture_page_rects_read_full()\n{\n\tauto &tex = state_tracker.tex;\n\t// No hazard for a texture read from the pass's own frame buffer (texel = pixel) on which no primitive\n\t// of the pass has drawn yet: VRAM still holds it, whatever was drawn elsewhere in its pages.\n\tif (tex.rect.levels == 1 && render_pass.num_instances == 1 && render_pass.primitive_count <= 256)\n\t{\n\t\tauto &ctx = registers.ctx[registers.prim.desc.CTXT];\n\t\tauto &inst = render_pass.instances[0];\n\t\tif (!(inst.z_sensitive && inst.z_write) &&\n\t\t    uint32_t(ctx.tex0.desc.TBP0) == uint32_t(inst.frame.desc.FBP) * PGS_BLOCKS_PER_PAGE &&\n\t\t    ctx.tex0.desc.TBW == inst.frame.desc.FBW && ctx.tex0.desc.PSM == inst.frame.desc.PSM &&\n\t\t    tex.rect.x + tex.rect.width <= uint32_t(inst.frame.desc.FBW) * PGS_BUFFER_WIDTH_SCALE)\n\t\t{\n\t\t\tint x0 = int(tex.rect.x), y0 = int(tex.rect.y);\n\t\t\tint x1 = x0 + int(tex.rect.width) - 1, y1 = y0 + int(tex.rect.height) - 1;\n\t\t\tbool drawn = false;\n\t\t\tfor (uint32_t i = 0; i < render_pass.primitive_count && !drawn; i++)\n\t\t\t{\n\t\t\t\t// The primitive's bounding box, scissor included, bounds the pixels it writes.\n\t\t\t\tauto &bb = render_pass.prim[i].bb;\n\t\t\t\tdrawn = bb.x <= x1 && bb.z >= x0 && bb.y <= y1 && bb.w >= y0;\n\t\t\t}\n\t\t\tif (!drawn)\n\t\t\t\treturn;\n\t\t}\n\t}\n")
 parallel_gs_use_patched(${patch_file} gs_interface_patched.cpp)
 
 # compute_page_rect: max_block_x/y are taken modulo the blocks of a page, so
@@ -125,6 +139,13 @@ parallel_gs_replace("void GSRenderer::init_vram(const GSOptions &options)\n"
     "extern bool bdr_separate_host_vram; // page_tracker.cpp\n\nvoid GSRenderer::init_vram(const GSOptions &options)\n")
 parallel_gs_replace("\t\tdevice->set_name(*buffers.cpu, \"vram-cpu\");\n"
     "\t\tdevice->set_name(*buffers.cpu, \"vram-cpu\");\n\t\tbdr_separate_host_vram = true;\n")
+# A pass's texture uploads waited for its palette writes, each a tiny dispatch, then for the GPU
+# to drain: about 55 such waits a race frame. Uploads that read no palette now run alongside them
+# (both only read VRAM): 7% less GPU time in uploads and palettes at 16 samples, same pixels.
+parallel_gs_replace("\tflush_palette_upload();\n\tif (texture_uploads.empty())\n\t\treturn;\n"
+    "\tif (texture_uploads.empty())\n\t{\n\t\tflush_palette_upload();\n\t\treturn;\n\t}\n")
+parallel_gs_replace("\t// TODO: We could potentially sort this based on shader key to avoid some context rolls, but eeeeeh.\n\tfor (auto &upload : texture_uploads)\n\t\tupload_texture(upload);\n"
+    "\t// The uploads that read no palette run alongside the palette writes (both only read VRAM);\n\t// the palettes' barrier orders the palette-format uploads after them.\n\tfor (auto &upload : texture_uploads)\n\t\tif (!is_palette_format(uint32_t(upload.desc.tex0.desc.PSM)))\n\t\t\tupload_texture(upload);\n\tif (enable_timestamps)\n\t{\n\t\tend_ts = cmd.write_timestamp(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);\n\t\ttimestamps.push_back({ TimestampType::TextureUpload, std::move(start_ts), std::move(end_ts) });\n\t}\n\tflush_palette_upload();\n\tif (enable_timestamps)\n\t\tstart_ts = cmd.write_timestamp(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);\n\tfor (auto &upload : texture_uploads)\n\t\tif (is_palette_format(uint32_t(upload.desc.tex0.desc.PSM)))\n\t\t\tupload_texture(upload);\n")
 parallel_gs_use_patched(${patch_file} gs_renderer_patched.cpp)
 target_include_directories(parallel-gs PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/shaders")
 
