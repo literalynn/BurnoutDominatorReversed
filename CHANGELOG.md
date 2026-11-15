@@ -2,6 +2,11 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.5.2 (November 15, 2026)
+
+- **No more choppy sound when the PC cannot keep up**: when a race or the car selection was too heavy for the PC to draw every frame, the game kept its speed but its sound slowed down to the frames drawn. It sounded choppy, and below half speed it broke up. The sound now keeps real time. GitHub issue 14.
+- **Less work for the graphics card at high quality**: at 16 samples a pixel the graphics card shades fewer hidden surfaces, prepares textures while it updates palettes instead of waiting for them, draws the speed blur in far fewer separate steps, and no longer starts a whole drawing step for a single shape when its work queue fills up. About 11% less graphics card time a frame. The picture is the same, pixel for pixel.
+
 ## 1.5.1 (November 14, 2026)
 
 - **Less work for the graphics card**: after each frame, the game no longer copies the graphics memory back from the card when nothing reads it: about 16% less graphics card time a frame at the default quality on NVIDIA cards.
