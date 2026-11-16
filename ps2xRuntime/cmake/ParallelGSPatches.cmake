@@ -55,6 +55,13 @@ parallel_gs_replace("\t// AA1 implies alpha-blending of some sort.\n\tif (prim.d
 # rect: 3% less GPU time and 4% less wall time at 16 samples, same pixels.
 parallel_gs_replace("void GSInterface::texture_page_rects_read_full()\n{\n\tauto &tex = state_tracker.tex;\n"
     "void GSInterface::texture_page_rects_read_full()\n{\n\tauto &tex = state_tracker.tex;\n\t// No hazard for a texture read from the pass's own frame buffer (texel = pixel) on which no primitive\n\t// of the pass has drawn yet: VRAM still holds it, whatever was drawn elsewhere in its pages.\n\tif (tex.rect.levels == 1 && render_pass.num_instances == 1 && render_pass.primitive_count <= 256)\n\t{\n\t\tauto &ctx = registers.ctx[registers.prim.desc.CTXT];\n\t\tauto &inst = render_pass.instances[0];\n\t\tif (!(inst.z_sensitive && inst.z_write) &&\n\t\t    uint32_t(ctx.tex0.desc.TBP0) == uint32_t(inst.frame.desc.FBP) * PGS_BLOCKS_PER_PAGE &&\n\t\t    ctx.tex0.desc.TBW == inst.frame.desc.FBW && ctx.tex0.desc.PSM == inst.frame.desc.PSM &&\n\t\t    tex.rect.x + tex.rect.width <= uint32_t(inst.frame.desc.FBW) * PGS_BUFFER_WIDTH_SCALE)\n\t\t{\n\t\t\tint x0 = int(tex.rect.x), y0 = int(tex.rect.y);\n\t\t\tint x1 = x0 + int(tex.rect.width) - 1, y1 = y0 + int(tex.rect.height) - 1;\n\t\t\tbool drawn = false;\n\t\t\tfor (uint32_t i = 0; i < render_pass.primitive_count && !drawn; i++)\n\t\t\t{\n\t\t\t\t// The primitive's bounding box, scissor included, bounds the pixels it writes.\n\t\t\t\tauto &bb = render_pass.prim[i].bb;\n\t\t\t\tdrawn = bb.x <= x1 && bb.z >= x0 && bb.y <= y1 && bb.w >= y0;\n\t\t\t}\n\t\t\tif (!drawn)\n\t\t\t\treturn;\n\t\t}\n\t}\n")
+# A primitive's scissor box was built in the stack copy of its attributes with four 16-bit
+# stores, then read back as one 64-bit word to copy the attributes into the primitive buffer:
+# a load that store forwarding cannot serve waits for every older store to reach the cache,
+# the previous primitives' writes to that buffer included. The box is now stored straight into
+# the buffer.
+parallel_gs_replace("\tprim_attr.bb = i16vec4(bb);\n\n\tTRACE(\"Primitive\", prim_attr);\n\tTRACE(\"DRAW\", render_pass.primitive_count);\n\n\trender_pass.prim[render_pass.primitive_count] = prim_attr;\n"
+    "\tauto &bdr_prim = render_pass.prim[render_pass.primitive_count];\n\tbdr_prim = prim_attr;\n\tbdr_prim.bb = i16vec4(bb);\n\n\tTRACE(\"Primitive\", bdr_prim);\n\tTRACE(\"DRAW\", render_pass.primitive_count);\n\n")
 parallel_gs_use_patched(${patch_file} gs_interface_patched.cpp)
 
 # compute_page_rect: max_block_x/y are taken modulo the blocks of a page, so
