@@ -62,6 +62,39 @@ parallel_gs_replace("void GSInterface::texture_page_rects_read_full()\n{\n\tauto
 # the buffer.
 parallel_gs_replace("\tprim_attr.bb = i16vec4(bb);\n\n\tTRACE(\"Primitive\", prim_attr);\n\tTRACE(\"DRAW\", render_pass.primitive_count);\n\n\trender_pass.prim[render_pass.primitive_count] = prim_attr;\n"
     "\tauto &bdr_prim = render_pass.prim[render_pass.primitive_count];\n\tbdr_prim = prim_attr;\n\tbdr_prim.bb = i16vec4(bb);\n\n\tTRACE(\"Primitive\", bdr_prim);\n\tTRACE(\"DRAW\", render_pass.primitive_count);\n\n")
+# Likewise a PACKED vertex: its XYZ(F) register was built in two 32-bit halves on the stack and
+# passed by value as one 64-bit word, and its RGBA in four byte stores that vertex_kick_xyz(f)
+# reads back as one 32-bit word. Both are now whole words built in registers (the bit-fields are
+# little-endian, from bit 0).
+parallel_gs_replace("\tReg64<XYZFBits> bits = {};\n\tbits.desc.X = xyzf.X;\n\tbits.desc.Y = xyzf.Y;\n\tbits.desc.Z = xyzf.Z;\n\tbits.desc.F = xyzf.F;\n"
+    "\tReg64<XYZFBits> bits{uint64_t(xyzf.X) | uint64_t(xyzf.Y) << 16 | uint64_t(xyzf.Z) << 32 | uint64_t(xyzf.F) << 56};\n")
+parallel_gs_replace("\tReg64<XYZBits> bits = {};\n\tbits.desc.X = xyz.X;\n\tbits.desc.Y = xyz.Y;\n\tbits.desc.Z = xyz.Z;\n"
+    "\tReg64<XYZBits> bits{uint64_t(xyz.X) | uint64_t(xyz.Y) << 16 | uint64_t(xyz.Z) << 32};\n")
+parallel_gs_replace("\t\tReg64<XYZFBits> bits = {};\n\t\tbits.desc.X = xyzf.X;\n\t\tbits.desc.Y = xyzf.Y;\n\t\tbits.desc.Z = xyzf.Z;\n\t\tbits.desc.F = xyzf.F;\n"
+    "\t\tReg64<XYZFBits> bits{uint64_t(xyzf.X) | uint64_t(xyzf.Y) << 16 | uint64_t(xyzf.Z) << 32 | uint64_t(xyzf.F) << 56};\n")
+parallel_gs_replace("\t\tReg64<XYZBits> bits = {};\n\t\tbits.desc.X = xyz.X;\n\t\tbits.desc.Y = xyz.Y;\n\t\tbits.desc.Z = xyz.Z;\n"
+    "\t\tReg64<XYZBits> bits{uint64_t(xyz.X) | uint64_t(xyz.Y) << 16 | uint64_t(xyz.Z) << 32};\n")
+parallel_gs_replace("\tregisters.rgbaq.desc.R = rgba.R;\n\tregisters.rgbaq.desc.G = rgba.G;\n\tregisters.rgbaq.desc.B = rgba.B;\n\tregisters.rgbaq.desc.A = rgba.A;\n"
+    "\tregisters.rgbaq.words[0] = uint32_t(rgba.R) | uint32_t(rgba.G) << 8 | uint32_t(rgba.B) << 16 | uint32_t(rgba.A) << 24;\n")
+# The vertex kicks wrote a vertex's attributes field by field (4- and 2-byte stores) and
+# drawing_kick_append copied them at once with 16- and 8-byte loads: another load that store
+# forwarding cannot serve, at every vertex. They are now written with stores of those sizes
+# (SSE2 on x86-64; the same bytes).
+parallel_gs_replace("#include \"gs_registers_debug.hpp\"\n" "#include \"gs_registers_debug.hpp\"\n#if defined(_M_X64) || defined(__x86_64__)\n#include <emmintrin.h>\n#endif\n")
+parallel_gs_replace("void GSInterface::shift_vertex_queue()\n" "// Burnout: a vertex's attributes in one 16-byte and one 8-byte store, which the copies of the\n// vertex in drawing_kick_append and shift_vertex_queue read back whole (store forwarding needs\n// a load that one store covers).\nstatic inline void bdr_store_vertex_attribute(VertexAttribute &attr, uint32_t s, uint32_t t, uint32_t q, uint32_t rgba,\n                                              float fog, uint32_t u, uint32_t v)\n{\n\tuint32_t fog_bits;\n\tmemcpy(&fog_bits, &fog, sizeof(fog_bits));\n\tconst uint64_t tail = fog_bits | uint64_t(u) << 32 | uint64_t(v) << 48;\n#if defined(_M_X64) || defined(__x86_64__)\n\t_mm_storeu_si128(reinterpret_cast<__m128i *>(&attr), _mm_setr_epi32(int(s), int(t), int(q), int(rgba)));\n#else\n\tconst uint32_t head[4] = { s, t, q, rgba };\n\tmemcpy(&attr, head, sizeof(head));\n#endif\n\tmemcpy(&attr.fog, &tail, sizeof(tail));\n}\n\nvoid GSInterface::shift_vertex_queue()\n")
+parallel_gs_replace("\tattr.st.x = registers.st.desc.S;\n\tattr.st.y = registers.st.desc.T;\n\tattr.q = registers.rgbaq.desc.Q;\n\tattr.rgba = registers.rgbaq.words[0];\n\tattr.fog = float(registers.fog.desc.FOG);\n\tattr.uv = u16vec2(registers.uv.desc.U, registers.uv.desc.V);\n"
+    "\tbdr_store_vertex_attribute(attr, registers.st.words[0], registers.st.words[1], registers.rgbaq.words[1],\n\t                           registers.rgbaq.words[0], float(registers.fog.desc.FOG), registers.uv.desc.U, registers.uv.desc.V);\n")
+parallel_gs_replace("\tattr.st.x = registers.st.desc.S;\n\tattr.st.y = registers.st.desc.T;\n\tattr.q = registers.rgbaq.desc.Q;\n\tattr.rgba = registers.rgbaq.words[0];\n\tattr.fog = float(xyzf.desc.F);\n\tattr.uv = u16vec2(registers.uv.desc.U, registers.uv.desc.V);\n"
+    "\tbdr_store_vertex_attribute(attr, registers.st.words[0], registers.st.words[1], registers.rgbaq.words[1],\n\t                           registers.rgbaq.words[0], float(xyzf.desc.F), registers.uv.desc.U, registers.uv.desc.V);\n")
+# And S and T, which the vertex kicks now read as one 8-byte word, in one store.
+parallel_gs_replace("\tregisters.st.desc.S = st.S;\n\tregisters.st.desc.T = st.T;\n"
+    "\tmemcpy(&registers.st.bits, &st, sizeof(registers.st.bits));\n")
+# The vertex positions too: shift_vertex_queue and drawing_kick_append read them in 16- and 8-byte words.
+parallel_gs_replace("void GSInterface::shift_vertex_queue()\n" "// Burnout: a vertex position in one 16-byte store (its padding, which no shader reads, zero).\nstatic inline void bdr_store_vertex_position(VertexPosition &pos, int x, int y, uint32_t z)\n{\n#if defined(_M_X64) || defined(__x86_64__)\n\t_mm_storeu_si128(reinterpret_cast<__m128i *>(&pos), _mm_setr_epi32(x, y, int(z), 0));\n#else\n\tconst int32_t words[4] = { x, y, int32_t(z), 0 };\n\tmemcpy(&pos, words, sizeof(words));\n#endif\n}\n\nvoid GSInterface::shift_vertex_queue()\n")
+parallel_gs_replace("\tpos.pos.x = int(xyz.desc.X) - render_pass.ofx;\n\tpos.pos.y = int(xyz.desc.Y) - render_pass.ofy;\n\tpos.z = xyz.desc.Z;\n"
+    "\tbdr_store_vertex_position(pos, int(xyz.desc.X) - render_pass.ofx, int(xyz.desc.Y) - render_pass.ofy, xyz.desc.Z);\n")
+parallel_gs_replace("\tpos.pos.x = int(xyzf.desc.X) - render_pass.ofx;\n\tpos.pos.y = int(xyzf.desc.Y) - render_pass.ofy;\n\tpos.z = xyzf.desc.Z;\n"
+    "\tbdr_store_vertex_position(pos, int(xyzf.desc.X) - render_pass.ofx, int(xyzf.desc.Y) - render_pass.ofy, xyzf.desc.Z);\n")
 parallel_gs_use_patched(${patch_file} gs_interface_patched.cpp)
 
 # compute_page_rect: max_block_x/y are taken modulo the blocks of a page, so
