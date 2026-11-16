@@ -706,11 +706,28 @@ inline __m128i ps2_qfsrv(__m128i rs, __m128i rt, uint32_t sa)
 #define PS2_VSQRT(x) ps2_fsqrt(x)
 #define PS2_VRSQRT(x) ps2_frsqrt(1.0f, x)
 
-#define GPR_U32(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0U : static_cast<uint32_t>(PS2_EXTRACT_EPI32_0(ctx_ptr->r[reg_idx])))
-#define GPR_S32(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0 : PS2_EXTRACT_EPI32_0(ctx_ptr->r[reg_idx]))
-#define GPR_U64(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0ULL : static_cast<uint64_t>(PS2_EXTRACT_EPI64_0(ctx_ptr->r[reg_idx])))
-#define GPR_S64(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0LL : PS2_EXTRACT_EPI64_0(ctx_ptr->r[reg_idx]))
+// A GPR's low 32 or 64 bits with a load of that size. Ps2SetGprLow64 writes them with a 64-bit
+// store, and a 128-bit load of a register just written waited for that store to reach the cache
+// (store forwarding cannot serve a load wider than the store).
+#define GPR_U32(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0U : Ps2GprLow32(ctx_ptr, reg_idx))
+#define GPR_S32(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0 : static_cast<int32_t>(Ps2GprLow32(ctx_ptr, reg_idx)))
+#define GPR_U64(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0ULL : Ps2GprLow64(ctx_ptr, reg_idx))
+#define GPR_S64(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0LL : static_cast<int64_t>(Ps2GprLow64(ctx_ptr, reg_idx)))
 #define GPR_VEC(ctx_ptr, reg_idx) ((reg_idx == 0) ? _mm_setzero_si128() : ctx_ptr->r[reg_idx])
+
+static inline uint32_t Ps2GprLow32(const R5900Context *ctx, int reg)
+{
+    uint32_t value;
+    std::memcpy(&value, &ctx->r[reg], sizeof(value));
+    return value;
+}
+
+static inline uint64_t Ps2GprLow64(const R5900Context *ctx, int reg)
+{
+    uint64_t value;
+    std::memcpy(&value, &ctx->r[reg], sizeof(value));
+    return value;
+}
 
 // Writes a GPR's low 64 bits and keeps its upper half with a 64-bit store. Merging into the
 // whole register (load, blend, store) made each write wait for the register's previous one.
