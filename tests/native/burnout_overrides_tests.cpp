@@ -485,6 +485,18 @@ void testButtonPrompts() {
     out = prompts.filter(3, next.data(), size, xbox);
     check(size == next.size() + 96 + 1024 + 80 && !contains(std::vector<uint8_t>(out, out + size), texels),
           "only the palette, still in GS memory, is uploaded again");
+
+    // The same bytes uploaded again, and an upload that differs by one bit, through the hashes
+    // remembered from their first uploads.
+    for (int round = 0; round < 2; ++round) {
+        size = uint32_t(texelPacket.size());
+        out = replacing.filter(2, texelPacket.data(), size, xbox);
+        check(size == texelPacket.size() && std::equal(out + 96, out + size, xboxTexels.begin()),
+              "an upload seen before is a symbol again");
+        size = uint32_t(otherPacket.size());
+        check(replacing.filter(2, otherPacket.data(), size, xbox) == otherPacket.data(),
+              "an upload one bit away is not");
+    }
 }
 
 template <typename T>

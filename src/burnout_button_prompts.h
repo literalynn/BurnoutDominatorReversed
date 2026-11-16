@@ -104,6 +104,7 @@ private:
     void reset();
     void writeRegister(uint8_t address, uint64_t value);
     void match(const uint8_t *image, uint32_t bytes, size_t offset);
+    uint64_t rememberedHash(const uint8_t *image, uint32_t bytes);
     std::vector<uint8_t> styled(const Resident &resident);
     void appendUpload(const Transfer &transfer, const std::vector<uint8_t> &bytes);
     void appendRegisters(const std::vector<std::pair<uint8_t, uint64_t>> &registers);
@@ -117,6 +118,13 @@ private:
     std::array<std::optional<Art>, size_t(PromptTexture::Count)> m_art;
     std::vector<std::pair<size_t, std::vector<uint8_t>>> m_patches;
     std::vector<uint8_t> m_out;
+    // uploadHash() of recent uploads, found by a quicker hash of the same bytes.
+    struct RememberedHash
+    {
+        uint64_t quick = 0, hash = 0;
+        uint32_t bytes = 0;
+    };
+    std::vector<RememberedHash> m_hashes = std::vector<RememberedHash>(4096);
 };
 
 // Filters the GS's GIF packets through a ButtonPrompts that follows the settings and the pad.
