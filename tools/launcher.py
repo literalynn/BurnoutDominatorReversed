@@ -14,7 +14,6 @@ import ctypes
 import hashlib
 import io
 import json
-import locale
 import os
 from pathlib import Path
 import re
@@ -51,7 +50,7 @@ REPOSITORY = "literalynn/BurnoutDominatorReversed"
 LATEST_RELEASE = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 # The Discord application whose name a player's Discord profile shows while the game runs (Settings > Discord status):
 # its "Application ID", from https://discord.com/developers/applications. Empty: the option is not offered.
-DISCORD_APPLICATION_ID = ""
+DISCORD_APPLICATION_ID = "1572307995897888848"  # "Burnout Dominator Reversed"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # children never open a console window
 SETTING_LINE = re.compile(r"\s*([a-z0-9_]+)\s*=\s*(.*?)\s*$")
 # Settings with a fixed list of values; refresh_rate also takes any number typed in.
@@ -62,16 +61,6 @@ PORTS = range(47800, 47810)  # a fixed first choice: the app window remembers it
 def work_dir() -> Path:
     """Where the game's files live: the installer's choice, known before the first installation."""
     return install.choose_work_dir(None, dict(os.environ), ROOT, Path.home())[0]
-
-
-def system_language() -> str:
-    """The two-letter code of the system's language: Windows' display language, elsewhere the locale's."""
-    if os.name == "nt":
-        name = locale.windows_locale.get(ctypes.windll.kernel32.GetUserDefaultUILanguage(), "")
-    else:
-        name = next((os.environ[key] for key in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG") if os.environ.get(key)),
-                    locale.getlocale()[0] or "")
-    return name[:2].lower()
 
 
 def translate(text: str, words: dict[str, str]) -> str:
@@ -140,13 +129,16 @@ def parse_settings(text: str) -> list[dict]:
 
 
 def apply_settings(text: str, values: dict[str, str]) -> str:
-    """The same file with new values; comments, order and unknown lines are kept."""
-    lines = []
+    """The same file with new values; comments, order and unknown lines are kept. A setting the file lacks (one newer
+    than the file) is added at its end."""
+    lines, found = [], set()
     for line in text.splitlines():
         match = SETTING_LINE.match(line)
         if match and not line.lstrip().startswith("#") and match.group(1) in values:
             line = f"{match.group(1)} = {values[match.group(1)]}"
+            found.add(match.group(1))
         lines.append(line)
+    lines += [f"{key} = {value}" for key, value in values.items() if key not in found]
     return "\n".join(lines) + "\n"
 
 
@@ -420,8 +412,9 @@ class Launcher:
         return name if name in self.profiles() else DEFAULT_PROFILE
 
     def language(self) -> str:
-        """The launcher's language: the player's choice, else the system's when the launcher has it, else English."""
-        return next(code for code in (self.saved().get("language"), system_language(), "en") if code in LANGUAGES)
+        """The launcher's language: the player's choice, else English."""
+        code = self.saved().get("language")
+        return code if code in LANGUAGES else "en"
 
     def busy(self) -> str:
         """What runs, for the page; "" when nothing does."""
@@ -437,6 +430,11 @@ class Launcher:
         settings = parse_settings(SETTINGS.read_text(encoding="utf-8")) if SETTINGS.is_file() else []
         for item in settings:
             item.pop("closed", None)
+        # A setting newer than the player's settings.ini (the game writes the file only when F1 changes something) shows
+        # with the game's default, and saving it adds its line. Without the file (before the game's first start), none.
+        present = {item["key"] for item in settings if "key" in item}
+        settings += [{"key": row["key"], "value": row["default"]} for column in json.loads(TABLE)["columns"]
+                     for group in column for row in group["rows"] if "default" in row and row["key"] not in present] * bool(present)
         # The launcher's own settings, kept in launcher.json: the game reports the keys of settings.ini it does not know.
         settings += [{"key": "launcher_language", "value": LANGUAGES[language]["name"], "launcher": True}] + \
                     [{"key": "discord", "value": str(self.saved().get("discord") is True).lower(), "launcher": True}] * bool(self.presence)
@@ -833,17 +831,19 @@ PAGE = Path(__file__).with_name("launcher.html").read_text(encoding="utf-8").rep
 # The Settings tab of the page and of the launcher's window (tools/launcher/): "columns" of cards, one row per line of
 # settings.ini. A row without a control named (choice, range, select, number, text) is an on/off switch; "and" is a
 # second number on the same row. A setting the table does not name appears under "Other", as text. The limits are the
-# game's own. "buttons": the PS2 buttons in the order of settings.ini (key_up...), with what the game uses them for.
+# game's own. "default": the game's value when settings.ini lacks the line (a setting newer than the file). "buttons":
+# the PS2 buttons in the order of settings.ini (key_up...), with what the game uses them for.
 # launcher_language and discord are the launcher's own settings (launcher.json, see Launcher.state).
 TABLE = Path(__file__).with_name("launcher_settings.json").read_text(encoding="utf-8")
 BUILD = hashlib.sha256((PAGE + TABLE + Path(__file__).read_text(encoding="utf-8")).encode("utf-8")).hexdigest()[:12]
-# The launcher's languages: English, which its text is written in, and one file per other language in
-# launcher_languages/, named by the language's two-letter code (fr.json): {"name": the language's name in that language,
-# "text": {English text: translation}}. Adding a file adds the language to Settings. A text the file lacks stays in
-# English; {} stands for what changes in a text (a folder, a number). The page and the window translate their own
-# words with the same table, which comes with the state.
+# The launcher's languages are the game's, in its order: English, which the launcher's text is written in, and one file
+# per other language in launcher_languages/, named by the language's two-letter code (fr.json): {"name": the language's
+# name in that language, "text": {English text: translation}}. A text the file lacks stays in English; {} stands for
+# what changes in a text (a folder, a number). The page and the window translate their own words with the same table,
+# which comes with the state.
 LANGUAGES = {"en": {"name": "English", "text": {}}} | {
-    path.stem: json.loads(path.read_text(encoding="utf-8")) for path in sorted(Path(__file__).with_name("launcher_languages").glob("*.json"))}
+    code: json.loads(Path(__file__).with_name("launcher_languages").joinpath(f"{code}.json").read_text(encoding="utf-8"))
+    for code in ("fr", "de", "es", "it")}
 
 
 def settings_table(words: dict[str, str]) -> dict:

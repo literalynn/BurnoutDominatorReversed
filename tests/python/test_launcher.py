@@ -42,13 +42,12 @@ def archive(files: dict[str, str]) -> bytes:
 
 class LauncherTests(unittest.TestCase):
     def setUp(self):
-        # A launcher of its own: an empty work folder, and English whatever the system's language.
+        # A launcher of its own: an empty work folder.
         work = tempfile.TemporaryDirectory()
         self.addCleanup(work.cleanup)
-        for patch in (mock.patch.object(launcher, "work_dir", lambda: Path(work.name)),
-                      mock.patch.object(launcher, "system_language", lambda: "en")):
-            patch.start()
-            self.addCleanup(patch.stop)
+        patch = mock.patch.object(launcher, "work_dir", lambda: Path(work.name))
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def test_settings_are_read_in_file_order_with_their_comments(self):
         items = launcher.parse_settings(SETTINGS)
@@ -61,6 +60,19 @@ class LauncherTests(unittest.TestCase):
         text = launcher.apply_settings(SETTINGS, {"aspect": "16:9", "volume": "55"})
         self.assertEqual(text, SETTINGS.replace("aspect = 4:3", "aspect = 16:9").replace("volume = 20", "volume = 55"))
         self.assertEqual(launcher.apply_settings(SETTINGS, {}), SETTINGS)
+        # A setting newer than the file gets a line at its end.
+        self.assertEqual(launcher.apply_settings(SETTINGS, {"language": "french"}), SETTINGS + "language = french\n")
+
+    def test_a_setting_the_file_lacks_shows_with_its_default(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Path(temp) / "settings.ini"
+            settings.write_text("aspect = 4:3\n", encoding="utf-8")
+            with mock.patch.object(launcher, "SETTINGS", settings):
+                app = launcher.Launcher("token")
+                self.assertIn({"key": "language", "value": "english"}, app.state()["settings"])
+                app.save_settings({"language": "german"})
+                self.assertEqual(settings.read_text(encoding="utf-8"), "aspect = 4:3\nlanguage = german\n")
+                self.assertIn({"key": "language", "value": "german"}, app.state()["settings"])
 
     def test_settings_saved_at_the_same_moment_are_all_kept(self):
         # The page saves each change with a request of its own, and the server answers requests in parallel.
@@ -275,25 +287,24 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual((state["language"], state["text"]["Play"]), ("fr", "Jouer"))
             self.assertEqual(list(state["steps"])[0], "ISO trouvée")
             self.assertEqual(state["table"]["columns"][1][-1]["rows"][0]["label"], "Langue du lanceur")
-            self.assertEqual(state["table"]["columns"][1][-1]["rows"][0]["select"], ["English", "Français"])
+            self.assertEqual(state["table"]["columns"][1][-1]["rows"][0]["select"],
+                             ["English", "Français", "Deutsch", "Español", "Italiano"])  # the game's languages
             self.assertEqual(state["table"]["buttons"][4], ["cross", "✕ Croix", "accélérer, valider"])
-            # Without a Discord application the option is not offered.
             self.assertEqual([item for item in state["settings"] if item.get("launcher")],
-                             [{"key": "launcher_language", "value": "Français", "launcher": True}])
+                             [{"key": "launcher_language", "value": "Français", "launcher": True},
+                              {"key": "discord", "value": "true", "launcher": True}])
             app.save_settings({"launcher_language": "English"})
             self.assertEqual(app.saved(), {"profile": "Second", "language": "en", "discord": True})
             self.assertEqual(app.command("play", {"profile": "nobody"}), {"error": "Unknown save profile."})
 
-    def test_the_launcher_speaks_the_systems_language_when_it_has_it(self):
+    def test_the_launcher_speaks_english_until_the_player_chooses(self):
         app = launcher.Launcher("token")
-        for system, expected in (("fr", "fr"), ("de", "en"), ("", "en")):
-            with mock.patch.object(launcher, "system_language", lambda: system):
-                self.assertEqual(app.language(), expected)
-                self.assertEqual(app.command("play", {"profile": "nobody"})["error"],
-                                 "Profil de sauvegarde inconnu." if expected == "fr" else "Unknown save profile.")
-        app.remember(language="en")
-        with mock.patch.object(launcher, "system_language", lambda: "fr"):
-            self.assertEqual(app.language(), "en")  # the player's choice comes first
+        self.assertEqual(app.language(), "en")
+        self.assertEqual(app.command("play", {"profile": "nobody"})["error"], "Unknown save profile.")
+        app.remember(language="fr")
+        self.assertEqual(app.command("play", {"profile": "nobody"})["error"], "Profil de sauvegarde inconnu.")
+        app.remember(language="xx")  # a language a later version dropped
+        self.assertEqual(app.language(), "en")
 
     def test_a_translation_falls_back_to_english_and_fills_in_what_changes(self):
         words = {"Game": "Jeu", "{} is still running.": "{} en cours : attendez la fin.", "Deleting {}": "Suppression de {}",

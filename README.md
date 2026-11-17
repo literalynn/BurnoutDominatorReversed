@@ -121,7 +121,7 @@ A window of its own, the same on every system ([tools/launcher/](tools/launcher/
 |---|---|
 | **Play** | the ISO, the installation steps, the save profile to play with, and Play. |
 | **Console** | what the installation and the game print; no console window stays open. |
-| **Settings** | picture, sound, gamepad, keys, and the launcher's language: English or French, the system's at first. Changes are saved at once. |
+| **Settings** | picture, sound, gamepad, keys, the game's language, the launcher's language (the game's five, English at first) and a Discord status (off by default). Changes are saved at once. |
 | **Updates** | checks GitHub, shows what a new version brings ([CHANGELOG.md](CHANGELOG.md)) and installs it, `BurnoutDominator.exe` included. |
 
 **Save profiles** each have their own memory card and save states; the first one is *Default*. They are the folders of `save` in the installation folder (in a Git checkout, they are in the work directory). *New* creates one, empty or with a copy of the saves in another folder (another installation's, for example).
