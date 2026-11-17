@@ -211,8 +211,7 @@ code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
               <input type="text" class="wide" id="new-saves" placeholder="Optional: a folder of saves to copy into it" spellcheck="false">
               <button class="btn" id="browse-saves">Browse</button>
             </div>
-            <p class="hint">To bring saves from elsewhere, give their folder: a save folder (it holds icon.sys), the folder above it, or a profile's
-              folder (another installation's <code>save\Default</code>, or its <code>work\local</code>). They are copied; the originals stay where they are.</p>
+            <p class="hint" id="saves-hint"></p>
             <div class="row" style="margin-top:10px"><button class="btn primary" id="create-profile">Create the profile</button></div>
           </div>
           <p class="hint" id="profile-hint">Each profile has its own memory card and save states.</p>
@@ -257,14 +256,35 @@ code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
 "use strict";
 const TOKEN = "__TOKEN__";
 const $ = id => document.getElementById(id);
-let state = null, build = null, settingsStamp = -1, toastTimer = 0;
+let state = null, build = null, settingsStamp = -1, toastTimer = 0, language = null;
+
+// The launcher's language: the English text's line in the table that comes with the state, else the English text.
+// Each {} takes the next of `words`.
+function t(text, ...words) {
+  let out = (state && state.text[text]) || text;
+  for (const word of words) out = out.replace("{}", () => word);
+  return out;
+}
+// The page's own words in English, to translate again when the language changes.
+const WORDS = [], PLACEHOLDERS = [...document.querySelectorAll("[placeholder]")].map(input => [input, input.placeholder]);
+for (const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); walk.nextNode();)
+  if (walk.currentNode.nodeValue.trim() && walk.currentNode.parentNode.nodeName !== "SCRIPT") WORDS.push([walk.currentNode, walk.currentNode.nodeValue]);
+function translatePage() {
+  document.documentElement.lang = state.language;
+  for (const [node, english] of WORDS) node.nodeValue = english.replace(english.trim(), () => t(english.trim()));
+  for (const [input, english] of PLACEHOLDERS) input.placeholder = t(english);
+  $("saves-hint").innerHTML = inline(t("To bring saves from elsewhere, give their folder: a save folder (it holds icon.sys), the folder above it, " +
+    "or a profile's folder (another installation's `save\\Default`, or its `work\\local`). They are copied; the originals stay where they are."));
+}
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 }
 // The changelog's Markdown, as far as it goes: bullets, **bold** and `code`. The text is escaped first.
+function inline(text) {
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>");
+}
 function entryHtml(heading, body) {
-  const inline = text => escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>");
   const items = body.split("\n").filter(line => line.trim()).map(line => "<li>" + inline(line.replace(/^\s*-\s*/, "")) + "</li>").join("");
   return '<div class="card entry"><h2>' + escapeHtml(heading) + "</h2><ul>" + items + "</ul></div>";
 }
@@ -340,7 +360,7 @@ function control(row) {
       input.name = key;
       input.checked = values[key] === option;
       input.addEventListener("change", () => saveSetting(key, option));
-      wrap.append(input, element("span", "", option[0].toUpperCase() + option.slice(1)));
+      wrap.append(input, element("span", "", t(option[0].toUpperCase() + option.slice(1))));
       group.append(wrap);
     }
     return [group];
@@ -377,7 +397,7 @@ function control(row) {
       });
       return input;
     };
-    return row.and ? [number(key, row.label + ": width"), element("span", "times", "×"), number(row.and, row.label + ": height")] : [number(key, row.label)];
+    return row.and ? [number(key, t("{}: width", row.label)), element("span", "times", "×"), number(row.and, t("{}: height", row.label))] : [number(key, row.label)];
   }
   const input = element("input");
   input.setAttribute("aria-label", row.label);
@@ -412,16 +432,16 @@ function bindRow([name, label, role]) {
   if (role) what.append(element("small", "", role));
   inputs.forEach((input, index) => {
     const chip = element("button", "chip", keyLabel(input));
-    chip.title = "Remove";
-    chip.setAttribute("aria-label", label + ": remove " + keyLabel(input));
+    chip.title = t("Remove");
+    chip.setAttribute("aria-label", t("{}: remove {}", label, keyLabel(input)));
     chip.append(element("i", "", "×"));
     chip.addEventListener("click", () => save(inputs.filter((_, at) => at !== index)));
     chips.append(chip);
   });
   if (inputs.length < 3) {
     const add = element("button", "chip add", "+");
-    add.title = "Add a key or a mouse button";
-    add.setAttribute("aria-label", label + ": add a key or a mouse button");
+    add.title = t("Add a key or a mouse button");
+    add.setAttribute("aria-label", t("{}: add a key or a mouse button", label));
     add.addEventListener("click", () => {
       if (add.classList.contains("listening")) stopListening();
       else listen(add, input => { if (!inputs.includes(input)) save([...inputs, input]); });
@@ -437,7 +457,7 @@ function listen(chip, done) {
     event.preventDefault();
     event.stopPropagation();
     stopListening();
-    if (input) done(input); else toast("This key cannot be used.");
+    if (input) done(input); else toast(t("This key cannot be used."));
   };
   const onKey = event => take(event, inputName(event.code));
   const onWheel = event => take(event, event.deltaY < 0 ? "MOUSE_WHEEL_UP" : "MOUSE_WHEEL_DOWN");
@@ -458,7 +478,7 @@ function listen(chip, done) {
     chip.classList.remove("listening");
     stopListening = null;
   };
-  chip.textContent = "Press a key or a mouse button";
+  chip.textContent = t("Press a key or a mouse button");
   chip.classList.add("listening");
   window.addEventListener("keydown", onKey, true);
   window.addEventListener("mousedown", onMouse, true);
@@ -472,11 +492,10 @@ function renderSettings(items) {
   const list = $("settings-list"), shown = new Set(), columns = element("div", "columns even");
   values = Object.fromEntries(items.filter(item => item.key).map(item => [item.key, item.value]));
   list.textContent = "";
-  $("settings-note").hidden = !items.length;
-  if (!items.length) {
-    list.append(element("div", "card", "The game writes its settings file at its first launch; the settings appear here afterwards."));
-    return;
-  }
+  // The game writes settings.ini at its first start; the launcher's own settings are there before.
+  const game = items.some(item => item.key && !item.launcher);
+  $("settings-note").hidden = !game;
+  if (!game) list.append(element("div", "card", t("The game writes its settings file at its first launch; the settings appear here afterwards.")));
   const card = (title, ...content) => {
     const made = element("div", "card");
     made.append(element("h2", "", title), ...content);
@@ -497,25 +516,30 @@ function renderSettings(items) {
   if (buttons.length) {
     const binds = element("div", "binds");
     binds.append(...buttons.map(bindRow));
-    const hint = element("p", "hint", "Up to three keys, mouse buttons or wheel moves for each PS2 button. Press + and then the key to add; click a key to remove it.");
+    const hint = element("p", "hint", t("Up to three keys, mouse buttons or wheel moves for each PS2 button. Press + and then the key to add; click a key to remove it."));
     hint.style.margin = "0 0 6px";
-    list.append(card("Keyboard and mouse", hint, binds));
+    list.append(card(t("Keyboard and mouse"), hint, binds));
     buttons.forEach(([name]) => shown.add("key_" + name));
   }
   const other = Object.keys(values).filter(key => !shown.has(key));
-  if (other.length) list.append(card("Other", ...other.map(key => settingRow({key, label: key, text: true}))));
+  if (other.length) list.append(card(t("Other"), ...other.map(key => settingRow({key, label: key, text: true}))));
 }
 
 function render(s) {
   if (build === null) build = s.build;
   if (s.build !== build) { location.reload(); return; }  // the launcher was updated under this page
   state = s;
+  if (s.language !== language) {  // the page's own words, then the settings, again in the launcher's language
+    language = s.language;
+    translatePage();
+    settingsStamp = -1;
+  }
   const busy = !!s.running;
   document.body.classList.toggle("busy", busy);
   $("version").hidden = !s.version;
   $("version").textContent = "v" + s.version;
-  $("work").textContent = "Work folder: " + s.work;
-  $("foot").textContent = busy ? s.running + " running" : "";
+  $("work").textContent = t("Work folder: {}", s.work);
+  $("foot").textContent = busy ? t("{} running", s.running) : "";
   if (document.activeElement !== $("iso") && !$("iso").dataset.edited) $("iso").value = s.iso;
   $("missing").hidden = !s.missing;
   $("missing-text").textContent = s.missing;
@@ -525,7 +549,8 @@ function render(s) {
     select.textContent = "";
     for (const name of s.profiles) select.add(new Option(name, name, false, name === s.profile));
   }
-  $("profile-hint").textContent = "Each profile has its own memory card and save states" + (s.saves ? ", in " + s.saves + "." : ".");
+  $("profile-hint").textContent = s.saves ? t("Each profile has its own memory card and save states, in {}.", s.saves)
+                                           : t("Each profile has its own memory card and save states.");
   const offer = s.compiler;
   $("compiler").hidden = !offer.text;
   $("compiler-text").textContent = offer.text || "";
@@ -539,8 +564,8 @@ function render(s) {
   $("purge-ask").disabled = $("purge-go").disabled = busy;
   $("go").disabled = busy || !s.ready;
   $("stop").disabled = $("stop2").disabled = !busy;
-  $("state").textContent = busy ? (s.phase || s.running + " running") : s.ready ? "Ready." : "Give the ISO, then generate the code and build the game.";
-  $("console-note").textContent = busy ? s.running + " running." : "";
+  $("state").textContent = busy ? (s.phase || t("{} running", s.running)) : s.ready ? t("Ready.") : t("Give the ISO, then generate the code and build the game.");
+  $("console-note").textContent = busy ? t("{} running", s.running) + "." : "";
   // Drawn again only when the file is newer than what the page shows: an answer that was already on its way
   // when the page saved a setting must not put the old value back.
   if (s.settings_stamp > settingsStamp) {
@@ -552,7 +577,7 @@ function render(s) {
   $("update").disabled = !updates.behind || busy;
   $("update-dot").hidden = !updates.behind;
   const entries = updates.behind ? updates.new : s.changelog;
-  $("entries").innerHTML = (updates.behind ? '<p class="hint" style="margin:0 0 12px">What the update brings</p>' : "")
+  $("entries").innerHTML = (updates.behind ? '<p class="hint" style="margin:0 0 12px">' + escapeHtml(t("What the update brings")) + "</p>" : "")
     + entries.map(([heading, body]) => entryHtml(heading, body)).join("");
 }
 
@@ -581,7 +606,7 @@ $("new-profile").addEventListener("click", () => { $("new-row").hidden = !$("new
 $("create-profile").addEventListener("click", async () => {
   const saves = $("new-saves").value.trim();
   if (!await act("new-profile", {name: $("new-name").value, saves})) return;
-  if (saves) toast("The saves were copied into the new profile.");
+  if (saves) toast(t("The saves were copied into the new profile."));
   $("new-name").value = $("new-saves").value = "";
   $("new-row").hidden = true;
 });
@@ -596,7 +621,7 @@ $("purge-cancel").addEventListener("click", () => { $("purge-confirm").hidden = 
 $("purge-go").addEventListener("click", async () => { if (await act("purge")) { $("purge-confirm").hidden = true; show("console"); } });
 $("copy").addEventListener("click", () => navigator.clipboard.writeText($("log").textContent));
 $("clear").addEventListener("click", () => { $("log").textContent = ""; });
-$("check").addEventListener("click", () => { $("update-note").textContent = "Checking..."; api("check-updates"); });
+$("check").addEventListener("click", () => { $("update-note").textContent = t("Checking..."); api("check-updates"); });
 $("update").addEventListener("click", async () => { if (await act("update")) show("console"); });
 
 // The app window opens at 1280 x 720 the first time (a browser tab ignores this); afterwards it keeps the size it was given.

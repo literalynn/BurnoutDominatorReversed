@@ -883,7 +883,8 @@ namespace
         bool newOpen = false;
         bool purgeOpen = false; // the warning before the build files are deleted
         std::string profile, note;
-        std::vector<std::pair<std::string, std::string>> values; // settings.ini, in file order
+        std::vector<std::pair<std::string, std::string>> values; // settings.ini, in file order, then the launcher's own
+        bool gameSettings = false;                               // settings.ini has some: the game started once
         long long settingsStamp = -1;
         std::string listening; // the PS2 button whose "+" waits for a key
         Rectangle listenBox{};
@@ -896,6 +897,40 @@ namespace
     {
         g.toast = text;
         g.toastUntil = GetTime() + 5;
+    }
+
+    // The launcher's language: the English text's line in the table that comes with the state, else the English text.
+    // The view lasts until the next state, which comes between frames.
+    std::string_view tr(std::string_view english)
+    {
+        const Json &line = g.state["text"][english];
+        return line.kind == Json::String ? std::string_view(line.text) : english;
+    }
+    // The same, with `word` in place of its {}.
+    std::string tr(std::string_view english, const std::string &word)
+    {
+        std::string out(tr(english));
+        if (const size_t at = out.find("{}"); at != std::string::npos)
+            out.replace(at, 2, word);
+        return out;
+    }
+
+    // Upper case as the page's text-transform gives it, for the Latin letters the fonts are made with.
+    std::string upper(std::string_view text)
+    {
+        std::string out;
+        for (size_t i = 0; i < text.size();)
+        {
+            int c = nextCodepoint(text, i);
+            if ((c >= 'a' && c <= 'z') || (c >= 0xE0 && c <= 0xFE && c != 0xF7))
+                c -= 32;
+            else if (c == 0x153 || c == 0xFF) // oe, y with diaeresis
+                c = c == 0xFF ? 0x178 : 0x152;
+            int size = 0;
+            const char *bytes = CodepointToUTF8(c, &size);
+            out.append(bytes, size_t(size));
+        }
+        return out;
     }
 
     const std::string *value(std::string_view key)
@@ -914,9 +949,13 @@ namespace
     void setValues(const Json &items)
     {
         g.values.clear();
+        g.gameSettings = false;
         for (const Json &item : items.items)
             if (item["key"].kind == Json::String)
+            {
                 g.values.emplace_back(item["key"].text, item["value"].text);
+                g.gameSettings = g.gameSettings || !item["launcher"].yes();
+            }
         g.listening.clear();
     }
     Field &field(const std::string &key)
@@ -986,7 +1025,7 @@ namespace
     {
         send(name, body, [then = std::move(then)](const Json &answer) {
             if (!answer["error"].text.empty())
-                toast(answer["error"].text);
+                toast(std::string(tr(answer["error"].text))); // launcher.py's are translated already, this program's not
             else if (then)
                 then(answer);
         });
@@ -1307,11 +1346,13 @@ namespace
         return text;
     }
 
+    std::string choiceLabel(const Json &option) { return std::string(tr(capitalized(option.text))); }
+
     float segmentsWidth(const Json &options)
     {
         float width = u(6);
         for (const Json &option : options.items)
-            width += std::round(measure(F(fText), capitalized(option.text)) + u(24));
+            width += std::round(measure(F(fText), choiceLabel(option)) + u(24));
         return width;
     }
     // A choice of a few: the option clicked, -1 otherwise.
@@ -1322,7 +1363,7 @@ namespace
         float cx = x + u(3);
         for (size_t i = 0; i < options.items.size(); ++i)
         {
-            const std::string label = capitalized(options[i].text);
+            const std::string label = choiceLabel(options[i]);
             const Rectangle r = snap({cx, y + u(3), std::round(measure(F(fText), label) + u(24)), u(29)});
             const bool on = options[i].text == current;
             if (on)
@@ -1387,7 +1428,7 @@ namespace
     }
 
     // A card: its title, then what `content` lays out from (x, y) in width w (it returns its height).
-    float card(float x, float y, float w, const std::string &title, const std::function<float(float, float, float)> &content,
+    float card(float x, float y, float w, std::string_view title, const std::function<float(float, float, float)> &content,
                Color border = kLine, Color titleColor = kMute, bool plainTitle = false)
     {
         const auto inner = [&]() {
@@ -1395,9 +1436,7 @@ namespace
             if (!title.empty())
             {
                 const float line = plainTitle ? u(21) : u(16.5f);
-                std::string shown = title;
-                if (!plainTitle)
-                    std::transform(shown.begin(), shown.end(), shown.begin(), [](unsigned char c) { return char(std::toupper(c)); });
+                const std::string shown = plainTitle ? std::string(title) : upper(title);
                 print(F(plainTitle ? fBold : fHead), shown, x + u(19), y + h + line / 2, titleColor, plainTitle ? 0 : std::round(u(1)));
                 h += line + u(12);
             }
@@ -1425,16 +1464,16 @@ namespace
         const Json &s = g.state;
         const float top = y;
         if (!s["missing"].text.empty())
-            y += card(x, y, w, "Before the first installation", [&](float cx, float cy, float cw) {
+            y += card(x, y, w, tr("Before the first installation"), [&](float cx, float cy, float cw) {
                 return paragraph(F(fText), s["missing"].text, cx, cy, cw, u(21), kText);
             }, alpha(kRed, 0.45f), kRed) + u(14);
         const bool narrow = float(GetScreenWidth()) <= u(940);
         const float leftW = narrow ? w : w - u(340) - u(18);
         float left = y;
-        left += card(x, left, leftW, "Game disc", [&](float cx, float cy, float cw) {
-            const float browse = buttonWidth("Browse");
-            input(g.iso, {cx, cy, cw - browse - u(8), u(39)}, "Path of your Burnout Dominator ISO", u(11));
-            if (button(cx + cw - browse, cy, "Browse"))
+        left += card(x, left, leftW, tr("Game disc"), [&](float cx, float cy, float cw) {
+            const float browse = buttonWidth(tr("Browse"));
+            input(g.iso, {cx, cy, cw - browse - u(8), u(39)}, tr("Path of your Burnout Dominator ISO"), u(11));
+            if (button(cx + cw - browse, cy, tr("Browse")))
                 api("browse", "{}", [](const Json &answer) {
                     if (!answer["path"].text.empty())
                     {
@@ -1443,10 +1482,10 @@ namespace
                         g.iso.edited = true;
                     }
                 });
-            return u(49) + paragraph(F(fSmall), "Your own Burnout Dominator ISO, European version (SLES-54627). Keep it where it is: the game reads it at every launch.",
+            return u(49) + paragraph(F(fSmall), tr("Your own Burnout Dominator ISO, European version (SLES-54627). Keep it where it is: the game reads it at every launch."),
                                      cx, cy + u(49), cw, u(18.75f), kMute);
         }) + u(14);
-        left += card(x, left, leftW, "Installation", [&](float cx, float cy, float cw) {
+        left += card(x, left, leftW, tr("Installation"), [&](float cx, float cy, float cw) {
             int i = 0;
             const float column = (cw - u(18)) / 2;
             for (const auto &step : s["steps"].fields)
@@ -1472,20 +1511,21 @@ namespace
                 if (g_draw)
                     DrawRectangleRec(snap({cx, row, cw, hairline()}), kLine);
                 row += u(14) + paragraph(F(fText), offer["text"].text, cx, row + u(14), cw, u(21), kText) + u(12);
-                const std::string accept = "Accept the licence and download";
+                const std::string accept(tr("Accept the licence and download"));
                 if (button(cx, row, accept, kPrimary, !busy() && !offer["licence"].text.empty()))
                     act("download-compiler", "{\"iso\": " + quote(g.iso.text) + "}", [](const Json &) {
                         g.iso.edited = false;
                         g.nextPage = kConsole;
                     });
-                if (!offer["licence"].text.empty() && button(cx + buttonWidth(accept) + u(8), row, "Licence terms", kQuiet))
+                if (!offer["licence"].text.empty() && button(cx + buttonWidth(accept) + u(8), row, tr("Licence terms"), kQuiet))
                     api("licence");
                 row += u(49) + paragraph(F(fSmall), offer["hint"].text, cx, row + u(49), cw, u(18.75f), kMute) + u(16);
             }
-            const float install = buttonWidth("Generate the code and build the game");
-            const std::vector<std::string_view> note = wrap(F(fNote), "30 to 90 minutes the first time, a few minutes after an update.", cw - install - u(6));
+            const std::string_view build = tr("Generate the code and build the game");
+            const float install = buttonWidth(build);
+            const std::vector<std::string_view> note = wrap(F(fNote), tr("30 to 90 minutes the first time, a few minutes after an update."), cw - install - u(6));
             const float height = std::max(u(39), u(19.5f) * float(note.size()));
-            if (button(cx, row + (height - u(39)) / 2, "Generate the code and build the game", kPlain, !busy() && offer["text"].text.empty()))
+            if (button(cx, row + (height - u(39)) / 2, build, kPlain, !busy() && offer["text"].text.empty()))
                 act("install", "{\"iso\": " + quote(g.iso.text) + "}", [](const Json &) {
                     g.iso.edited = false;
                     g.nextPage = kConsole;
@@ -1498,26 +1538,26 @@ namespace
             else
             {
                 row += u(6);
-                if (button(cx, row, "Free up disk space", kQuiet, !busy()))
+                if (button(cx, row, tr("Free up disk space"), kQuiet, !busy()))
                     g.purgeOpen = !g.purgeOpen;
                 row += u(39);
                 if (g.purgeOpen)
                 {
                     row += u(10) + paragraph(F(fSmall), s["purge"].text, cx, row + u(10), cw, u(18.75f), kMute) + u(12);
-                    const std::string go = "Delete the build files";
+                    const std::string go(tr("Delete the build files"));
                     if (button(cx, row, go, kPrimary, !busy()))
                         act("purge", "{}", [](const Json &) {
                             g.purgeOpen = false;
                             g.nextPage = kConsole;
                         });
-                    if (button(cx + buttonWidth(go) + u(8), row, "Cancel", kQuiet))
+                    if (button(cx + buttonWidth(go) + u(8), row, tr("Cancel"), kQuiet))
                         g.purgeOpen = false;
                     row += u(39);
                 }
             }
             return row - cy;
         }) + u(14);
-        left += card(x, left, leftW, "Save profile", [&](float cx, float cy, float cw) {
+        left += card(x, left, leftW, tr("Save profile"), [&](float cx, float cy, float cw) {
             std::vector<std::string> names;
             for (const Json &name : s["profiles"].items)
                 names.push_back(name.text);
@@ -1528,23 +1568,23 @@ namespace
                 act("select", "{\"profile\": " + quote(g.profile) + "}");
             }
             float bx = cx + u(268);
-            if (button(bx, cy, "New"))
+            if (button(bx, cy, tr("New")))
             {
                 g.newOpen = !g.newOpen;
                 g_focus = g.newOpen ? &g.newName : g_focus;
             }
-            bx += buttonWidth("New") + u(8);
-            if (button(bx, cy, "Open its folder", kQuiet))
+            bx += buttonWidth(tr("New")) + u(8);
+            if (button(bx, cy, tr("Open its folder"), kQuiet))
                 api("open-profile", "{\"profile\": " + quote(g.profile) + "}");
             float h = u(39);
             if (g.newOpen)
             {
                 h += u(10);
-                const bool create = input(g.newName, {cx, cy + h, u(260), u(39)}, "Name of the new profile", u(11), 40) && g_focus == &g.newName;
+                const bool create = input(g.newName, {cx, cy + h, u(260), u(39)}, tr("Name of the new profile"), u(11), 40) && g_focus == &g.newName;
                 h += u(39) + u(8);
-                const float browse = buttonWidth("Browse");
-                input(g.newSaves, {cx, cy + h, cw - browse - u(8), u(39)}, "Optional: a folder of saves to copy into it", u(11));
-                if (button(cx + cw - browse, cy + h, "Browse"))
+                const float browse = buttonWidth(tr("Browse"));
+                input(g.newSaves, {cx, cy + h, cw - browse - u(8), u(39)}, tr("Optional: a folder of saves to copy into it"), u(11));
+                if (button(cx + cw - browse, cy + h, tr("Browse")))
                     api("browse-saves", "{}", [](const Json &answer) {
                         if (!answer["path"].text.empty())
                         {
@@ -1553,15 +1593,15 @@ namespace
                         }
                     });
                 h += u(39) + u(10);
-                h += rich(runs("To bring saves from elsewhere, give their folder: a save folder (it holds icon.sys), the folder above it, or a profile's "
-                               "folder (another installation's `save\\Default`, or its `work\\local`). They are copied; the originals stay where they are."),
+                h += rich(runs(tr("To bring saves from elsewhere, give their folder: a save folder (it holds icon.sys), the folder above it, or a profile's "
+                                  "folder (another installation's `save\\Default`, or its `work\\local`). They are copied; the originals stay where they are.")),
                           fSmall, fSmall, cx, cy + h, cw, u(18.75f), kMute, kMute) + u(10);
-                if (button(cx, cy + h, "Create the profile", kPrimary) || create)
+                if (button(cx, cy + h, tr("Create the profile"), kPrimary) || create)
                 {
                     const std::string saves = g.newSaves.text;
                     act("new-profile", "{\"name\": " + quote(g.newName.text) + ", \"saves\": " + quote(saves) + "}", [saves](const Json &) {
                         if (saves.find_first_not_of(' ') != std::string::npos)
-                            toast("The saves were copied into the new profile.");
+                            toast(std::string(tr("The saves were copied into the new profile.")));
                         g.newName = Field{};
                         g.newSaves = Field{};
                         g.newOpen = false;
@@ -1570,7 +1610,8 @@ namespace
                 }
                 h += u(39);
             }
-            const std::string hint = "Each profile has its own memory card and save states" + (s["saves"].text.empty() ? std::string(".") : ", in " + s["saves"].text + ".");
+            const std::string hint = s["saves"].text.empty() ? std::string(tr("Each profile has its own memory card and save states."))
+                                                             : tr("Each profile has its own memory card and save states, in {}.", s["saves"].text);
             return h + u(10) + paragraph(F(fSmall), hint, cx, cy + h + u(10), cw, u(18.75f), kMute);
         }) + u(14);
 
@@ -1582,18 +1623,18 @@ namespace
             if (g_draw)
             {
                 box(go, u(10), kNone, !ready ? kRaised : over ? kRedHover : kRed);
-                print(F(fGo), "Play", go.x + (go.width - measure(F(fGo), "Play", std::round(u(0.34f)))) / 2, go.y + go.height / 2, ready ? WHITE : kOff, std::round(u(0.34f)));
+                const std::string_view play = tr("Play");
+                print(F(fGo), play, go.x + (go.width - measure(F(fGo), play, std::round(u(0.34f)))) / 2, go.y + go.height / 2, ready ? WHITE : kOff, std::round(u(0.34f)));
             }
             if (over)
                 g_cursor = MOUSE_CURSOR_POINTING_HAND;
             if (over && take())
                 act("play", "{\"profile\": " + quote(g.profile) + "}", [](const Json &) { g.nextPage = kConsole; });
-            const std::string state = busy() ? (!s["phase"].text.empty() ? s["phase"].text : s["running"].text + " running")
-                                      : s["ready"].yes() ? "Ready."
-                                                         : "Give the ISO, then generate the code and build the game.";
+            const std::string state = busy() ? (!s["phase"].text.empty() ? s["phase"].text : tr("{} running", s["running"].text))
+                                      : std::string(s["ready"].yes() ? tr("Ready.") : tr("Give the ISO, then generate the code and build the game."));
             const float text = std::max(u(21), paragraph(F(fNote), state, cx, cy + u(5) + u(56) + u(14), cw, u(19.5f), busy() ? kText : kMute, true));
             const float stopY = cy + u(5) + u(56) + u(14) + text + u(10);
-            if (button(cx + (cw - buttonWidth("Stop")) / 2, stopY, "Stop", kQuiet, busy()))
+            if (button(cx + (cw - buttonWidth(tr("Stop"))) / 2, stopY, tr("Stop"), kQuiet, busy()))
                 act("stop");
             return stopY + u(39) - cy;
         };
@@ -1632,22 +1673,22 @@ namespace
     void consolePage(float x, float y, float w, float bottom)
     {
         float bx = x;
-        if (button(bx, y, "Stop", kPlain, busy()))
+        if (button(bx, y, tr("Stop"), kPlain, busy()))
             act("stop");
-        bx += buttonWidth("Stop") + u(8);
-        if (button(bx, y, "Copy all", kQuiet))
+        bx += buttonWidth(tr("Stop")) + u(8);
+        if (button(bx, y, tr("Copy all"), kQuiet))
         {
             std::string all;
             for (const std::string &line : g.log)
                 all += line + "\n";
             SetClipboardText(all.c_str());
         }
-        bx += buttonWidth("Copy all") + u(8);
-        if (button(bx, y, "Clear", kQuiet))
+        bx += buttonWidth(tr("Copy all")) + u(8);
+        if (button(bx, y, tr("Clear"), kQuiet))
             g.log.clear(), g.logOpen = false;
-        bx += buttonWidth("Clear") + u(8);
+        bx += buttonWidth(tr("Clear")) + u(8);
         if (busy())
-            print(F(fNote), g.state["running"].text + " running.", bx + u(6), y + u(19.5f), kMute);
+            print(F(fNote), tr("{} running", g.state["running"].text) + ".", bx + u(6), y + u(19.5f), kMute);
 
         const Rectangle frame = snap({x, y + u(51), w, std::max(u(160), bottom - y - u(51))});
         box(frame, u(12), kLine, kLog);
@@ -1837,7 +1878,7 @@ namespace
             chips.push_back({text, int(i), std::round(measure(face, text) + u(7) + measure(face, "\xC3\x97") + u(20))});
         }
         const bool listening = g.listening == name;
-        const std::string plus = listening ? "Press a key or a mouse button" : "+";
+        const std::string plus(listening ? tr("Press a key or a mouse button") : "+");
         if (inputs.size() < 3)
             chips.push_back({plus, -1, std::round(measure(face, plus) + u(20))});
         const float whatW = std::max(measure(F(fText), button[1].text), measure(F(fSmall), button[2].text));
@@ -1920,11 +1961,13 @@ namespace
     float settingsPage(float x, float y, float w)
     {
         const float top = y;
-        if (g.values.empty())
-            return card(x, y, w, "", [&](float cx, float cy, float cw) {
-                return paragraph(F(fText), "The game writes its settings file at its first launch; the settings appear here afterwards.", cx, cy - u(1), cw, u(21), kText);
+        if (!g.gameSettings) // the game writes settings.ini at its first start; the launcher's own settings are there before
+            y += card(x, y, w, "", [&](float cx, float cy, float cw) {
+                return paragraph(F(fText), tr("The game writes its settings file at its first launch; the settings appear here afterwards."), cx, cy - u(1), cw, u(21), kText);
             }) + u(14);
-        y += paragraph(F(fSmall), "Changes are saved at once and apply the next time the game starts. F1 in the game changes the same settings.", x, y, w, u(18.75f), kMute) + u(14);
+        else
+            y += paragraph(F(fSmall), tr("Changes are saved at once and apply the next time the game starts. F1 in the game changes the same settings."), x, y, w,
+                           u(18.75f), kMute) + u(14);
         std::vector<std::string> shown;
         const Json &table = g.state["table"];
         const bool narrow = float(GetScreenWidth()) <= u(940);
@@ -1963,8 +2006,8 @@ namespace
                 shown.push_back("key_" + button[0].text);
             }
         if (!buttons.empty())
-            y += card(x, y, w, "Keyboard and mouse", [&](float cx, float cy2, float cw) {
-                float h = paragraph(F(fSmall), "Up to three keys, mouse buttons or wheel moves for each PS2 button. Press + and then the key to add; click a key to remove it.",
+            y += card(x, y, w, tr("Keyboard and mouse"), [&](float cx, float cy2, float cw) {
+                float h = paragraph(F(fSmall), tr("Up to three keys, mouse buttons or wheel moves for each PS2 button. Press + and then the key to add; click a key to remove it."),
                                     cx, cy2, cw, u(18.75f), kMute) + u(6);
                 const bool one = float(GetScreenWidth()) <= u(940);
                 const float bw = one ? cw : (cw - u(36)) / 2;
@@ -1997,7 +2040,7 @@ namespace
                 other.push_back(row);
             }
         if (!other.empty())
-            y += card(x, y, w, "Other", [&](float cx, float cy2, float cw) {
+            y += card(x, y, w, tr("Other"), [&](float cx, float cy2, float cw) {
                 float h = 0;
                 for (size_t i = 0; i < other.size(); ++i)
                     h += settingRow(other[i], cx, cy2 + h, cw, i == 0, i + 1 == other.size());
@@ -2011,19 +2054,19 @@ namespace
         const float top = y;
         const Json &updates = g.state["updates"];
         float bx = x;
-        if (button(bx, y, "Check for updates"))
+        if (button(bx, y, tr("Check for updates")))
         {
-            g.note = "Checking...";
+            g.note = tr("Checking...");
             api("check-updates");
         }
-        bx += buttonWidth("Check for updates") + u(8);
-        if (button(bx, y, "Update now", kPrimary, updates["behind"].yes() && !busy()))
+        bx += buttonWidth(tr("Check for updates")) + u(8);
+        if (button(bx, y, tr("Update now"), kPrimary, updates["behind"].yes() && !busy()))
             act("update", "{}", [](const Json &) { g.nextPage = kConsole; });
-        bx += buttonWidth("Update now") + u(8);
+        bx += buttonWidth(tr("Update now")) + u(8);
         print(F(fNote), g.note.empty() ? updates["note"].text : g.note, bx + u(6), y + u(19.5f), kMute);
         y += u(39) + u(12);
         if (updates["behind"].yes())
-            y += paragraph(F(fSmall), "What the update brings", x, y, w, u(18.75f), kMute) + u(12);
+            y += paragraph(F(fSmall), tr("What the update brings"), x, y, w, u(18.75f), kMute) + u(12);
         for (const Json &entry : (updates["behind"].yes() ? updates["new"] : g.state["changelog"]).items)
             y += card(x, y, w, entry[0].text, [&](float cx, float cy, float cw) {
                 float h = 0;
@@ -2133,10 +2176,11 @@ namespace
         float tx = u(28);
         for (int i = 0; i < 4; ++i)
         {
-            const float tw = std::round(measure(F(fText), tabs[i]) + u(28) + (i == kUpdates && s["updates"]["behind"].yes() ? u(13) : 0));
+            const std::string_view tab = tr(tabs[i]);
+            const float tw = std::round(measure(F(fText), tab) + u(28) + (i == kUpdates && s["updates"]["behind"].yes() ? u(13) : 0));
             const Rectangle r = snap({tx, u(64), tw, u(41)});
             const bool over = hot(r);
-            print(F(fText), tabs[i], r.x + u(14), r.y + u(18.5f), g.page == i || over ? kText : kMute);
+            print(F(fText), tab, r.x + u(14), r.y + u(18.5f), g.page == i || over ? kText : kMute);
             if (i == kUpdates && s["updates"]["behind"].yes())
                 DrawCircleV({r.x + r.width - u(17), r.y + u(18.5f)}, u(3), kRed);
             if (g.page == i)
@@ -2168,8 +2212,8 @@ namespace
         const float pageW = std::min(W - u(56), u(1180)), pageX = std::round((W - pageW) / 2);
         if (!g.have)
         {
-            const std::string text = g.stopped >= 0 ? "The launcher stopped (exit code " + std::to_string(g.stopped) + "). Close this window and start it again."
-                                                    : "Starting the launcher...";
+            const std::string text = g.stopped >= 0 ? tr("The launcher stopped (exit code {}). Close this window and start it again.", std::to_string(g.stopped))
+                                                    : std::string(tr("Starting the launcher..."));
             paragraph(F(fText), text, pageX, view.y + view.height / 2 - u(10.5f), pageW, u(21), kMute, true);
         }
         else if (g.page == kConsole)
@@ -2193,13 +2237,13 @@ namespace
         if (g.have)
         {
             pushClip({0, H - footer, W * 0.65f, footer});
-            print(F(fTiny), "Work folder: " + s["work"].text, u(28), H - footer / 2, kMute);
+            print(F(fTiny), tr("Work folder: {}", s["work"].text), u(28), H - footer / 2, kMute);
             popClip();
         }
-        std::string status = busy() ? s["running"].text + " running" : "";
+        std::string status = busy() ? tr("{} running", s["running"].text) : "";
         if (g.have && !g.connected)
-            status = g.stopped >= 0 ? "The launcher stopped (exit code " + std::to_string(g.stopped) + "): close this window and start it again."
-                                    : "Reconnecting to the launcher...";
+            status = g.stopped >= 0 ? tr("The launcher stopped (exit code {}): close this window and start it again.", std::to_string(g.stopped))
+                                    : std::string(tr("Reconnecting to the launcher..."));
         print(F(fTiny), status, W - u(28) - measure(F(fTiny), status), H - footer / 2, g.have && !g.connected ? kRed : kMute);
 
         // Toast

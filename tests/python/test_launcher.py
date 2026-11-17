@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,15 @@ def archive(files: dict[str, str]) -> bytes:
 
 
 class LauncherTests(unittest.TestCase):
+    def setUp(self):
+        # A launcher of its own: an empty work folder, and English whatever the system's language.
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        for patch in (mock.patch.object(launcher, "work_dir", lambda: Path(work.name)),
+                      mock.patch.object(launcher, "system_language", lambda: "en")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
     def test_settings_are_read_in_file_order_with_their_comments(self):
         items = launcher.parse_settings(SETTINGS)
         self.assertEqual(items[0]["comment"], "Burnout Dominator Reversed settings.")
@@ -247,6 +257,67 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual((folder / "started.txt").read_text(), str(folder))
             self.assertTrue((folder / "source" / "tools" / "launcher.py").is_file())
+
+    def test_the_launcher_keeps_its_own_choices_together_and_out_of_settings_ini(self):
+        app = launcher.Launcher("token")
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Path(temp) / "settings.ini"
+            settings.write_text("aspect = 4:3\n", encoding="utf-8")
+            (app.local / "profiles" / "Second" / "saves").mkdir(parents=True)
+            with mock.patch.object(launcher, "SETTINGS", settings):
+                app.select("Second")
+                app.save_settings({"launcher_language": "Français", "discord": "true", "aspect": "16:9"})
+                self.assertEqual(settings.read_text(encoding="utf-8"), "aspect = 16:9\n")
+                self.assertEqual(json.loads((app.local / "launcher.json").read_text(encoding="utf-8")),
+                                 {"profile": "Second", "language": "fr", "discord": True})
+                state = app.state()
+            self.assertEqual(app.profile(), "Second")
+            self.assertEqual((state["language"], state["text"]["Play"]), ("fr", "Jouer"))
+            self.assertEqual(list(state["steps"])[0], "ISO trouvée")
+            self.assertEqual(state["table"]["columns"][1][-1]["rows"][0]["label"], "Langue du lanceur")
+            self.assertEqual(state["table"]["columns"][1][-1]["rows"][0]["select"], ["English", "Français"])
+            self.assertEqual(state["table"]["buttons"][4], ["cross", "✕ Croix", "accélérer, valider"])
+            # Without a Discord application the option is not offered.
+            self.assertEqual([item for item in state["settings"] if item.get("launcher")],
+                             [{"key": "launcher_language", "value": "Français", "launcher": True}])
+            app.save_settings({"launcher_language": "English"})
+            self.assertEqual(app.saved(), {"profile": "Second", "language": "en", "discord": True})
+            self.assertEqual(app.command("play", {"profile": "nobody"}), {"error": "Unknown save profile."})
+
+    def test_the_launcher_speaks_the_systems_language_when_it_has_it(self):
+        app = launcher.Launcher("token")
+        for system, expected in (("fr", "fr"), ("de", "en"), ("", "en")):
+            with mock.patch.object(launcher, "system_language", lambda: system):
+                self.assertEqual(app.language(), expected)
+                self.assertEqual(app.command("play", {"profile": "nobody"})["error"],
+                                 "Profil de sauvegarde inconnu." if expected == "fr" else "Unknown save profile.")
+        app.remember(language="en")
+        with mock.patch.object(launcher, "system_language", lambda: "fr"):
+            self.assertEqual(app.language(), "en")  # the player's choice comes first
+
+    def test_a_translation_falls_back_to_english_and_fills_in_what_changes(self):
+        words = {"Game": "Jeu", "{} is still running.": "{} en cours : attendez la fin.", "Deleting {}": "Suppression de {}",
+                 "Deleting {}, except the game in {}": "Suppression de {}, sauf le jeu dans {}"}
+        self.assertEqual(launcher.translate("Game", words), "Jeu")
+        self.assertEqual(launcher.translate("Not in the table.", words), "Not in the table.")
+        self.assertEqual(launcher.translate("", words), "")
+        self.assertEqual(launcher.translate("Game is still running.", words), "Jeu en cours : attendez la fin.")
+        self.assertEqual(launcher.translate("Deleting C:\\w\\build, except the game in C:\\w\\game", words),
+                         "Suppression de C:\\w\\build, sauf le jeu dans C:\\w\\game")
+        self.assertEqual(launcher.translate("Deleting C:\\$1", words), "Suppression de C:\\$1")
+
+    def test_every_translation_is_of_a_text_the_launcher_shows(self):
+        # The tables are keyed by the English text: a line whose English changed would stop translating unnoticed.
+        tools = ROOT / "tools"
+        sources = "".join(path.read_text(encoding="utf-8") for path in (
+            tools / "launcher.py", tools / "launcher.html", tools / "launcher" / "launcher.cpp", tools / "launcher_settings.json",
+            tools / "install.py"))
+        sources = re.sub(r'"\s*\n\s*f?"', "", sources).replace('\\"', '"').replace("\\\\", "\\")  # literals as the program sees them
+        for code, language in launcher.LANGUAGES.items():
+            for english, translated in language["text"].items():
+                self.assertEqual(english.count("{}"), translated.count("{}"), f"{code}: {english}")
+                for piece in english.split("{}"):
+                    self.assertIn(piece, sources, f"{code}: {english}")
 
     def test_installation_steps_follow_the_files(self):
         with tempfile.TemporaryDirectory() as temp:

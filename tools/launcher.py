@@ -14,6 +14,7 @@ import ctypes
 import hashlib
 import io
 import json
+import locale
 import os
 from pathlib import Path
 import re
@@ -39,6 +40,7 @@ if PORTABLE:
     if (PORTABLE / "git" / "cmd").is_dir():  # the Git the Windows file brought, for the build's dependencies
         os.environ["PATH"] = str(PORTABLE / "git" / "cmd") + os.pathsep + os.environ.get("PATH", "")
 sys.path.insert(0, str(ROOT / "tools"))
+import discord_presence  # noqa: E402
 import install  # noqa: E402
 import portable_toolchain  # noqa: E402
 from project import DEFAULT_PROFILE, PROFILE_NAME, adopt_saves, profile_dir, profiles_root, settings_file  # noqa: E402
@@ -47,6 +49,9 @@ SETTINGS = settings_file()
 CHANGELOG = ROOT / "CHANGELOG.md"
 REPOSITORY = "literalynn/BurnoutDominatorReversed"
 LATEST_RELEASE = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+# The Discord application whose name a player's Discord profile shows while the game runs (Settings > Discord status):
+# its "Application ID", from https://discord.com/developers/applications. Empty: the option is not offered.
+DISCORD_APPLICATION_ID = ""
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # children never open a console window
 SETTING_LINE = re.compile(r"\s*([a-z0-9_]+)\s*=\s*(.*?)\s*$")
 # Settings with a fixed list of values; refresh_rate also takes any number typed in.
@@ -57,6 +62,28 @@ PORTS = range(47800, 47810)  # a fixed first choice: the app window remembers it
 def work_dir() -> Path:
     """Where the game's files live: the installer's choice, known before the first installation."""
     return install.choose_work_dir(None, dict(os.environ), ROOT, Path.home())[0]
+
+
+def system_language() -> str:
+    """The two-letter code of the system's language: Windows' display language, elsewhere the locale's."""
+    if os.name == "nt":
+        name = locale.windows_locale.get(ctypes.windll.kernel32.GetUserDefaultUILanguage(), "")
+    else:
+        name = next((os.environ[key] for key in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG") if os.environ.get(key)),
+                    locale.getlocale()[0] or "")
+    return name[:2].lower()
+
+
+def translate(text: str, words: dict[str, str]) -> str:
+    """`text` in a language: its line in `words`, or a line where {} stands for what changes (a folder, a number,
+    itself translated when `words` has it); `text` itself, in English, when `words` has neither."""
+    if not text or text in words:
+        return words.get(text, text)
+    for english in sorted((key for key in words if "{}" in key), key=len, reverse=True):  # the most precise first
+        if match := re.fullmatch(re.escape(english).replace(r"\{\}", "(.*?)"), text, re.S):
+            pieces = words[english].split("{}")
+            return pieces[0] + "".join(words.get(part, part) + piece for part, piece in zip(match.groups(), pieces[1:]))
+    return text
 
 
 def install_status(work: Path, lock: dict) -> dict[str, bool]:
@@ -243,8 +270,10 @@ def console_python() -> str:
     return str(console if console.is_file() else exe)
 
 
-def choose(folder: bool = False) -> str:
-    """A native dialog for the ISO, or for a folder of saves; "" when cancelled or when the system has none we know."""
+def choose(folder: bool = False, words: dict[str, str] | None = None) -> str:
+    """A native dialog for the ISO, or for a folder of saves, its titles in `words`' language; "" when cancelled or
+    when the system has none we know."""
+    saves, iso = translate("The folder that holds your saves", words or {}), translate("Burnout Dominator ISO", words or {})
     if os.name == "nt":
         # The dialog belongs to the launcher's window, where the click just came from: without an owner it
         # opens behind that window. Another program's window in front is left alone.
@@ -252,8 +281,11 @@ def choose(folder: bool = False) -> str:
         owner = user32.GetForegroundWindow()
         user32.GetWindowTextW(owner, title, 64)
         owner = owner if title.value.startswith("Burnout Dominator Reversed") else 0
-        kind, setup, picked = (("FolderBrowserDialog", "$dialog.Description = 'The folder that holds your saves'", "SelectedPath") if folder else
-                               ("OpenFileDialog", "$dialog.Title = 'Burnout Dominator ISO'; $dialog.Filter = 'ISO image (*.iso)|*.iso|All files|*.*'", "FileName"))
+        quoted = lambda text: text.replace("'", "''")  # inside PowerShell's '...'
+        kinds = quoted(translate("ISO image", words or {})), quoted(translate("All files", words or {}))
+        kind, setup, picked = (("FolderBrowserDialog", f"$dialog.Description = '{quoted(saves)}'", "SelectedPath") if folder else
+                               ("OpenFileDialog", f"$dialog.Title = '{quoted(iso)}'; $dialog.Filter = '{kinds[0]} (*.iso)|*.iso|{kinds[1]}|*.*'",
+                                "FileName"))
         script = ("Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.NativeWindow;"
                   f"$owner.AssignHandle([IntPtr]{owner});"
                   f"$dialog = New-Object System.Windows.Forms.{kind}; {setup};"
@@ -262,14 +294,14 @@ def choose(folder: bool = False) -> str:
                   f"if ($answer -eq 'OK') {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; $dialog.{picked} }}")
         command = ["powershell", "-NoProfile", "-Command", script]
     elif sys.platform == "darwin":
-        command = ["osascript", "-e", 'POSIX path of (choose folder with prompt "The folder that holds your saves")' if folder else
-                   'POSIX path of (choose file with prompt "Burnout Dominator ISO")']
+        prompt = (saves if folder else iso).replace("\\", "\\\\").replace('"', '\\"')
+        command = ["osascript", "-e", f'POSIX path of (choose {"folder" if folder else "file"} with prompt "{prompt}")']
     elif shutil.which("zenity"):
-        command = ["zenity", "--file-selection"] + (["--directory", "--title=The folder that holds your saves"] if folder else
-                                                    ["--title=Burnout Dominator ISO", "--file-filter=*.iso"])
+        command = ["zenity", "--file-selection"] + (["--directory", f"--title={saves}"] if folder else
+                                                    [f"--title={iso}", "--file-filter=*.iso"])
     elif shutil.which("kdialog"):
-        command = ["kdialog", "--title", "The folder that holds your saves", "--getexistingdirectory", str(Path.home())] if folder else \
-                  ["kdialog", "--title", "Burnout Dominator ISO", "--getopenfilename", str(Path.home()), "*.iso"]
+        command = ["kdialog", "--title", saves, "--getexistingdirectory", str(Path.home())] if folder else \
+                  ["kdialog", "--title", iso, "--getopenfilename", str(Path.home()), "*.iso"]
     else:
         return ""
     result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
@@ -317,6 +349,8 @@ class Launcher:
         self.restart: list[str] | None = None  # set to the new launcher's arguments after an update
         self.front = 0  # bumped when the launcher's window is started again: the open one comes to the front
         self.compiler: dict = {}  # the offer to download the C++ compiler, when Windows has none
+        self.game_started: float | None = None
+        self.presence = discord_presence.Presence(DISCORD_APPLICATION_ID) if DISCORD_APPLICATION_ID else None
         self.check()
 
     def check(self) -> None:
@@ -375,20 +409,37 @@ class Launcher:
     def profiles(self) -> list[str]:
         return profiles(self.root or self.local / "profiles")
 
+    def remember(self, **choices) -> None:
+        """Keep the launcher's own choices in launcher.json, with the ones already there."""
+        with self.changed:
+            self.local.mkdir(parents=True, exist_ok=True)
+            (self.local / "launcher.json").write_text(json.dumps({**self.saved(), **choices}, indent=2) + "\n", encoding="utf-8")
+
     def profile(self) -> str:
         name = self.saved().get("profile", DEFAULT_PROFILE)
         return name if name in self.profiles() else DEFAULT_PROFILE
+
+    def language(self) -> str:
+        """The launcher's language: the player's choice, else the system's when the launcher has it, else English."""
+        return next(code for code in (self.saved().get("language"), system_language(), "en") if code in LANGUAGES)
 
     def busy(self) -> str:
         """What runs, for the page; "" when nothing does."""
         return "Update" if self.updating else self.running if self.process else ""
 
     def state(self) -> dict:
+        """What the page and the window show, in the launcher's language; `text` translates their own words."""
+        language = self.language()
+        words = LANGUAGES[language]["text"]
+        say = lambda text: translate(text, words)
         status = install_status(self.work, self.project)
         recorded = install.recorded_iso(self.local)
         settings = parse_settings(SETTINGS.read_text(encoding="utf-8")) if SETTINGS.is_file() else []
         for item in settings:
             item.pop("closed", None)
+        # The launcher's own settings, kept in launcher.json: the game reports the keys of settings.ini it does not know.
+        settings += [{"key": "launcher_language", "value": LANGUAGES[language]["name"], "launcher": True}] + \
+                    [{"key": "discord", "value": str(self.saved().get("discord") is True).lower(), "launcher": True}] * bool(self.presence)
         entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8")) if CHANGELOG.is_file() else []
         # After a purge the game plays without its translated code; the next update makes it again.
         ready = all(done for step, done in status.items() if step != "Game code generated")
@@ -398,13 +449,17 @@ class Launcher:
                      f"{(install.TRANSLATION_BYTES + install.BUILD_BYTES) // install.GIB} GB). The game stays playable, but "
                      "the next update has to translate and build the whole game again (30 to 90 minutes) instead of "
                      "only what changed.")
-        return {"iso": str(recorded or ""), "steps": status, "ready": ready, "purge": purge,
-                "running": self.busy(), "phase": self.phase if self.process else "",
+        updates = dict(self.updates, note=say(self.updates.get("note", "")),
+                       new=[[words.get(text, text) for text in entry] for entry in self.updates.get("new", [])])
+        return {"iso": str(recorded or ""), "steps": {say(step): done for step, done in status.items()}, "ready": ready, "purge": say(purge),
+                "running": say(self.busy()), "phase": say(self.phase) if self.process else "",
                 "work": str(self.work),
                 "profiles": self.profiles(), "profile": self.profile(), "saves": str(self.root or ""),
-                "settings": settings, "settings_stamp": SETTINGS.stat().st_mtime_ns if SETTINGS.is_file() else 0, "table": SETTINGS_TABLE,
-                "version": installed_version(), "changelog": entries, "updates": self.updates,
-                "missing": self.missing, "compiler": self.compiler, "build": BUILD, "front": self.front}
+                "settings": settings, "settings_stamp": SETTINGS.stat().st_mtime_ns if SETTINGS.is_file() else 0,
+                "table": settings_table(words), "language": language, "text": words,
+                "version": installed_version(), "changelog": entries, "updates": updates,
+                "missing": "\n".join(map(say, self.missing.split("\n"))), "compiler": {key: say(text) for key, text in self.compiler.items()},
+                "build": BUILD, "front": self.front}
 
     # --- Commands -----------------------------------------------------------
 
@@ -450,12 +505,21 @@ class Launcher:
         if profile not in self.profiles():
             raise ValueError("Unknown save profile.")
         self.select(profile)
+        started = time.time()
         self.start("Game", [console_python(), "-u", str(ROOT / "tools" / "project.py"), "run", "--echo", "--status-ms", "5000",
-                            "--profile", profile])
+                            "--profile", profile], lambda code: self.show_presence())
+        self.game_started = started
+        self.show_presence()
+
+    def show_presence(self) -> None:
+        """Discord's "Playing" line while the game runs, when the player asked for it."""
+        if self.presence:
+            playing = self.process is not None and self.running == "Game" and self.saved().get("discord") is True
+            self.presence.show(self.game_started if playing else None)
 
     def select(self, profile: str) -> None:
         if profile in self.profiles() and self.local.is_dir():
-            (self.local / "launcher.json").write_text(json.dumps({"profile": profile}, indent=2) + "\n", encoding="utf-8")
+            self.remember(profile=profile)
 
     def new_profile(self, name: str, saves: str = "") -> None:
         """A new profile, empty or holding a copy of the saves in the folder `saves`."""
@@ -485,10 +549,21 @@ class Launcher:
             subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(folder)])
 
     def save_settings(self, values: dict) -> None:
-        if SETTINGS.is_file():
-            clean = {str(key): str(value).replace("\n", " ").strip() for key, value in values.items()}
-            with self.changed:  # one request at a time reads the file and writes it back
+        clean = {str(key): str(value).replace("\n", " ").strip() for key, value in values.items()}
+        own = {}  # the launcher's own, in launcher.json
+        if "launcher_language" in clean:
+            name = clean.pop("launcher_language")
+            own["language"] = next((code for code, language in LANGUAGES.items() if language["name"] == name), self.language())
+        if "discord" in clean:
+            own["discord"] = clean.pop("discord") == "true"
+        with self.changed:  # one request at a time reads the file and writes it back
+            if own:
+                self.remember(**own)
+            if clean and SETTINGS.is_file():
                 SETTINGS.write_text(apply_settings(SETTINGS.read_text(encoding="utf-8"), clean), encoding="utf-8")
+        if own:
+            self.show_presence()
+            self.touch()  # every open window draws itself again, in the new language
 
     # --- Updates ------------------------------------------------------------
 
@@ -557,7 +632,7 @@ class Launcher:
         """One request of the page; the answer is the new state, or {"error": text}."""
         try:
             if name in ("browse", "browse-saves"):
-                return {"path": choose(folder=name == "browse-saves")}
+                return {"path": choose(folder=name == "browse-saves", words=LANGUAGES[self.language()]["text"])}
             if name == "install":
                 self.install(str(body.get("iso", "")))
             elif name in ("download-compiler", "licence"):
@@ -591,7 +666,7 @@ class Launcher:
             elif name != "state":
                 return {"error": f"Unknown command: {name}"}
         except (ValueError, OSError) as error:
-            return {"error": str(error)}
+            return {"error": translate(str(error), LANGUAGES[self.language()]["text"])}
         return self.state()
 
 
@@ -759,9 +834,29 @@ PAGE = Path(__file__).with_name("launcher.html").read_text(encoding="utf-8").rep
 # settings.ini. A row without a control named (choice, range, select, number, text) is an on/off switch; "and" is a
 # second number on the same row. A setting the table does not name appears under "Other", as text. The limits are the
 # game's own. "buttons": the PS2 buttons in the order of settings.ini (key_up...), with what the game uses them for.
+# launcher_language and discord are the launcher's own settings (launcher.json, see Launcher.state).
 TABLE = Path(__file__).with_name("launcher_settings.json").read_text(encoding="utf-8")
-SETTINGS_TABLE = json.loads(TABLE)
 BUILD = hashlib.sha256((PAGE + TABLE + Path(__file__).read_text(encoding="utf-8")).encode("utf-8")).hexdigest()[:12]
+# The launcher's languages: English, which its text is written in, and one file per other language in
+# launcher_languages/, named by the language's two-letter code (fr.json): {"name": the language's name in that language,
+# "text": {English text: translation}}. Adding a file adds the language to Settings. A text the file lacks stays in
+# English; {} stands for what changes in a text (a folder, a number). The page and the window translate their own
+# words with the same table, which comes with the state.
+LANGUAGES = {"en": {"name": "English", "text": {}}} | {
+    path.stem: json.loads(path.read_text(encoding="utf-8")) for path in sorted(Path(__file__).with_name("launcher_languages").glob("*.json"))}
+
+
+def settings_table(words: dict[str, str]) -> dict:
+    """launcher_settings.json in a language, with the launcher's languages to choose from."""
+    table, say = json.loads(TABLE), lambda text: words.get(text, text)
+    for group in (group for column in table["columns"] for group in column):
+        group["title"] = say(group["title"])
+        for row in group["rows"]:
+            row.update({key: say(row[key]) for key in ("label", "help") if key in row})
+            if row["key"] == "launcher_language":
+                row["select"] = [language["name"] for language in LANGUAGES.values()]
+    table["buttons"] = [[name, *map(say, texts)] for name, *texts in table["buttons"]]
+    return table
 
 
 def main() -> int:
