@@ -17,6 +17,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <thread>
+#include <functional>
+#include <memory>
 
 namespace ParallelGS
 {
@@ -322,6 +324,9 @@ public:
 
 	void set_field_aware_super_sampling(bool enable);
 
+	// [Burnout] Returns once the render thread has run every call made so far (see gs_renderer.cpp).
+	void wait_render_thread_idle();
+
 private:
 	PageTracker &tracker;
 	Vulkan::Device *device = nullptr;
@@ -477,7 +482,7 @@ private:
 			ShadingDescriptor &push,
 			uint32_t base_primitive, uint32_t first_z_sensitive, uint32_t num_primitives);
 
-	void flush_palette_upload();
+	void flush_palette_upload(const std::vector<PaletteUploadDescriptor> &uploads, uint32_t base_instance);
 
 	bool render_pass_instance_is_deduced_blur(const RenderPass &rp, uint32_t instance) const;
 
@@ -577,5 +582,107 @@ private:
 
 	void flush_qword_clears();
 	void ensure_clear_cmd();
+
+	// [Burnout] Render thread. GSInterface calls the renderer from the GS submission thread, and the
+	// renderer used to record and submit the Vulkan commands there too: about 40% of that thread's time
+	// (driver calls mostly). The calls that only record commands now queue their work, in order, for a
+	// thread of its own (GsRender); what the front end needs at once (texture images, CLUT instances,
+	// attribute memory, flush statistics, page tracker updates) stays on the calling thread. vsync and
+	// the rare calls that return something recorded run on the render thread while the caller waits.
+	using RenderTask = std::function<void ()>;
+	void defer(RenderTask task);
+	void run_sync(const RenderTask &task);
+	void start_render_thread();
+	void stop_render_thread();
+	void render_thread_main();
+	bool on_render_thread() const;
+	std::thread render_thread;
+	std::thread::id render_thread_id;
+	std::mutex render_task_lock;
+	std::condition_variable render_task_cond;
+	std::condition_variable render_idle_cond;
+	std::vector<RenderTask> render_tasks;
+	bool render_thread_sleeping = false;
+	bool render_thread_busy = false;
+	bool render_thread_exit = false;
+
+	// What the render thread reads of a render pass's attributes (the front end writes the next ones).
+	struct PassAttributes
+	{
+		Vulkan::BufferHandle pos_buffer, attr_buffer, prim_buffer;
+		VkDeviceSize pos_offset = 0, attr_offset = 0, prim_offset = 0;
+		const VertexPosition *pos = nullptr;
+		const VertexAttribute *attr = nullptr;
+		const PrimitiveAttribute *prim = nullptr;
+	};
+
+	struct RenderPassTask
+	{
+		RenderPass rp;
+		std::vector<StateVector> states;
+		std::vector<TextureInfo> textures;
+		std::vector<Vulkan::ImageHandle> images; // the textures' views stay alive until it is recorded
+		std::vector<TextureAnalysis> texture_analysis;
+		PassAttributes attributes;
+	};
+
+	struct AttributeFlush
+	{
+		Vulkan::BufferHandle buffer, gpu_buffer;
+		VkDeviceSize offset = 0, size = 0;
+	};
+
+	struct SubmitTask
+	{
+		std::vector<AttributeFlush> attribute_flushes;
+		bool flush_transfer = false;
+		std::vector<uint32_t> shadow_pages;
+		std::vector<VkDeviceAddress> qword_clears;
+	};
+
+	struct CacheUploadTask
+	{
+		std::vector<TextureUpload> uploads;
+		std::vector<VkImageMemoryBarrier2> pre_barriers, post_barriers;
+		std::vector<PaletteUploadDescriptor> palettes;
+		uint32_t base_clut_instance = 0;
+	};
+
+	struct CopyTask
+	{
+		CopyDescriptor desc;
+		PageRect damage_rect;
+		std::vector<uint8_t> host_data;
+	};
+
+	// Render thread state, from the task it runs.
+	PassAttributes rt_pass;
+	std::vector<TextureAnalysis> rt_texture_analysis;
+
+	// Front-end state: scratch it allocates itself, and what it must know of the render thread's queue.
+	Scratch fe_device_scratch, fe_rebar_scratch;
+	std::vector<VkDeviceAddress> fe_qword_clears;
+	uint32_t fe_rt_qword_clears = 0; // queued for the render thread, counted in the statistics
+	uint32_t fe_pending_copies = 0;
+
+	bool take_attribute_flush(AttributeScratch &scratch, AttributeFlush &flush);
+	void rt_flush_attribute(const AttributeFlush &flush);
+	SubmitTask prepare_submit();
+	void flush_submit_inline(uint64_t value);
+	void rt_flush_submit(SubmitTask &task, uint64_t value);
+	bool prepare_flush_transfer(std::vector<uint32_t> &shadow_pages);
+	void rt_flush_transfer(std::vector<uint32_t> &shadow_pages);
+	void account_render_pass(const RenderPass &rp);
+	void rt_flush_render_pass(RenderPassTask &task);
+	void rt_flush_rendering(const RenderPass &rp);
+	void rt_flush_cache_upload(CacheUploadTask &task);
+	void rt_copy_vram(CopyTask &task);
+	void rt_flush_host_vram_copy(const uint32_t *block_indices, uint32_t num_indices);
+	void rt_flush_readback(const uint32_t *page_indices, uint32_t num_indices);
+	Vulkan::ImageHandle rt_copy_cached_texture(const Vulkan::Image &img, const VkRect2D &rect);
+	void rt_invalidate_super_sampling_state(uint32_t sampling_rate_x_log2, uint32_t sampling_rate_y_log2);
+	ScanoutResult rt_vsync(const PrivRegisterState &priv, const VSyncInfo &info,
+	                       uint32_t sampling_rate_x_log2, uint32_t sampling_rate_y_log2,
+	                       const Vulkan::Image *promoted1, const Vulkan::Image *promoted2);
 };
 }

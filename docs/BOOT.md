@@ -169,6 +169,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_PGS_REPLAY=file` | in `ps2x_tests`: replays a recording into the CPU rasterizer and paraLLEl-GS and lists, at each presentation, the 8 KiB pages that differ; `BDR_PGS_REPLAY_FIRST=N` stops at the first record leaving more than N differing bytes (with `BDR_PGS_REPLAY_DUMPFB=fbp,fbw,psm`, both buffers go to `replay_divergence.ppm`); `BDR_PGS_REPLAY_DUMP=dir` writes the displayed buffer of both sides for the first 16 presentations |
 | `BDR_PGS_VRAM_PPM=dir` | paraLLEl-GS: at each presentation, the DISPFB1 buffer as read back from its VRAM |
 | `BDR_PGS_TRACE=1` | paraLLEl-GS: prints the display registers at each presentation and the transfer registers of each local-to-host readback |
+| `BDR_PGS_RENDER_THREAD=0` | paraLLEl-GS records and submits its GPU work on the GS submission thread, as it did before it had a render thread of its own (`GsRender`), to compare the two |
 | `BDR_PGS_RECORD_FROM=N`, `BDR_PGS_RECORD_VSYNCS=M` | with `BDR_PGS_RECORD`: records only VSync ticks N to N+M, starting with the VRAM of tick N |
 | `BDR_TRACE_DMA_CHAIN=N` | prints the tags (address, id, QWC, ADDR) of up to N DMA chains whose data exceeds 512 KiB |
 | `BDR_TRACE_DMA_KICKS=first,count` | every GIF, VIF0 and VIF1 DMA start of VSync ticks first..first+count, with the bytes it queued, what each channel still has queued and the PATH3 mask |
@@ -182,7 +183,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_PROFILE_SECONDS=N` | with `BDR_PROFILE=1`: after N seconds of sampling, prints the report and the sampled thread's call stack, even if that thread never returns (hangs) |
 | `BDR_GS_STATS=1` | once a second: primitives queued to the GS raster workers, barriers inserted because a texture reads pending writes, serial operations, worker launches, drains and the time the game thread waited for them |
 | `BDR_PROFILE_THREAD=name` | with `BDR_PROFILE=1`: samples that thread instead of `GameThread`, e.g. `GSRaster0` for a GS raster worker |
-| `BDR_STOP_AT_VSYNC=from,to` | stops the run at VSync `to` and prints the wall time and the CPU time of `GameThread`, `GsWorker` and `GsSubmit` since VSync `from`, with the VU1 pairs run compiled and interpreted. With `BDR_DETERMINISTIC=1` a replay does the same work every time, so the CPU times compare builds (Windows only for the CPU times) |
+| `BDR_STOP_AT_VSYNC=from,to` | stops the run at VSync `to` and prints the wall time and the CPU time of `GameThread`, `GsWorker`, `GsSubmit` and `GsRender` since VSync `from`, with the VU1 pairs run compiled and interpreted. With `BDR_DETERMINISTIC=1` a replay does the same work every time, so the CPU times compare builds (Windows only for the CPU times) |
 | `BDR_PROFILE=1` | sampler of the guest thread (EE and IOP run on it; GS rasterization too with `BDR_GS_THREADS=1`); prints the most frequent functions at the end of the run. Windows only; needs the PDB, produced by `/DEBUG` (`cmake/Burnout.cmake`) |
 
 With these tools, the profile showed the game ran at 7% of real time because the IOP and the timers were advanced every 8 EE cycles; they now are in batches of 2048 cycles (CHANGES.md).

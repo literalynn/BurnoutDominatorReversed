@@ -116,7 +116,8 @@ namespace
             Util::register_thread_index(0);
             if (!Vulkan::Context::init_loader(nullptr))
                 throw std::runtime_error("Vulkan loader unavailable");
-            context.set_num_thread_indices(1);
+            // Two recording threads: GsSubmit (index 0) and paraLLEl-GS's render thread (index 1).
+            context.set_num_thread_indices(2);
             if (!context.init_instance_and_device(nullptr, 0, nullptr, 0,
                                                   Vulkan::CONTEXT_CREATION_ENABLE_PUSH_DESCRIPTOR_BIT |
                                                       Vulkan::CONTEXT_CREATION_ENABLE_DESCRIPTOR_HEAP_BIT |
@@ -473,6 +474,7 @@ namespace
         {
             Lock lock(mutex);
             gs.flush();
+            gs.finish_render_thread();
             vulkan.device.wait_idle();
         }
 
@@ -495,6 +497,7 @@ namespace
         {
             Lock lock(mutex);
             gs.flush();
+            gs.finish_render_thread();
             vulkan.device.wait_idle();
             gs.reset_context_state();
             bitblt = trxreg = transferBytes = uploadedBytes = uploadTailSize = 0;
@@ -598,6 +601,7 @@ namespace
             if (reason == GSSyncReason::Reset)
             {
                 gs.flush();
+                gs.finish_render_thread();
                 vulkan.device.wait_idle();
             }
             // VRAM maps and the transfer FIFO wait for their own readbacks.

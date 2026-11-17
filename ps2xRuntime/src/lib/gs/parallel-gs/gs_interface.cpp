@@ -4337,6 +4337,11 @@ void GSInterface::flush()
 		renderer.wait_timeline(value);
 }
 
+void GSInterface::finish_render_thread()
+{
+	renderer.wait_render_thread_idle();
+}
+
 void GSInterface::clobber_register_state()
 {
 	state_tracker.dirty_flags = STATE_DIRTY_ALL_BITS;

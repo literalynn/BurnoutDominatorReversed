@@ -185,7 +185,7 @@ public:
     }
 
 private:
-    static constexpr std::array<const char*, 3> kThreads{"GameThread", "GsWorker", "GsSubmit"};
+    static constexpr std::array<const char*, 4> kThreads{"GameThread", "GsWorker", "GsSubmit", "GsRender"};
 
     void run() {
         const auto reach = [this](unsigned long long vsync) {

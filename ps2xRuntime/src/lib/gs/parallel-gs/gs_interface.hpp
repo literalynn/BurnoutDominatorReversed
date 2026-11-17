@@ -283,6 +283,9 @@ public:
 	const void *map_vram_read(size_t offset, size_t size);
 
 	void flush();
+	// [Burnout] Returns once the renderer's thread has recorded and submitted everything queued, as a
+	// device wait_idle() needs (see gs_renderer.hpp).
+	void finish_render_thread();
 
 	void clobber_register_state();
 
