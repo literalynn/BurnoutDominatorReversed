@@ -5,6 +5,7 @@
 #include "burnout_profile.h"
 #include "burnout_texts.h"
 #include "ps2_runtime.h"
+#include "ps2_runtime_macros.h"
 #include "runtime/car_lights.h"
 #include "runtime/ee_idle_loops.h"
 #include "runtime/ee_scheduler.h"
@@ -461,6 +462,32 @@ void carLight(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
         ps2x::noteCarLight(rdram + (before & (PS2_RAM_SIZE - 1)));
 }
 
+// The Supercharge's refill arrows (GitHub issue 17). 0x21F8B8 stores at +0x52C of the boost HUD
+// (a0) the refill, car + 0x24E0, times 1 / the bar's size, car + 0x2470 (car = [a0 + 0x740]; DIV.S
+// at 0x21F928, MUL.S at 0x21FD04), then calls 0x220820, the only reader, which lights
+// min(32 x, 16) of the 16 arrows rounded down to an even number. The refill stops at half the
+// size: there the console's divider makes 1 / 720 0x3AB60B61 and x 0.5, 16 arrows, while the
+// host's division rounded toward zero (DIV.S by default, FINDINGS E024) makes it 0x3AB60B60 and x
+// 0x3EFFFFFF, 14: the last two arrows never lit (FINDINGS E030). Here x gets the console's
+// quotient, when it holds the host's product of the same operands.
+// shortcut: only this DIV.S gets the console's quotient; PS2X_EE_EXACT_DIVIDER=1 gives it to all.
+PS2Runtime::RecompiledFunction g_boostArrows = nullptr;
+
+void boostArrows(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    const auto word = [rdram](uint32_t address) {
+        uint32_t value = 0;
+        std::memcpy(&value, rdram + (address & (PS2_RAM_SIZE - 1) & ~3u), sizeof(value));
+        return value;
+    };
+    const uint32_t hud = getRegU32(ctx, 4), car = word(hud + 0x740u);
+    const float size = ps2_bits_float(word(car + 0x2470u)), refill = ps2_bits_float(word(car + 0x24E0u));
+    if (ps2_float_bits(ps2_fmul(refill, ps2_ee_fdiv(1.0f, size))) == word(hud + 0x52Cu)) {
+        const uint32_t x = ps2_float_bits(ps2_fmul(refill, ps2_ee_divider_div(1.0f, size)));
+        std::memcpy(rdram + ((hud + 0x52Cu) & (PS2_RAM_SIZE - 1) & ~3u), &x, sizeof(x));
+    }
+    g_boostArrows(rdram, ctx, runtime);
+}
+
 class CameraWatch {
 public:
     CameraWatch(PS2Runtime& runtime, bool windowed) : m_runtime(runtime) {
@@ -606,6 +633,9 @@ int main(int argc, char** argv) {
         g_carLight = runtime.lookupFunction(0x2EDC58u);
         if (g_carLight)
             runtime.replaceFunction(0x2EDC58u, &carLight);
+        g_boostArrows = runtime.lookupFunction(0x220820u);
+        if (g_boostArrows)
+            runtime.replaceFunction(0x220820u, &boostArrows);
         traceCalls(runtime, options.traceCalls);
         // Frame-end wait of 0x336240 (0x336318-0x336354): it rereads the DMA list words
         // gp-0x7930/-0x792C and flag gp-0x7938, which interrupt handlers change, and stores

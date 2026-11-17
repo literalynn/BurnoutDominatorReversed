@@ -2,6 +2,10 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.5.3 (November 17, 2026)
+
+- **The Supercharge's refill arrows light up to the last one**: during a Supercharge (the blue boost), the orange arrows that show the boost bar refilling stopped two short of the end. Only the display was wrong: the refill itself was complete. The arrows now all light up and flash, as on a PS2; a division gave a result a tiny bit smaller than the PS2's. GitHub issue 17.
+
 ## 1.5.2 (November 15, 2026)
 
 - **No more choppy sound when the PC cannot keep up**: when a race or the car selection was too heavy for the PC to draw every frame, the game kept its speed but its sound slowed down to the frames drawn. It sounded choppy, and below half speed it broke up. The sound now keeps real time. GitHub issue 14.
