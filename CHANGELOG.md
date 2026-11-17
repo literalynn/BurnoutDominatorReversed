@@ -4,6 +4,10 @@ What changes for players, newest first. The launcher shows the entries an update
 
 ## 1.5.3 (November 17, 2026)
 
+- **Two processor threads feed the graphics card**: the work of sending each frame to the graphics card is now shared between two threads instead of one, so the thread that was the busiest works about a third less. With an RTX 5090 at 16 samples a pixel and 165 Hz, about 3% more frames a second, the graphics card kept busy 91% of the time instead of 88%. PCs whose processor held the game back gain more. The picture is the same, pixel for pixel.
+- **Faster at high quality on Linux**: the game no longer copies each finished frame in memory before showing it. At 16 samples a pixel with high resolution, that is a 21 MB copy less per frame, and the thread that runs the graphics units works about a quarter less. On Windows, frames already went straight to the window. The picture is the same, pixel for pixel.
+- The game uses a little less processor time to send each frame to the graphics card: it reuses its texture images of every size instead of creating and destroying about 90 of them a frame, and it reads each shape's corners without making the processor wait for its own writes. About 3% less time on that thread with an RTX 5090 at 16 samples a pixel, about 10% less with a small integrated chip. The picture is the same, pixel for pixel.
+- The game's own code also runs about 3% faster: it reads the console's registers the way they were written. This update rebuilds the whole game, which takes longer than usual the first time.
 - **The Supercharge's refill arrows light up to the last one**: during a Supercharge (the blue boost), the orange arrows that show the boost bar refilling stopped two short of the end. Only the display was wrong: the refill itself was complete. The arrows now all light up and flash, as on a PS2; a division gave a result a tiny bit smaller than the PS2's. GitHub issue 17.
 
 ## 1.5.2 (November 15, 2026)
