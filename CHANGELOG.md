@@ -2,6 +2,14 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.6.0 (November 17, 2026)
+
+- **Play in French, German, Spanish or Italian**: the European disc has the game in five languages, and a new Language setting chooses which one (in the launcher's Settings tab, or the F1 menu). It applies from the game's next start: the game reads its language once, when it starts. A save state keeps the language it was saved with. In languages other than English, the memory card messages keep the console's wording.
+- **The launcher in five languages**: English, French, German, Spanish and Italian, the game's own, chosen in Settings, Launcher language. It starts in English.
+- **Discord status**: in Settings, turn on Discord status and your Discord profile shows that you are playing Burnout Dominator Reversed, and for how long. Off until you turn it on; Discord must be open on the same computer.
+- The F1 menu looks more like the game's results screens: torn black ink along the edges of its dark band, ink splashes over the stripes, and black that thickens towards the top and bottom of the screen.
+- A setting newer than your settings file, such as the game's language, now shows in the launcher's Settings tab straight away, instead of only after the F1 menu rewrote the file.
+
 ## 1.5.3 (November 17, 2026)
 
 - **Two processor threads feed the graphics card**: the work of sending each frame to the graphics card is now shared between two threads instead of one, so the thread that was the busiest works about a third less. With an RTX 5090 at 16 samples a pixel and 165 Hz, about 3% more frames a second, the graphics card kept busy 91% of the time instead of 88%. PCs whose processor held the game back gain more. The picture is the same, pixel for pixel.
