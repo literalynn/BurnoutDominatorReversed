@@ -35,6 +35,16 @@ namespace
 
 namespace
 {
+    // BDR_DETERMINISTIC=1, as in EeScheduler.cpp: a replay that repeats exactly.
+    bool deterministicReplay()
+    {
+        static const bool enabled = []
+        {
+            const char *text = std::getenv("BDR_DETERMINISTIC");
+            return text && *text && *text != '0';
+        }();
+        return enabled;
+    }
 
     inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
     {
@@ -2683,6 +2693,11 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
 
     if (address == 0x10003020u) // GIF_STAT
     {
+        // M3P follows VIF1's MSKPATH3, which the GS worker runs. Burnout polls GIF_STAT tens of thousands of
+        // times a frame while it waits for M3P, so in a replay the EE reads it once the worker has run all
+        // it was given: otherwise the EE cycles spent polling, and the game after them, follow the worker's speed.
+        if (m_gsWorker && deterministicReplay())
+            m_gsWorker->sync();
         uint32_t stat = m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
         const uint32_t mode = m_ioRegisters.count(0x10003010u) ? m_ioRegisters[0x10003010u] : 0u;
         const uint32_t ctrl = m_ioRegisters.count(0x10003000u) ? m_ioRegisters[0x10003000u] : 0u;
