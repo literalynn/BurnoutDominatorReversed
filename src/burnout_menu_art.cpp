@@ -318,15 +318,17 @@ ps2x::MenuArt loadMenuArt(const std::filesystem::path &disc)
         missing += " font";
 
     const std::vector<uint8_t> fe = readFile(disc / "FE" / "FEMAIN.BIN");
-    const auto image = [&](const char *movie, size_t index, int width, int height)
+    const auto imageIn = [&](const std::vector<uint8_t> &archive, const char *movie, size_t index, int width, int height)
     {
-        const std::optional<size_t> entry = movieImage(fe, movie, index);
-        std::optional<ps2x::MenuImage> decoded = entry ? decodeTexture(fe, *entry) : std::nullopt;
+        const std::optional<size_t> entry = movieImage(archive, movie, index);
+        std::optional<ps2x::MenuImage> decoded = entry ? decodeTexture(archive, *entry) : std::nullopt;
         if (decoded && decoded->width == width && decoded->height == height)
             return std::move(*decoded);
         missing += " " + std::string(movie) + "#" + std::to_string(index);
         return ps2x::MenuImage{};
     };
+    const auto image = [&](const char *movie, size_t index, int width, int height)
+    { return imageIn(fe, movie, index, width, height); };
     // c_elements' images, from 0: 0 and 11 the empty and full volume steps, 14 to 16 the square,
     // cross and circle, 31 and 32 the chevron and the selected one; c_screen's 40 the stripes.
     art.stepEmpty = image("c_elements", 0, 32, 32);
@@ -339,6 +341,17 @@ ps2x::MenuArt loadMenuArt(const std::filesystem::path &disc)
     // Its stripes repeat every 22 texels: columns 20 to 217 hold 9 whole ones on every row.
     if (const ps2x::MenuImage stripes = image("c_screen", 40, 256, 32); !stripes.rgba.empty())
         art.stripes = crop(stripes, 20, 198);
+    // The black ink of the results screens: c_game's 4 (splashes) and 7 (a torn band), the same in
+    // the four INGAME files.
+    const std::vector<uint8_t> inGame = readFile(disc / "FE" / "INGAMESP.BIN");
+    art.inkSplash = imageIn(inGame, "c_game", 4, 64, 64);
+    art.inkBand = imageIn(inGame, "c_game", 7, 256, 32);
+    // Its torn edge is soft at the menu's sizes: coverage 0.25 to 0.6 becomes 0 to 1, a crisp edge.
+    for (size_t p = 3; p < art.inkBand.rgba.size(); p += 4)
+    {
+        const float t = std::clamp((float(art.inkBand.rgba[p]) / 255.0f - 0.25f) / 0.35f, 0.0f, 1.0f);
+        art.inkBand.rgba[p] = uint8_t(255.0f * t * t * (3.0f - 2.0f * t) + 0.5f);
+    }
     // A, B and X as the game's button prompts draw them for Xbox pads.
     PromptStyle xbox;
     xbox.device = ps2x::InputDevice::Xbox;

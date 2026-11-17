@@ -140,7 +140,7 @@ namespace
     };
     struct ArtTextures
     {
-        Texture2D font{}, stripes{}, arrow{}, arrowSelected{}, stepEmpty{}, stepFull{};
+        Texture2D font{}, stripes{}, arrow{}, arrowSelected{}, stepEmpty{}, stepFull{}, inkBand{}, inkSplash{};
         Texture2D playStation[3]{}, xbox[3]{};
         Sound cues[4]{};
     };
@@ -204,7 +204,7 @@ namespace
         g_artChanged = false;
         for (Texture2D *texture : {&loaded.font, &loaded.stripes, &loaded.arrow, &loaded.arrowSelected, &loaded.stepEmpty,
                                    &loaded.stepFull, &loaded.playStation[0], &loaded.playStation[1], &loaded.playStation[2],
-                                   &loaded.xbox[0], &loaded.xbox[1], &loaded.xbox[2]})
+                                   &loaded.xbox[0], &loaded.xbox[1], &loaded.xbox[2], &loaded.inkBand, &loaded.inkSplash})
             if (texture->id != 0)
                 UnloadTexture(*texture);
         for (Sound &cue : loaded.cues)
@@ -219,6 +219,10 @@ namespace
         loaded.arrowSelected = toTexture(g_art.arrowSelected);
         loaded.stepEmpty = toTexture(g_art.stepEmpty);
         loaded.stepFull = toTexture(g_art.stepFull);
+        loaded.inkBand = toTexture(g_art.inkBand);
+        if (loaded.inkBand.id != 0)
+            SetTextureWrap(loaded.inkBand, TEXTURE_WRAP_MIRROR_REPEAT); // its two ends differ: mirrored, they meet
+        loaded.inkSplash = toTexture(g_art.inkSplash);
         for (int i = 0; i < 3; ++i)
         {
             loaded.playStation[i] = toTexture(g_art.playStation[i]);
@@ -1011,6 +1015,14 @@ namespace
                  at(u + width, thickness - inset), at(u, thickness - inset), kAmber);
     }
 
+    // Black ink splashed over a bar, as on the game's results screens.
+    void drawSplash(Vector2 center, float size, bool mirrored)
+    {
+        if (const Texture2D &splash = art().inkSplash; splash.id != 0)
+            DrawTexturePro(splash, {0.0f, 0.0f, mirrored ? -float(splash.width) : float(splash.width), float(splash.height)},
+                           {center.x - size / 2.0f, center.y - size / 2.0f, size, size}, {0.0f, 0.0f}, 0.0f, WHITE);
+    }
+
     struct Layout
     {
         float width = 0.0f, height = 0.0f;
@@ -1037,6 +1049,8 @@ namespace
         const Vector2 origin{-0.05f * l.width, 10.5f * l.unit};
         drawStripes(origin, l.width * 1.15f, thickness, angle);
         const float c = std::cos(angle * DEG2RAD), s = std::sin(angle * DEG2RAD);
+        const float splashU = 0.72f * l.width - origin.x, splashV = thickness / 2.0f;
+        drawSplash({origin.x + splashU * c - splashV * s, origin.y + splashU * s + splashV * c}, 2.0f * thickness, false);
         const float size = 7.5f * l.unit, u = l.left + 0.05f * l.span - origin.x;
         drawText(capitals(title), {origin.x + u * c + 0.6f * size * s, origin.y + u * s - 0.6f * size * c}, size, WHITE,
                  angle, true);
@@ -1061,6 +1075,20 @@ namespace
     void drawPanel(const Layout &l, float top, float bottom, float alpha = 0.72f)
     {
         DrawRectangle(0, int(top), int(l.width), int(bottom - top), Fade(BLACK, alpha));
+        // Torn black ink along its edges, as on the game's results screens: rising above it, hanging under it.
+        if (const Texture2D &band = art().inkBand; band.id != 0)
+        {
+            const Color ink = Fade(WHITE, 0.95f);
+            const float thickness = 6.0f * l.unit, inside = 0.15f * thickness;
+            const float across = l.width / (thickness * float(band.width) / float(band.height));
+            const float above = top + inside - thickness, below = bottom - inside;
+            texturedQuad(band, {0.3f, 0.0f}, {0.3f + across, 1.0f},
+                         {Vector2{0.0f, above}, {0.0f, above + thickness}, {l.width, above + thickness}, {l.width, above}},
+                         ink);
+            texturedQuad(band, {0.0f, 1.0f}, {across, 0.0f},
+                         {Vector2{0.0f, below}, {0.0f, below + thickness}, {l.width, below + thickness}, {l.width, below}},
+                         ink);
+        }
         drawRule(l, top);
         drawRule(l, bottom);
     }
@@ -1173,6 +1201,7 @@ namespace
     {
         const float top = 89.5f * l.unit, thickness = 8.5f * l.unit;
         drawStripes({-thickness, top}, l.width + 2.0f * thickness, thickness, 0.0f);
+        drawSplash({0.86f * l.width, top + thickness / 2.0f}, 1.8f * thickness, true); // under the hints if they reach it
         const float r = 2.4f * l.unit, size = 3.1f * l.unit, gap = 2.5f * l.unit, y = top + thickness / 2.0f;
         float end = l.left + 0.04f * l.span;
         for (const Hint &hint : hints)
@@ -1265,6 +1294,10 @@ namespace
     {
         const Layout l = layout();
         DrawRectangle(0, 0, int(l.width), int(l.height), Fade(BLACK, 0.5f));
+        // Black that thickens towards the top and bottom edges, as on the game's results screens.
+        const int fade = int(24.0f * l.unit);
+        DrawRectangleGradientV(0, 0, int(l.width), fade, Fade(BLACK, 0.85f), Fade(BLACK, 0.0f));
+        DrawRectangleGradientV(0, int(l.height) - fade, int(l.width), fade, Fade(BLACK, 0.0f), Fade(BLACK, 0.85f));
         const bool controls = g_menu.page == Page::Controls;
         drawHeader(l, controls ? "Controls" : "Settings", controls ? "Keyboard and mouse" : "");
         const float top = 21.0f * l.unit, bottom = 82.5f * l.unit;
