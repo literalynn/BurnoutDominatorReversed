@@ -17,7 +17,7 @@ SHADERS = ROOT / "ps2xRuntime" / "src" / "lib" / "gs" / "shaders"
 
 # Flat triangles (no perspective, one depth) are taken for UI and interpolate their texture coordinates
 # once per pixel, so a texture drawn 1:1 at the console's resolution shows its texels as 2x2 or 4x4
-# blocks. gs_interface.cpp (ParallelGSPatches.cmake) sets bit 27 of PrimitiveAttribute::tex for the
+# blocks. parallel-gs/gs_interface.cpp sets bit 27 of PrimitiveAttribute::tex for the
 # UI it smooths (palette textures with LINEAR magnification): those interpolate per sample like 3D.
 TRIANGLE_SETUP_CHANGE = (
     "        bool should_interpolate_per_sample = multisample;\n",

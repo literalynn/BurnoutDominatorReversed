@@ -20,7 +20,14 @@ FetchContent_Declare(parallel_gs
 )
 FetchContent_MakeAvailable(parallel_gs)
 
-include("${CMAKE_CURRENT_LIST_DIR}/ParallelGSPatches.cmake")
+# The gs/ sources come from ps2xRuntime/src/lib/gs/parallel-gs instead: that pinned commit with
+# Burnout's changes (marked "[Burnout]"; see the README there). Granite and the shaders stay fetched.
+set(PS2X_PARALLEL_GS_DIR "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/parallel-gs")
+set_property(TARGET parallel-gs PROPERTY SOURCES
+    "${PS2X_PARALLEL_GS_DIR}/gs_interface.cpp" "${PS2X_PARALLEL_GS_DIR}/gs_util.cpp"
+    "${PS2X_PARALLEL_GS_DIR}/page_tracker.cpp" "${PS2X_PARALLEL_GS_DIR}/gs_renderer.cpp")
+target_include_directories(parallel-gs BEFORE PUBLIC "${PS2X_PARALLEL_GS_DIR}")
+target_include_directories(parallel-gs PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src/lib/gs/shaders")
 if(MSVC)
     # Debug info in the PDB, so profiles name paraLLEl-GS code too.
     target_compile_options(parallel-gs PRIVATE $<$<CONFIG:Release>:/Z7>)

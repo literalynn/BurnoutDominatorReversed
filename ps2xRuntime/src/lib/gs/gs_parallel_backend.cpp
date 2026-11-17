@@ -632,7 +632,7 @@ namespace
                 gs.set_super_sampling_rate(ParallelGS::SuperSampling(quality.samples), true, true);
                 superSampling = quality.samples;
             }
-            // See ParallelGSPatches.cmake. Only when the samples make a higher resolution: at the
+            // See parallel-gs/gs_interface.cpp ("HUD smoothing"). Only when the samples make a higher resolution: at the
             // PS2's own, averaging them would just blur the art.
             ParallelGS::bdr_smooth_ui = settings.hudSmoothing && quality.highResolution && quality.samples >= 4;
             auto &p = gs.get_priv_register_state();

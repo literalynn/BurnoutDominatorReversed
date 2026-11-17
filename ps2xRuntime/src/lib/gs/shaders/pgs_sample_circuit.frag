@@ -1,6 +1,6 @@
 // paraLLEl-GS's gs/shaders/sample_circuit.frag (pinned in ps2xRuntime/cmake/ParallelGS.cmake)
 // with a 4x scan-out for 16 samples a pixel. tools/pgs_shader.py compiles it into
-// pgs_sample_circuit.spv.h, which cmake/ParallelGSPatches.cmake puts in place of the original.
+// pgs_sample_circuit.spv.h, which parallel-gs/gs_renderer.cpp uses in place of the original.
 // SPDX-FileCopyrightText: 2024 Arntzen Software AS
 // SPDX-FileContributor: Hans-Kristian Arntzen
 // SPDX-FileContributor: Runar Heyer
