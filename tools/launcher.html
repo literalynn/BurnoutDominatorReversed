@@ -379,8 +379,10 @@ function control(row) {
   if (row.select) {
     const select = element("select");
     select.setAttribute("aria-label", row.label);
-    for (const option of row.select.includes(values[key]) ? row.select : [values[key], ...row.select])
-      select.add(new Option(option.charAt(0).toUpperCase() + option.slice(1) + row.unit, option, false, option === values[key]));
+    for (const option of row.select.includes(values[key]) ? row.select : [values[key], ...row.select]) {
+      const label = option.charAt(0).toUpperCase() + option.slice(1); // the launcher's languages each in its own
+      select.add(new Option((key === "launcher_language" ? label : t(label)) + row.unit, option, false, option === values[key]));
+    }
     select.addEventListener("change", () => saveSetting(key, select.value));
     return [select];
   }

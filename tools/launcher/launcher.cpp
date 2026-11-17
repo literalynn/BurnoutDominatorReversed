@@ -1348,6 +1348,13 @@ namespace
 
     std::string choiceLabel(const Json &option) { return std::string(tr(capitalized(option.text))); }
 
+    // A drop-down's option as shown: translated, but for the launcher's languages, each named in its own.
+    std::string selectLabel(const Json &row, const std::string &option)
+    {
+        const std::string label = capitalized(option);
+        return (row["key"].text == "launcher_language" ? label : std::string(tr(label))) + row["unit"].text;
+    }
+
     float segmentsWidth(const Json &options)
     {
         float width = u(6);
@@ -1736,7 +1743,7 @@ namespace
         {
             std::vector<std::string> labels;
             for (const Json &option : row["select"].items)
-                labels.push_back(capitalized(option.text) + row["unit"].text);
+                labels.push_back(selectLabel(row, option.text));
             return dropdownWidth(labels, u(10));
         }
         if (row["number"].kind == Json::Array)
@@ -1800,8 +1807,8 @@ namespace
             for (const Json &option : row["select"].items)
                 options.push_back(option.text);
             for (const std::string &option : options)
-                labels.push_back(capitalized(option) + row["unit"].text);
-            const int chosen = dropdown(key, {x, y, controlWidth(row), u(35)}, labels, capitalized(current) + row["unit"].text);
+                labels.push_back(selectLabel(row, option));
+            const int chosen = dropdown(key, {x, y, controlWidth(row), u(35)}, labels, selectLabel(row, current));
             if (chosen >= 0)
                 saveSetting(key, options[size_t(chosen)], false);
         }

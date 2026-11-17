@@ -313,6 +313,9 @@ class LauncherTests(unittest.TestCase):
             tools / "launcher.py", tools / "launcher.html", tools / "launcher" / "launcher.cpp", tools / "launcher_settings.json",
             tools / "install.py"))
         sources = re.sub(r'"\s*\n\s*f?"', "", sources).replace('\\"', '"').replace("\\\\", "\\")  # literals as the program sees them
+        table = json.loads((tools / "launcher_settings.json").read_text(encoding="utf-8"))  # options show capitalized
+        sources += "".join(option[:1].upper() + option[1:] + "\n" for column in table["columns"] for group in column
+                           for row in group["rows"] for option in row.get("choice", []) + row.get("select", []))
         for code, language in launcher.LANGUAGES.items():
             for english, translated in language["text"].items():
                 self.assertEqual(english.count("{}"), translated.count("{}"), f"{code}: {english}")
