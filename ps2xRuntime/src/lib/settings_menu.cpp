@@ -140,7 +140,7 @@ namespace
     };
     struct ArtTextures
     {
-        Texture2D font{}, stripes{}, arrow{}, arrowSelected{}, stepEmpty{}, stepFull{}, inkBand{}, inkSplash{};
+        Texture2D font{}, stripes{}, arrow{}, arrowSelected{}, stepEmpty{}, stepFull{}, inkBand{}, inkSplash{}, inkDrips{};
         Texture2D playStation[3]{}, xbox[3]{};
         Sound cues[4]{};
     };
@@ -204,7 +204,8 @@ namespace
         g_artChanged = false;
         for (Texture2D *texture : {&loaded.font, &loaded.stripes, &loaded.arrow, &loaded.arrowSelected, &loaded.stepEmpty,
                                    &loaded.stepFull, &loaded.playStation[0], &loaded.playStation[1], &loaded.playStation[2],
-                                   &loaded.xbox[0], &loaded.xbox[1], &loaded.xbox[2], &loaded.inkBand, &loaded.inkSplash})
+                                   &loaded.xbox[0], &loaded.xbox[1], &loaded.xbox[2], &loaded.inkBand, &loaded.inkSplash,
+                                   &loaded.inkDrips})
             if (texture->id != 0)
                 UnloadTexture(*texture);
         for (Sound &cue : loaded.cues)
@@ -223,6 +224,7 @@ namespace
         if (loaded.inkBand.id != 0)
             SetTextureWrap(loaded.inkBand, TEXTURE_WRAP_MIRROR_REPEAT); // its two ends differ: mirrored, they meet
         loaded.inkSplash = toTexture(g_art.inkSplash);
+        loaded.inkDrips = toTexture(g_art.inkDrips);
         for (int i = 0; i < 3; ++i)
         {
             loaded.playStation[i] = toTexture(g_art.playStation[i]);
@@ -1015,12 +1017,23 @@ namespace
                  at(u + width, thickness - inset), at(u, thickness - inset), kAmber);
     }
 
-    // Black ink splashed over a bar, as on the game's results screens.
-    void drawSplash(Vector2 center, float size, bool mirrored)
+    // One of the game's ink images (black, square), centred on center.
+    void drawInk(const Texture2D &image, Vector2 center, float size, bool mirrored)
     {
-        if (const Texture2D &splash = art().inkSplash; splash.id != 0)
-            DrawTexturePro(splash, {0.0f, 0.0f, mirrored ? -float(splash.width) : float(splash.width), float(splash.height)},
+        if (image.id != 0)
+            DrawTexturePro(image, {0.0f, 0.0f, mirrored ? -float(image.width) : float(image.width), float(image.height)},
                            {center.x - size / 2.0f, center.y - size / 2.0f, size, size}, {0.0f, 0.0f}, 0.0f, WHITE);
+    }
+
+    // The game's stripes in black, as its results screens edge their dark bands with them.
+    void drawBlackStripes(float left, float right, float y, float height)
+    {
+        if (const Texture2D &stripes = art().stripes; stripes.id != 0)
+        {
+            const float repeat = height * float(stripes.width) / float(stripes.height);
+            texturedQuad(stripes, {left / repeat, 0.0f}, {right / repeat, 1.0f},
+                         {Vector2{left, y}, {left, y + height}, {right, y + height}, {right, y}}, Color{0, 0, 0, 235});
+        }
     }
 
     struct Layout
@@ -1047,10 +1060,20 @@ namespace
         const float thickness = 7.5f * l.unit;
         const float angle = -std::atan2(12.0f * l.unit, l.width) * RAD2DEG;
         const Vector2 origin{-0.05f * l.width, 10.5f * l.unit};
-        drawStripes(origin, l.width * 1.15f, thickness, angle);
         const float c = std::cos(angle * DEG2RAD), s = std::sin(angle * DEG2RAD);
-        const float splashU = 0.72f * l.width - origin.x, splashV = thickness / 2.0f;
-        drawSplash({origin.x + splashU * c - splashV * s, origin.y + splashU * s + splashV * c}, 2.0f * thickness, false);
+        // Black above the bar, as on the game's results screens.
+        const float slope = s / c;
+        quad({0.0f, 0.0f}, {l.width, 0.0f}, {l.width, origin.y + (l.width - origin.x) * slope},
+             {0.0f, origin.y - origin.x * slope}, BLACK);
+        drawStripes(origin, l.width * 1.15f, thickness, angle);
+        const auto along = [&](float x, float v) // a point at x across the window, v down from the bar's top
+        {
+            const float u = (x - origin.x) / c;
+            return Vector2{origin.x + u * c - v * s, origin.y + u * s + v * c};
+        };
+        drawInk(art().inkSplash, along(0.45f * l.width, 0.6f * thickness), 1.5f * thickness, false);
+        drawInk(art().inkSplash, along(0.68f * l.width, 0.45f * thickness), 2.0f * thickness, true);
+        drawInk(art().inkSplash, along(0.93f * l.width, 0.5f * thickness), 1.6f * thickness, false);
         const float size = 7.5f * l.unit, u = l.left + 0.05f * l.span - origin.x;
         drawText(capitals(title), {origin.x + u * c + 0.6f * size * s, origin.y + u * s - 0.6f * size * c}, size, WHITE,
                  angle, true);
@@ -1072,16 +1095,27 @@ namespace
         DrawRectangleGradientH(half, int(y) - thick / 2, int(l.width) - half, thick, middle, edge);
     }
 
+    // The game's dark band between two light lines. As on its results screens, the band goes on past
+    // the lines, darker and darker, and ends in black stripes and torn ink, ink running down under it.
     void drawPanel(const Layout &l, float top, float bottom, float alpha = 0.72f)
     {
-        DrawRectangle(0, int(top), int(l.width), int(bottom - top), Fade(BLACK, alpha));
-        // Torn black ink along its edges, as on the game's results screens: rising above it, hanging under it.
+        const float margin = 3.5f * l.unit, rise = top - margin, fall = bottom + margin;
+        const int width = int(l.width), y0 = int(rise), y1 = int(top), y2 = int(bottom), y3 = int(fall);
+        const Color inner = Fade(BLACK, alpha), outer = Fade(BLACK, 0.95f);
+        DrawRectangleGradientV(0, y0, width, y1 - y0, outer, inner);
+        DrawRectangle(0, y1, width, y2 - y1, inner);
+        DrawRectangleGradientV(0, y2, width, y3 - y2, inner, outer);
+        const float stripe = 3.2f * l.unit;
+        drawBlackStripes(0.55f * l.width, l.width, rise - stripe, stripe);
+        drawBlackStripes(0.0f, 0.35f * l.width, fall, stripe);
+        drawInk(art().inkDrips, {0.5f * l.width, fall + 4.0f * l.unit}, 8.0f * l.unit, false);
+        drawInk(art().inkDrips, {0.8f * l.width, fall + 3.5f * l.unit}, 7.0f * l.unit, true);
         if (const Texture2D &band = art().inkBand; band.id != 0)
         {
             const Color ink = Fade(WHITE, 0.95f);
             const float thickness = 6.0f * l.unit, inside = 0.15f * thickness;
             const float across = l.width / (thickness * float(band.width) / float(band.height));
-            const float above = top + inside - thickness, below = bottom - inside;
+            const float above = rise + inside - thickness, below = fall - inside;
             texturedQuad(band, {0.3f, 0.0f}, {0.3f + across, 1.0f},
                          {Vector2{0.0f, above}, {0.0f, above + thickness}, {l.width, above + thickness}, {l.width, above}},
                          ink);
@@ -1089,6 +1123,8 @@ namespace
                          {Vector2{0.0f, below}, {0.0f, below + thickness}, {l.width, below + thickness}, {l.width, below}},
                          ink);
         }
+        drawInk(art().inkSplash, {0.55f * l.width, rise - 0.5f * stripe}, 2.4f * stripe, false);
+        drawInk(art().inkSplash, {0.35f * l.width, fall + 0.5f * stripe}, 2.4f * stripe, true);
         drawRule(l, top);
         drawRule(l, bottom);
     }
@@ -1196,32 +1232,41 @@ namespace
         return width;
     }
 
-    // The bottom bar with the buttons to press, on black at its left as in the game.
+    // The bottom bar of stripes splashed with ink, the buttons to press on it, as on the game's results screens.
     void drawFooter(const Layout &l, const std::vector<Hint> &hints)
     {
-        const float top = 89.5f * l.unit, thickness = 8.5f * l.unit;
+        const float top = 90.0f * l.unit, thickness = 10.5f * l.unit; // past the window's bottom
         drawStripes({-thickness, top}, l.width + 2.0f * thickness, thickness, 0.0f);
-        drawSplash({0.86f * l.width, top + thickness / 2.0f}, 1.8f * thickness, true); // under the hints if they reach it
-        const float r = 2.4f * l.unit, size = 3.1f * l.unit, gap = 2.5f * l.unit, y = top + thickness / 2.0f;
-        float end = l.left + 0.04f * l.span;
-        for (const Hint &hint : hints)
-            end += glyphWidth(hint.glyph, r) + 0.8f * r + textWidth(capitals(hint.label), size) + gap;
-        DrawRectangle(0, int(top), int(end), int(thickness + 1.0f), BLACK);
-        DrawRectangleGradientH(int(end), int(top), int(8.0f * l.unit), int(thickness + 1.0f), BLACK, Fade(BLACK, 0.0f));
+        drawInk(art().inkSplash, {0.62f * l.width, top + 0.45f * thickness}, 1.4f * thickness, true);
+        drawInk(art().inkSplash, {0.9f * l.width, top + 0.35f * thickness}, 1.7f * thickness, false);
+        const float r = 2.4f * l.unit, size = 3.1f * l.unit, gap = 2.5f * l.unit, y = 95.0f * l.unit;
         float x = l.left + 0.04f * l.span;
         for (const Hint &hint : hints)
         {
             const std::string label = capitals(hint.label);
             x += drawGlyph(hint.glyph, x, y, r) + 0.8f * r;
-            drawText(label, {x, y - size / 2.0f}, size, WHITE);
+            drawText(label, {x, y - size / 2.0f}, size, WHITE, 0.0f, true);
             x += textWidth(label, size) + gap;
         }
     }
 
-    void drawNote(const Layout &l, const std::string &note)
+    // Under the band, on its dark edge.
+    void drawNote(const Layout &l, const std::string &note, float y)
     {
         const float size = 2.8f * l.unit;
-        drawText(note, {(l.width - textWidth(note, size)) / 2.0f, 85.0f * l.unit}, size, Color{205, 205, 210, 255});
+        drawText(note, {(l.width - textWidth(note, size)) / 2.0f, y}, size, Color{205, 205, 210, 255});
+    }
+
+    // Large faded chevrons at the right of the band, as behind the game's results.
+    void drawBackChevrons(const Layout &l, float y)
+    {
+        if (const Texture2D &arrow = art().arrow; arrow.id != 0)
+            for (int i = 0; i < 3; ++i)
+            {
+                const float side = 15.0f * l.unit, x = l.width - 0.6f * side * float(i + 1);
+                DrawTexturePro(arrow, {0.0f, 0.0f, -float(arrow.width), float(arrow.height)},
+                               {x - side / 2.0f, y - side / 2.0f, side, side}, {0.0f, 0.0f}, 0.0f, Fade(kAmber, 0.2f));
+            }
     }
 
     void drawChevron(Vector2 c, float size, bool right, bool selected)
@@ -1294,14 +1339,11 @@ namespace
     {
         const Layout l = layout();
         DrawRectangle(0, 0, int(l.width), int(l.height), Fade(BLACK, 0.5f));
-        // Black that thickens towards the top and bottom edges, as on the game's results screens.
-        const int fade = int(24.0f * l.unit);
-        DrawRectangleGradientV(0, 0, int(l.width), fade, Fade(BLACK, 0.85f), Fade(BLACK, 0.0f));
-        DrawRectangleGradientV(0, int(l.height) - fade, int(l.width), fade, Fade(BLACK, 0.0f), Fade(BLACK, 0.85f));
         const bool controls = g_menu.page == Page::Controls;
-        drawHeader(l, controls ? "Controls" : "Settings", controls ? "Keyboard and mouse" : "");
         const float top = 21.0f * l.unit, bottom = 82.5f * l.unit;
         drawPanel(l, top, bottom);
+        drawBackChevrons(l, top);
+        drawHeader(l, controls ? "Controls" : "Settings", controls ? "Keyboard and mouse" : ""); // over the band's top
         const int rowCount = controls ? kControlRowCount : MainRowCount;
         const float rowHeight = (bottom - top - 2.0f * l.unit) / float(rowCount);
         const float size = std::min(rowHeight * 0.6f, 4.0f * l.unit);
@@ -1356,7 +1398,7 @@ namespace
             note = g_menu.notice.empty() ? "Press a key, a mouse button or turn the wheel" : g_menu.notice;
         else
             note = "A key presses one button only. Gamepads keep their own layout";
-        drawNote(l, note);
+        drawNote(l, note, bottom + 0.35f * l.unit);
         drawFooter(l, pageHints());
     }
 

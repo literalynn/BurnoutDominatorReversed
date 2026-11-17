@@ -341,9 +341,10 @@ ps2x::MenuArt loadMenuArt(const std::filesystem::path &disc)
     // Its stripes repeat every 22 texels: columns 20 to 217 hold 9 whole ones on every row.
     if (const ps2x::MenuImage stripes = image("c_screen", 40, 256, 32); !stripes.rgba.empty())
         art.stripes = crop(stripes, 20, 198);
-    // The black ink of the results screens: c_game's 4 (splashes) and 7 (a torn band), the same in
-    // the four INGAME files.
+    // The black ink of the results screens: c_game's 3 (drips), 4 (splashes) and 7 (a torn band), the
+    // same in the four INGAME files.
     const std::vector<uint8_t> inGame = readFile(disc / "FE" / "INGAMESP.BIN");
+    art.inkDrips = imageIn(inGame, "c_game", 3, 64, 64);
     art.inkSplash = imageIn(inGame, "c_game", 4, 64, 64);
     art.inkBand = imageIn(inGame, "c_game", 7, 256, 32);
     // Its torn edge is soft at the menu's sizes: coverage 0.25 to 0.6 becomes 0 to 1, a crisp edge.
