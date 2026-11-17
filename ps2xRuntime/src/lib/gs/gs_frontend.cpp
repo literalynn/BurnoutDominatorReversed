@@ -219,6 +219,7 @@ void GS::reset()
     {
         std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
         m_hostPresentationFrame.clear();
+        m_hostPresentationView.reset();
         m_hostPresentationWidth = 0u;
         m_hostPresentationHeight = 0u;
         m_hostPresentationDisplayFbp = 0u;
@@ -594,6 +595,7 @@ void GS::latchHostPresentationFrame(const GSPresentationRequest &request)
         {
             std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
             m_hostPresentationFrame.clear();
+            m_hostPresentationView.reset();
             m_hasHostPresentationFrame = false;
             m_hostPresentationWidth = m_hostPresentationHeight = 0u;
             return;
@@ -629,6 +631,7 @@ void GS::latchHostPresentationFrame(const GSPresentationRequest &request)
     {
         std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
         m_hostPresentationFrame.swap(frame.pixels);
+        m_hostPresentationView.swap(frame.view);
         m_hostPresentationWidth = width;
         m_hostPresentationHeight = height;
         m_hostPresentationDisplayFbp = displayFbp;
@@ -651,10 +654,13 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
                                           uint32_t &outHeight,
                                           uint32_t *outDisplayFbp,
                                           uint32_t *outSourceFbp,
-                                          bool *outUsedPreferred) const
+                                          bool *outUsedPreferred,
+                                          std::shared_ptr<const uint8_t> *outView) const
 {
     std::lock_guard<std::mutex> lock(m_presentationMutex);
-    if (!m_hasHostPresentationFrame || m_hostPresentationFrame.empty())
+    if (outView)
+        outView->reset();
+    if (!m_hasHostPresentationFrame || (m_hostPresentationFrame.empty() && !m_hostPresentationView))
     {
         outPixels.clear();
         outWidth = 0u;
@@ -676,6 +682,22 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
         *outSourceFbp = m_hostPresentationSourceFbp;
     if (outUsedPreferred)
         *outUsedPreferred = m_hostPresentationUsedPreferred;
+
+    if (m_hostPresentationView)
+    {
+        // Packed rows that stay unchanged while held: the caller may take them instead of a copy.
+        if (outView)
+        {
+            *outView = m_hostPresentationView;
+            outPixels.clear();
+        }
+        else
+        {
+            const uint8_t *pixels = m_hostPresentationView.get();
+            outPixels.assign(pixels, pixels + static_cast<size_t>(outWidth) * outHeight * 4u);
+        }
+        return true;
+    }
 
     const size_t packedRowBytes = static_cast<size_t>(outWidth) * 4u;
     outPixels.resize(packedRowBytes * static_cast<size_t>(outHeight));

@@ -11,7 +11,6 @@
 #include "runtime/host_settings.h"
 #include "runtime/shared_frames.h"
 #include "runtime/ps2_memory.h"
-#include "runtime/transfer_buffers.h"
 #include "runtime/vblank_rate.h"
 #include "ps2_log.h"
 #include "gs_interface.hpp"
@@ -20,11 +19,13 @@
 #include "thread_id.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -151,13 +152,19 @@ namespace
         // judders a second in a race.
         struct Readback
         {
-            Vulkan::BufferHandle buffer;
+            std::shared_ptr<Vulkan::BufferHandle> buffer; // from readbackBuffers
             Vulkan::Fence fence;
             uint32_t width = 0, height = 0;
             bool pending = false;
         };
         Readback readbacks[2];
         unsigned readbackIndex = 0;
+        // A frame read back refers to its buffer (PresentationFrame::view) instead of a copy of it,
+        // and holds it: the frontend while the frame is the one shown, the window while it uploads
+        // it. A buffer is written again once nothing else holds it, so three or four take turns.
+        // (The copy took the GS worker about 1 ms a frame at 16 samples a pixel and high resolution,
+        // a 21 MB frame, and the window copied it once more before its upload.)
+        std::vector<std::shared_ptr<Vulkan::BufferHandle>> readbackBuffers;
         // At the console's rate the caller may finish the readback itself (GSDeferredReadback):
         // GsSubmit waited about 8% of a frame for the GPU on a 2-CU iGPU.
         bool deferred = false;
@@ -704,17 +711,11 @@ namespace
             auto &device = vulkan.device;
             const unsigned submitted = readbackIndex;
             Readback &current = readbacks[readbackIndex];
-            if (!current.buffer || current.buffer->get_create_info().size != bytes)
-            {
-                Vulkan::BufferCreateInfo info{};
-                info.domain = Vulkan::BufferDomain::CachedHost;
-                info.size = bytes;
-                info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-                current.buffer = device.create_buffer(info);
-            }
+            current.buffer.reset(); // the previous frame's here, free unless a frame holds it
+            current.buffer = freeReadbackBuffer(bytes);
 
             auto cmd = device.request_command_buffer();
-            cmd->copy_image_to_buffer(*current.buffer, *scanout.image, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
+            cmd->copy_image_to_buffer(**current.buffer, *scanout.image, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
                                       {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
             cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                          VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
@@ -743,14 +744,44 @@ namespace
             return readBack(current);
         }
 
+        // A buffer of that size that nothing but readbackBuffers holds, or a new one.
+        std::shared_ptr<Vulkan::BufferHandle> freeReadbackBuffer(VkDeviceSize bytes)
+        {
+            std::shared_ptr<Vulkan::BufferHandle> found;
+            for (auto it = readbackBuffers.begin(); it != readbackBuffers.end();)
+            {
+                if (it->use_count() != 1)
+                    ++it;
+                else if (!found && (**it)->get_create_info().size == bytes)
+                    found = *it++;
+                else if ((**it)->get_create_info().size != bytes)
+                    it = readbackBuffers.erase(it); // of an earlier frame size
+                else
+                    ++it;
+            }
+            if (found)
+            {
+                // Pairs with the release of the last frame that held it: its reads come before the GPU writes.
+                std::atomic_thread_fence(std::memory_order_acquire);
+                return found;
+            }
+            Vulkan::BufferCreateInfo info{};
+            info.domain = Vulkan::BufferDomain::CachedHost;
+            info.size = bytes;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            readbackBuffers.push_back(std::make_shared<Vulkan::BufferHandle>(vulkan.device.create_buffer(info)));
+            return readbackBuffers.back();
+        }
+
         void deferReadbacks() override { deferred = true; }
         int takeReadback() override { return std::exchange(deferredReadback, -1); }
         // Without the lock: Present writes this readback again two presentations later only
         // (GSDeferredReadback), and fence waits and host maps are thread-safe in Granite.
         PresentationFrame finishReadback(int readback) override { return readBack(readbacks[readback]); }
 
-        // The frontend gives its previous frame's buffer back: a new one of 1 to 5 MiB a frame
-        // mapped fresh pages, and freeing it unmapped them on the GS worker.
+        // The frame refers to the readback buffer, alpha included: the window draws frames opaque
+        // and frame dumps set it. Granite keeps host memory mapped; mapping it for reading after
+        // the fence makes the GPU's writes visible (non-coherent memory).
         PresentationFrame readBack(Readback &ready)
         {
             auto &device = vulkan.device;
@@ -759,11 +790,8 @@ namespace
             frame.width = ready.width;
             frame.height = ready.height;
             const size_t readyBytes = size_t(ready.width) * ready.height * 4;
-            frame.pixels = ps2x::takeTransferBuffer(readyBytes);
-            const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
-            // A plain copy, alpha included: the window draws frames opaque and frame dumps set it.
-            frame.pixels.assign(mapped, mapped + readyBytes);
-            device.unmap_host_buffer(*ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT);
+            const auto *mapped = static_cast<const uint8_t *>(device.map_host_buffer(**ready.buffer, Vulkan::MEMORY_ACCESS_READ_BIT));
+            frame.view = std::shared_ptr<const uint8_t>(ready.buffer, mapped);
             // BDR_FRAME_HASH=1 prints a hash of every frame read back: two builds' lists check a
             // renderer change pixel for pixel (which frames a run presents varies, their pictures not).
             static const bool hashFrames = std::getenv("BDR_FRAME_HASH") != nullptr;
@@ -772,7 +800,7 @@ namespace
                 uint64_t hash = 1469598103934665603ull, word = 0;
                 for (size_t i = 0; i + 8 <= readyBytes; i += 8)
                 {
-                    std::memcpy(&word, frame.pixels.data() + i, 8);
+                    std::memcpy(&word, mapped + i, 8);
                     hash = (hash ^ word) * 1099511628211ull;
                 }
                 std::printf("[frame-hash] %ux%u %016llx\n", ready.width, ready.height, static_cast<unsigned long long>(hash));

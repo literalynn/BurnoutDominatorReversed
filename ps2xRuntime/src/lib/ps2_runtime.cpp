@@ -463,12 +463,14 @@ static Texture2D UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth,
     uint32_t displayFbp = 0u;
     uint32_t sourceFbp = 0u;
     bool usedPreferredDisplaySource = false;
+    std::shared_ptr<const uint8_t> view; // a frame read back by paraLLEl-GS, uploaded from its buffer
     if (!rt->gs().copyLatchedHostPresentationFrame(s_scratch,
                                                    width,
                                                    height,
                                                    &displayFbp,
                                                    &sourceFbp,
-                                                   &usedPreferredDisplaySource))
+                                                   &usedPreferredDisplaySource,
+                                                   &view))
     {
         if (s_shared.id != 0) // no new frame: the shared one stays
         {
@@ -513,10 +515,10 @@ static Texture2D UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth,
     s_lastWidth = width;
     s_lastHeight = height;
 
-    if (width != 0u && height != 0u && s_scratch.size() >= size_t(width) * height * 4u)
+    if (width != 0u && height != 0u && (view || s_scratch.size() >= size_t(width) * height * 4u))
     {
         EnsureFrameTexture(tex, width, height);
-        UpdateTexture(tex, s_scratch.data());
+        UpdateTexture(tex, view ? view.get() : s_scratch.data());
     }
     outWidth = width;
     outHeight = height;

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 enum GSPrimType : uint8_t
@@ -293,6 +294,9 @@ struct GSPresentationRequest
 struct PresentationFrame
 {
     std::vector<uint8_t> pixels;
+    // Or packed rows in memory of the backend's that stays unchanged while it is held (paraLLEl-GS:
+    // a readback buffer, which the window uploads from without a copy).
+    std::shared_ptr<const uint8_t> view;
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t displayFbp = 0;
@@ -301,7 +305,7 @@ struct PresentationFrame
 
     explicit operator bool() const
     {
-        return !pixels.empty() && width != 0u && height != 0u;
+        return (!pixels.empty() || view) && width != 0u && height != 0u;
     }
 };
 

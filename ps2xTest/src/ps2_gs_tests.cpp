@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1267,6 +1268,66 @@ void register_ps2_gs_tests()
                      "CT32 primitives should land in the same local-memory layout that later CT32 texture sampling expects");
         });
 
+        // paraLLEl-GS frames refer to their readback buffer instead of a copy: the frontend holds
+        // the latched one until the next, and a reader takes it or a packed copy.
+        tc.Run("GS frontend: a latched frame view is held until the next frame", [](TestCase &t)
+        {
+            struct ViewPresents final : GSRasterBackend
+            {
+                std::weak_ptr<std::vector<uint8_t>> last; // the last frame's memory
+                uint8_t fill = 0;
+                void Initialize(uint8_t *, uint32_t) override {}
+                void Reset() override {}
+                void Submit(const GSPrimitiveBatch &) override {}
+                void LoadClut(const GSTex0Reg &, const GSTexClutReg &) override {}
+                void BeginTransfer(const GSTransferCommand &) override {}
+                void UploadImage(const uint8_t *, uint32_t) override {}
+                void Flush() override {}
+                void TextureFlush() override {}
+                void Sync(GSSyncReason) override {}
+                PresentationFrame Present(const GSPresentationRequest &) override
+                {
+                    auto memory = std::make_shared<std::vector<uint8_t>>(2u * 2u * 4u, ++fill);
+                    last = memory;
+                    PresentationFrame frame;
+                    frame.width = frame.height = 2u;
+                    frame.view = std::shared_ptr<const uint8_t>(memory, memory->data());
+                    return frame;
+                }
+                bool ClearFramebuffer(const GSContext &, uint32_t) override { return false; }
+                uint32_t ConsumeLocalToHostBytes(uint8_t *, uint32_t) override { return 0u; }
+                uint32_t ReadVram(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) const override { return 0u; }
+                void WriteVram(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) override {}
+                void SnapshotVram(std::vector<uint8_t> &) const override {}
+                GSTransferSnapshot GetTransferSnapshot() const override { return {}; }
+            };
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GSRegisters regs{};
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
+            auto backend = std::make_unique<ViewPresents>();
+            ViewPresents &fake = *backend;
+            gs.setRasterBackend(std::move(backend));
+
+            gs.latchHostPresentationFrame();
+            const std::weak_ptr<std::vector<uint8_t>> first = fake.last;
+            std::vector<uint8_t> pixels(3u, 0u);
+            uint32_t width = 0u, height = 0u;
+            std::shared_ptr<const uint8_t> view;
+            t.IsTrue(gs.copyLatchedHostPresentationFrame(pixels, width, height, nullptr, nullptr, nullptr, &view),
+                     "a frame with a view is latched");
+            t.IsTrue(view && pixels.empty() && width == 2u && height == 2u && view.get()[15] == 1u,
+                     "a reader that asks for the view gets it and no copy");
+            t.IsTrue(gs.copyLatchedHostPresentationFrame(pixels, width, height), "and is still latched");
+            t.IsTrue(pixels == std::vector<uint8_t>(16u, 1u), "other readers get a packed copy");
+            view.reset();
+            t.IsTrue(!first.expired(), "the frontend holds the latched frame's memory");
+            gs.latchHostPresentationFrame();
+            t.IsTrue(first.expired(), "and lets it go at the next frame");
+            t.IsTrue(gs.copyLatchedHostPresentationFrame(pixels, width, height) && pixels == std::vector<uint8_t>(16u, 2u),
+                     "the next frame is the one read");
+        });
+
 #ifdef PS2X_GS_PARALLEL
         // The async wrapper keeps one earlier frame queued at most: when its thread falls behind,
         // Present waits instead of queueing frames (and latency) without bound.
@@ -1671,17 +1732,21 @@ void register_ps2_gs_tests()
             request.dispfb1 = (1ull << 9);
             request.display1 = 0x290ull | (0x48ull << 12) | (3ull << 23) | (0x9FFull << 32) | (0x1FFull << 44);
             const PresentationFrame frame = backend->Present(request);
-            t.IsTrue(frame.width != 0u && frame.height != 0u && !frame.pixels.empty(), "scanout produces pixels");
+            // The frame refers to the readback buffer (PresentationFrame::view).
+            t.IsTrue(frame.width != 0u && frame.height != 0u && frame.view, "scanout produces pixels");
+            if (!frame.view)
+                return;
+            const uint8_t *pixels = frame.view.get();
             uint32_t red = 0, lit = 0;
-            for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4)
+            for (size_t i = 0; i + 3 < size_t(frame.width) * frame.height * 4u; i += 4)
             {
                 // PMODE ALP = 0x80 blends circuit 1 at half intensity over the black background.
-                red += frame.pixels[i] >= 0x70 && frame.pixels[i + 1] < 0x10 && frame.pixels[i + 2] < 0x10 ? 1u : 0u;
-                lit += (frame.pixels[i] | frame.pixels[i + 1] | frame.pixels[i + 2]) != 0 ? 1u : 0u;
+                red += pixels[i] >= 0x70 && pixels[i + 1] < 0x10 && pixels[i + 2] < 0x10 ? 1u : 0u;
+                lit += (pixels[i] | pixels[i + 1] | pixels[i + 2]) != 0 ? 1u : 0u;
             }
             if (red == 0u)
                 std::printf("[pgs-test] scanout %ux%u lit=%u first=%02x%02x%02x\n", frame.width, frame.height, lit,
-                            frame.pixels[0], frame.pixels[1], frame.pixels[2]);
+                            pixels[0], pixels[1], pixels[2]);
             t.IsTrue(red > 0u, "the red sprite appears in the scanout");
 
             // A host-to-local IMAGE transfer on PATH2 (how VIF1 DIRECT uploads video frames).
@@ -1699,8 +1764,8 @@ void register_ps2_gs_tests()
             t.Equals(backend->ReadVram(GS_PSM_CT32, 0, 1, 40, 40) & 0x00FFFFFFu, 0x00FF00u, "uploaded pixel is green");
             const PresentationFrame frame2 = backend->Present(request);
             uint32_t green = 0;
-            for (size_t i = 0; i + 3 < frame2.pixels.size(); i += 4)
-                green += frame2.pixels[i + 1] >= 0x70 && frame2.pixels[i] < 0x10 ? 1u : 0u;
+            for (size_t i = 0; frame2.view && i + 3 < size_t(frame2.width) * frame2.height * 4u; i += 4)
+                green += frame2.view.get()[i + 1] >= 0x70 && frame2.view.get()[i] < 0x10 ? 1u : 0u;
             t.IsTrue(green > 0u, "the uploaded square appears in the scanout");
         });
 
