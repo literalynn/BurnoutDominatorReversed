@@ -1695,7 +1695,7 @@ namespace
         {
             std::vector<std::string> labels;
             for (const Json &option : row["select"].items)
-                labels.push_back(option.text + row["unit"].text);
+                labels.push_back(capitalized(option.text) + row["unit"].text);
             return dropdownWidth(labels, u(10));
         }
         if (row["number"].kind == Json::Array)
@@ -1759,8 +1759,8 @@ namespace
             for (const Json &option : row["select"].items)
                 options.push_back(option.text);
             for (const std::string &option : options)
-                labels.push_back(option + row["unit"].text);
-            const int chosen = dropdown(key, {x, y, controlWidth(row), u(35)}, labels, current + row["unit"].text);
+                labels.push_back(capitalized(option) + row["unit"].text);
+            const int chosen = dropdown(key, {x, y, controlWidth(row), u(35)}, labels, capitalized(current) + row["unit"].text);
             if (chosen >= 0)
                 saveSetting(key, options[size_t(chosen)], false);
         }

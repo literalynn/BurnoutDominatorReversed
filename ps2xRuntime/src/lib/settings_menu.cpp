@@ -51,6 +51,7 @@ namespace
         RowRefresh,
         RowDeadzone,
         RowPrompts,
+        RowLanguage,
         RowControls,
         RowClose,
         RowQuit,
@@ -343,6 +344,7 @@ namespace
         case RowRefresh: return "Frame rate (next menu page)";
         case RowDeadzone: return "Stick dead zone";
         case RowPrompts: return "Button prompts";
+        case RowLanguage: return "Language (next start)";
         case RowControls: return "Keyboard and mouse controls";
         case RowQuit: return "Quit game";
         default: return "Continue";
@@ -397,6 +399,12 @@ namespace
                    : s.buttonPrompts == "xbox"      ? "Xbox"
                    : s.buttonPrompts == "keyboard"  ? "Keyboard"
                                                     : "Auto";
+        case RowLanguage:
+        {
+            std::string name = s.language;
+            name[0] = char(name[0] - 'a' + 'A');
+            return name;
+        }
         default: return "";
         }
     }
@@ -408,6 +416,8 @@ namespace
             return "Closes the game and goes back to the desktop";
         if (row == RowAdaptive)
             return "Lowers the resolution while the graphics card cannot keep up";
+        if (row == RowLanguage)
+            return "The game reads it when it starts; a save state keeps its own";
         if (row != RowAspect)
             return "Saved to settings.ini at once";
         const std::string &aspect = ps2x::hostSettings().aspect;
@@ -516,6 +526,15 @@ namespace
             while (index < 4 && s.buttonPrompts != kPrompts[index])
                 ++index;
             s.buttonPrompts = kPrompts[(index % 4 + (step < 0 ? 3 : 1)) % 4];
+            break;
+        }
+        case RowLanguage:
+        {
+            static const char *kLanguages[] = {"english", "french", "german", "spanish", "italian"};
+            int index = 0;
+            while (index < 5 && s.language != kLanguages[index])
+                ++index;
+            s.language = kLanguages[(index % 5 + (step < 0 ? 4 : 1)) % 5];
             break;
         }
         case RowControls:

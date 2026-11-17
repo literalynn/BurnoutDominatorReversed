@@ -125,6 +125,15 @@ namespace ps2_syscalls
         // (FUN_001b48f8 through FUN_001e6eb8 and FUN_0038b0f8), and has no option of its own.
         if (ps2x::hostSettings().aspect == "16:9")
             raw = (raw & ~0x6u) | (2u << 1);
+        // The console's language (bits 16 to 20) is the language setting's instead of English, unless a
+        // game set another. Burnout's European disc has these five and reads it once, at boot
+        // (sceScfGetLanguage 0x38B090, through 0x1E6E38 and 0x20A2E8).
+        static constexpr std::pair<const char *, uint32_t> kLanguages[] = {
+            {"english", 1u}, {"french", 2u}, {"spanish", 3u}, {"german", 4u}, {"italian", 5u}};
+        if (((raw >> 16) & 0x1Fu) == 1u)
+            for (const auto &[name, code] : kLanguages)
+                if (ps2x::hostSettings().language == name)
+                    raw = (raw & ~(0x1Fu << 16)) | (code << 16);
 
         *param = raw;
 

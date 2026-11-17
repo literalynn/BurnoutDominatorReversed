@@ -35,6 +35,8 @@ namespace ps2x
         std::string gamepadMappings; // extra SDL_GameControllerDB mappings file
         // The game's button symbols: auto (the last device used), playstation, xbox or keyboard.
         std::string buttonPrompts = "auto";
+        // The console's system language, which a game reads at boot: english, french, german, spanish or italian.
+        std::string language = "english";
         int volume = 100;            // sound volume in percent
         // "60" or "50": the answer to the game's boot question. 61 to 500 answers 60
         // and runs the game that many frames a second (Burnout: src/burnout_frame_rate.cpp).

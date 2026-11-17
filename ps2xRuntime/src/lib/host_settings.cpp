@@ -156,6 +156,10 @@ namespace ps2x
             if (key == "button_prompts")
                 return (value == "auto" || value == "playstation" || value == "xbox" || value == "keyboard") &&
                        (s.buttonPrompts = value, true);
+            if (key == "language")
+                return (value == "english" || value == "french" || value == "german" || value == "spanish" ||
+                        value == "italian") &&
+                       (s.language = value, true);
             if (key == "volume")
                 return parseInt(value, 0, 100, s.volume);
             if (key == "refresh_rate")
@@ -320,6 +324,11 @@ namespace ps2x
                 "# something on last, which changes as you play), playstation, xbox or keyboard (the first\n"
                 "# key bound to each button).\n"
                 "button_prompts = " << s.buttonPrompts << "\n"
+                "\n"
+                "# The game's language: english, french, german, spanish or italian. The console tells the game\n"
+                "# its language, which the game reads once, when it starts: a change applies from the game's next\n"
+                "# start, and a save state keeps the language it was saved with.\n"
+                "language = " << s.language << "\n"
                 "\n"
                 "# Sound volume in percent, and a frames-per-second counter in the window corner.\n"
                 "volume = " << s.volume << "\n"

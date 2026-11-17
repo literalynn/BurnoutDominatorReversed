@@ -1326,6 +1326,22 @@ void register_ps2_runtime_kernel_tests()
             callSyscall(0x4Bu, env.rdram.data(), &env.ctx, &env.runtime);
             t.Equals((readGuestU32(env.rdram.data(), kConfig1OutAddr) >> 1) & 0x3u, 0u, "aspect 4:3 should leave the console's 4:3 screen");
             ps2x::hostSettings().aspect = aspect;
+
+            // The language setting replaces the console's English; a language a game set stays.
+            const std::string language = ps2x::hostSettings().language;
+            ps2x::hostSettings().language = "german";
+            callSyscall(0x4Bu, env.rdram.data(), &env.ctx, &env.runtime);
+            t.Equals((readGuestU32(env.rdram.data(), kConfig1OutAddr) >> 16) & 0x1Fu, 10u, "a language a game set should stay");
+            writeGuestU32(env.rdram.data(), K_PARAM_ADDR, kInitialConfig1);
+            setRegU32(env.ctx, 4, K_PARAM_ADDR);
+            callSyscall(0x4Au, env.rdram.data(), &env.ctx, &env.runtime);
+            setRegU32(env.ctx, 4, kConfig1OutAddr);
+            callSyscall(0x4Bu, env.rdram.data(), &env.ctx, &env.runtime);
+            t.Equals((readGuestU32(env.rdram.data(), kConfig1OutAddr) >> 16) & 0x1Fu, 4u, "language german should report German (4)");
+            ps2x::hostSettings().language = "english";
+            callSyscall(0x4Bu, env.rdram.data(), &env.ctx, &env.runtime);
+            t.Equals((readGuestU32(env.rdram.data(), kConfig1OutAddr) >> 16) & 0x1Fu, 1u, "language english should report English (1)");
+            ps2x::hostSettings().language = language;
         });
 
         tc.Run("numeric syscall 0x83 finds matching table entry", [](TestCase &t)

@@ -360,7 +360,7 @@ function control(row) {
     const select = element("select");
     select.setAttribute("aria-label", row.label);
     for (const option of row.select.includes(values[key]) ? row.select : [values[key], ...row.select])
-      select.add(new Option(option + row.unit, option, false, option === values[key]));
+      select.add(new Option(option.charAt(0).toUpperCase() + option.slice(1) + row.unit, option, false, option === values[key]));
     select.addEventListener("change", () => saveSetting(key, select.value));
     return [select];
   }

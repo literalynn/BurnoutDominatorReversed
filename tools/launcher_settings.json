@@ -12,6 +12,9 @@
         {"key": "show_fps", "label": "Frame counter", "help": "Frames a second, in the window's corner."}]},
       {"title": "Sound", "rows": [
         {"key": "volume", "label": "Volume", "range": [0, 100], "unit": "%"}]},
+      {"title": "Language", "rows": [
+        {"key": "language", "label": "Game language", "help": "The language of the game's menus and messages. A change applies from the game's next start (a save state keeps the language it was saved with).",
+         "select": ["english", "french", "german", "spanish", "italian"], "unit": ""}]},
       {"title": "Gamepad", "rows": [
         {"key": "button_prompts", "label": "Button prompts", "help": "The buttons the game shows. Auto: those of the gamepad or keyboard you used last.", "choice": ["auto", "playstation", "xbox", "keyboard"]},
         {"key": "vibration", "label": "Vibration"},
