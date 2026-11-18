@@ -12,6 +12,7 @@
 #include "pgs_sample_circuit.spv.h"
 #include "pgs_triangle_setup.spv.h"
 #include "pgs_ubershader.spv.h"
+#include "pgs_sampler_feedback.spv.h"
 #include "shaders/swizzle_utils.h"
 #include "thread_id.hpp"
 #include "gs_util.hpp"
@@ -941,10 +942,14 @@ bool GSRenderer::init(Vulkan::Device *device_, const GSOptions &options)
 	shaders.triangle_setup = device_->request_program(pgs_triangle_setup_spirv, sizeof(pgs_triangle_setup_spirv),
 		&shaders.triangle_setup->get_shader(Vulkan::ShaderStage::Compute)->get_layout());
 	// [Burnout] The ubershader as glslangValidator compiles it (tools/pgs_shader.py), without the spirv-opt passes
-	// of upstream's shader bank: 12% faster shading on an AMD iGPU, 20% on an RTX 5090, same results. Before the
+	// of upstream's shader bank: 12% faster shading on an AMD iGPU, 3 to 4% on an RTX 5090, same results. Before the
 	// pipeline precompile below, so it uses this program.
 	shaders.ubershader[0][0] = device_->request_program(pgs_ubershader_spirv, sizeof(pgs_ubershader_spirv),
 		&shaders.ubershader[0][0]->get_shader(Vulkan::ShaderStage::Compute)->get_layout());
+	// [Burnout] The texture analysis skips the atomic for blocks already marked (tools/pgs_shader.py): half its
+	// time on an AMD iGPU, same blocks.
+	shaders.sampler_feedback = device_->request_program(pgs_sampler_feedback_spirv, sizeof(pgs_sampler_feedback_spirv),
+		&shaders.sampler_feedback->get_shader(Vulkan::ShaderStage::Compute)->get_layout());
 
 	flush_submit(0);
 	// Descriptor indexing is a hard requirement, but timeline semaphore could be elided if really needed.

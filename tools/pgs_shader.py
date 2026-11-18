@@ -1,7 +1,8 @@
 """Compiles the paraLLEl-GS shaders the runtime replaces into SPIR-V headers in ps2xRuntime/src/lib/gs/shaders:
 pgs_sample_circuit.spv.h from pgs_sample_circuit.frag, pgs_triangle_setup.spv.h from the checkout's
-gs/shaders/triangle_setup.comp with the change below, and pgs_ubershader.spv.h from its ubershader.comp with primitive attributes readonly
-(glslangValidator without spirv-opt: AMD's and NVIDIA's drivers run it faster than upstream's optimized build).
+gs/shaders/triangle_setup.comp with the change below, pgs_ubershader.spv.h from its ubershader.comp with primitive
+attributes readonly (glslangValidator without spirv-opt: AMD's and NVIDIA's drivers run it faster than upstream's
+optimized build) and pgs_sampler_feedback.spv.h from its sampler_feedback.comp with the change below.
 
 usage: python tools/pgs_shader.py --glslang <glslangValidator> --pgs <paraLLEl-GS checkout>
 
@@ -28,6 +29,15 @@ TRIANGLE_SETUP_CHANGE = (
 # (the header inlined with that change), the drivers load them through the scalar cache in the per-primitive
 # loop instead of waiting on a vector load: 5% less shading time on AMD (an RTX 5090: within the noise).
 ATTRIBUTES_READONLY = ("\nbuffer PrimitiveAttributes\n", "\nreadonly buffer PrimitiveAttributes\n")
+
+# The texture analysis marks the 8x8 blocks each primitive's texture reads with an atomicOr per block, though
+# neighbouring primitives mostly read the same blocks. A block whose bit already reads as set needs nothing: bits
+# are only set during the dispatch (cleared before it, behind a barrier), and a 0 read too early still takes the
+# atomic. Half the analysis time on a 2-CU Radeon iGPU (0.95 to 0.49 ms a race frame at 1 sample).
+SAMPLER_FEEDBACK_CHANGE = (
+    "    uint mask = 1u << (linear_block & 31u);\n    uint old_mask = atomicOr(",
+    "    uint mask = 1u << (linear_block & 31u);\n    if ((bitmask_va.data[linear_block / 32] & mask) != 0u)\n"
+    "        return;\n    uint old_mask = atomicOr(")
 
 
 def compile_header(glslang, pgs, source, name, origin, defines=()):
@@ -81,6 +91,8 @@ def main():
                    "paraLLEl-GS gs/shaders/ubershader.comp (FEEDBACK_COLOR=0, FEEDBACK_DEPTH=0), primitive attributes readonly",
                    ('#include "data_buffers.h"\n', header.replace(*ATTRIBUTES_READONLY) + "\n"),
                    ["-DFEEDBACK_COLOR=0", "-DFEEDBACK_DEPTH=0"])
+    compile_pinned(args.glslang, args.pgs, "sampler_feedback.comp", "pgs_sampler_feedback",
+                   "paraLLEl-GS gs/shaders/sampler_feedback.comp, blocks already marked skip the atomic", SAMPLER_FEEDBACK_CHANGE)
 
 
 if __name__ == "__main__":
