@@ -13,6 +13,7 @@
 #include "pgs_triangle_setup.spv.h"
 #include "pgs_ubershader.spv.h"
 #include "pgs_sampler_feedback.spv.h"
+#include "pgs_binning.spv.h"
 #include "shaders/swizzle_utils.h"
 #include "thread_id.hpp"
 #include "gs_util.hpp"
@@ -33,6 +34,19 @@
 
 namespace ParallelGS
 {
+// [Burnout] Triangle setup also writes each primitive's bounding box, packed, to a buffer at this binding, and
+// binning's coarse loop reads it before the primitive's state and setup (tools/pgs_shader.py). Both programs get the
+// binding added to the layout of the program they replace.
+static constexpr unsigned BindingPrimitiveBoxes = 23;
+
+static const Vulkan::ResourceLayout *with_primitive_boxes(Vulkan::Program *program, Vulkan::ResourceLayout &layout)
+{
+	layout = program->get_shader(Vulkan::ShaderStage::Compute)->get_layout();
+	layout.sets[0].storage_buffer_mask |= 1u << BindingPrimitiveBoxes;
+	layout.sets[0].meta[BindingPrimitiveBoxes].array_size = 1;
+	return &layout;
+}
+
 // If we've seen a normal render pass, just flush right away.
 // Normal 3D games seem to be between 4k and 40k primitives per frame.
 static constexpr uint32_t MinimumPrimitivesForFlush = 4096;
@@ -939,8 +953,9 @@ bool GSRenderer::init(Vulkan::Device *device_, const GSOptions &options)
 	sample_quad[1] = device_->request_program(shaders.quad, shaders.sample_circuit[1]);
 	// [Burnout] The triangle setup that keeps the smoothed UI per sample (HUD smoothing, above).
 	weave_quad = device_->request_program(shaders.quad, shaders.weave);
+	Vulkan::ResourceLayout boxes_layout;
 	shaders.triangle_setup = device_->request_program(pgs_triangle_setup_spirv, sizeof(pgs_triangle_setup_spirv),
-		&shaders.triangle_setup->get_shader(Vulkan::ShaderStage::Compute)->get_layout());
+		with_primitive_boxes(shaders.triangle_setup, boxes_layout));
 	// [Burnout] The ubershader as glslangValidator compiles it (tools/pgs_shader.py), without the spirv-opt passes
 	// of upstream's shader bank: 12% faster shading on an AMD iGPU, 3 to 4% on an RTX 5090, same results. Before the
 	// pipeline precompile below, so it uses this program.
@@ -950,6 +965,10 @@ bool GSRenderer::init(Vulkan::Device *device_, const GSOptions &options)
 	// time on an AMD iGPU, same blocks.
 	shaders.sampler_feedback = device_->request_program(pgs_sampler_feedback_spirv, sizeof(pgs_sampler_feedback_spirv),
 		&shaders.sampler_feedback->get_shader(Vulkan::ShaderStage::Compute)->get_layout());
+	// [Burnout] Binning's coarse loop reads the packed boxes first (BindingPrimitiveBoxes): 40 to 50% less binning
+	// time on an AMD iGPU, same tile lists.
+	shaders.binning = device_->request_program(pgs_binning_spirv, sizeof(pgs_binning_spirv),
+		with_primitive_boxes(shaders.binning, boxes_layout));
 
 	flush_submit(0);
 	// Descriptor indexing is a hard requirement, but timeline semaphore could be elided if really needed.
@@ -2094,6 +2113,14 @@ void GSRenderer::allocate_scratch_buffers(Vulkan::CommandBuffer &cmd, const Rend
 	                                       *buffers.device_scratch.buffer, primitive_setup_offset, primitive_setup_size);
 	binning_cmd->set_storage_buffer(0, BINDING_PRIMITIVE_SETUP,
 	                                *buffers.device_scratch.buffer, primitive_setup_offset, primitive_setup_size);
+
+	// [Burnout] The packed primitive boxes (BindingPrimitiveBoxes): two 32-bit words a primitive.
+	VkDeviceSize primitive_boxes_size = 2 * sizeof(uint32_t) * rp.num_primitives;
+	auto primitive_boxes_offset = allocate_device_scratch(primitive_boxes_size, buffers.device_scratch, nullptr);
+	triangle_setup_cmd->set_storage_buffer(0, BindingPrimitiveBoxes,
+	                                       *buffers.device_scratch.buffer, primitive_boxes_offset, primitive_boxes_size);
+	binning_cmd->set_storage_buffer(0, BindingPrimitiveBoxes,
+	                                *buffers.device_scratch.buffer, primitive_boxes_offset, primitive_boxes_size);
 
 	auto transformed_attributes_offset = allocate_device_scratch(transformed_attributes_size, buffers.device_scratch, nullptr);
 	cmd.set_storage_buffer(0, BINDING_TRANSFORMED_ATTRIBUTES,
