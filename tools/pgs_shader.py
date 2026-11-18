@@ -26,7 +26,7 @@ TRIANGLE_SETUP_CHANGE = (
 
 # The ubershader never writes primitive attributes, but data_buffers.h declares them writable. Declared readonly
 # (the header inlined with that change), the drivers load them through the scalar cache in the per-primitive
-# loop instead of waiting on a vector load: 20% less shading time on an RTX 5090 at 16 samples, 5% on AMD.
+# loop instead of waiting on a vector load: 5% less shading time on AMD (an RTX 5090: within the noise).
 ATTRIBUTES_READONLY = ("\nbuffer PrimitiveAttributes\n", "\nreadonly buffer PrimitiveAttributes\n")
 
 
