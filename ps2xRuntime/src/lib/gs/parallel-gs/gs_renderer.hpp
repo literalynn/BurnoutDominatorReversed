@@ -571,6 +571,8 @@ private:
 	// [Burnout] Blocks the pending copies write, per page, and whether two of them may write one word.
 	std::vector<uint32_t> vram_copy_write_blocks;
 	bool vram_copy_needs_prepare = false;
+	// [Burnout] The copy hazard counter and bits are zero: no prepare pass ran since their last reset.
+	bool vram_copy_state_clean = false;
 	std::vector<uint32_t> sync_vram_shadow_pages;
 
 	bool can_potentially_super_sample() const;

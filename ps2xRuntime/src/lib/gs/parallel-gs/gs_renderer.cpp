@@ -4477,6 +4477,13 @@ void GSRenderer::rt_flush_transfer(std::vector<uint32_t> &shadow_pages)
 	            VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COPY_BIT,
 				VK_ACCESS_TRANSFER_WRITE_BIT);
 
+	// [Burnout] Only the prepare pass writes the copy hazard state, and the copy pass reads a word's list only
+	// when its hazard bit is set. A batch without the prepare pass, after a reset with none since, finds the
+	// counter and hazard bits still zero: it skips the fills (a 128 KiB one each batch).
+	bool run_prepare = vram_copy_needs_prepare || bdr_copy_always_prepare;
+	bool reset_state = run_prepare || !vram_copy_state_clean;
+	vram_copy_state_clean = !run_prepare;
+
 	// Prepare atomic buffer for a new linked list setup.
 	{
 		RangeMerger merger;
@@ -4486,10 +4493,13 @@ void GSRenderer::rt_flush_transfer(std::vector<uint32_t> &shadow_pages)
 		};
 
 		cmd.begin_region("reset-vram-copy-state");
-		// Reset atomic counter.
-		cmd.fill_buffer(*buffers.vram_copy_atomics, 0, 0, PGS_VALID_PAGE_COPY_WRITE_OFFSET);
-		// Reset hazard exist bitfield.
-		cmd.fill_buffer(*buffers.vram_copy_atomics, 0, PGS_LINKED_VRAM_COPY_WRITE_LIST_OFFSET + vram_size, vram_size / 32);
+		if (reset_state)
+		{
+			// Reset atomic counter.
+			cmd.fill_buffer(*buffers.vram_copy_atomics, 0, 0, PGS_VALID_PAGE_COPY_WRITE_OFFSET);
+			// Reset hazard exist bitfield.
+			cmd.fill_buffer(*buffers.vram_copy_atomics, 0, PGS_LINKED_VRAM_COPY_WRITE_LIST_OFFSET + vram_size, vram_size / 32);
+		}
 
 #if 0
 		// For safety reasons, make absolutely sure it's safe to traverse the linked list.
@@ -4500,9 +4510,13 @@ void GSRenderer::rt_flush_transfer(std::vector<uint32_t> &shadow_pages)
 
 		for (size_t i = 0, n = vram_copy_write_pages.size(); i < n; i++)
 		{
-			Util::for_each_bit(vram_copy_write_pages[i], [&](uint32_t bit) {
-				merger.push((i * 32 + bit) * PageSize, PageSize, flush_range);
-			});
+			// [Burnout] The list heads of the pages written: only a prepare pass reads them.
+			if (run_prepare)
+			{
+				Util::for_each_bit(vram_copy_write_pages[i], [&](uint32_t bit) {
+					merger.push((i * 32 + bit) * PageSize, PageSize, flush_range);
+				});
+			}
 			vram_copy_write_pages[i] = 0;
 		}
 
@@ -4612,7 +4626,7 @@ void GSRenderer::rt_flush_transfer(std::vector<uint32_t> &shadow_pages)
 	// [Burnout] The prepare pass links every word each copy writes, so that the copy pass lets the latest copy
 	// win where two copies write one word. When no two copies of the batch write one block, it marks no word
 	// and the copy pass, which reads the marks cleared above, writes the same: skip it.
-	if (vram_copy_needs_prepare || bdr_copy_always_prepare)
+	if (run_prepare)
 	{
 		cmd.begin_region("prepare-copy");
 		for (uint32_t i = 0; i < num_dispatches; i++)
