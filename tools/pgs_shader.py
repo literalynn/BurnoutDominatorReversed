@@ -92,6 +92,19 @@ BINNING_BOXES = [
             if (bitfieldExtract(s,"""),
 ]
 
+# The super-sampled texture upload writes up to 5 layers of its texel from one invocation instead of one workgroup a
+# layer: the swizzled address is computed once and the words those layers read come to the same invocation.
+# gs_renderer.cpp dispatches ceil(layers / 5) layers (UploadLayersPerInvocation): one at 4 samples a pixel.
+UPLOAD_LAYERS = [
+    ("#if SUPER_SAMPLED\n\tuint sample_id = gl_WorkGroupID.z - 1u;\n#endif\n",
+     "#if SUPER_SAMPLED\n\tint first_layer = int(gl_WorkGroupID.z) * 5;\n"
+     "\tint end_layer = min(first_layer + 5, imageSize(uImage).z);\n"
+     "\tfor (int layer = first_layer; layer < end_layer; layer++)\n\t{\n"
+     "\tuint sample_id = uint(layer) - 1u;\n#endif\n"),
+    ("#if SUPER_SAMPLED\n\timageStore(uImage, ivec3(coord, gl_WorkGroupID.z), color);\n#else",
+     "#if SUPER_SAMPLED\n\timageStore(uImage, ivec3(coord, layer), color);\n\t}\n#else"),
+]
+
 
 def compile_header(glslang, pgs, source, name, origin, defines=()):
     with tempfile.TemporaryDirectory() as scratch:
@@ -148,6 +161,9 @@ def main():
                    "paraLLEl-GS gs/shaders/sampler_feedback.comp, blocks already marked skip the atomic", [SAMPLER_FEEDBACK_CHANGE])
     compile_pinned(args.glslang, args.pgs, "binning.comp", "pgs_binning",
                    "paraLLEl-GS gs/shaders/binning.comp, coarse loop reads the packed boxes first", BINNING_BOXES)
+    compile_pinned(args.glslang, args.pgs, "upload.comp", "pgs_upload_ssaa",
+                   "paraLLEl-GS gs/shaders/upload.comp (SUPER_SAMPLED=1), up to 5 layers of a texel an invocation",
+                   UPLOAD_LAYERS, ["-DSUPER_SAMPLED=1"])
 
 
 if __name__ == "__main__":
