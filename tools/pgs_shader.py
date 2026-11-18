@@ -1,6 +1,7 @@
 """Compiles the paraLLEl-GS shaders the runtime replaces into SPIR-V headers in ps2xRuntime/src/lib/gs/shaders:
-pgs_sample_circuit.spv.h from pgs_sample_circuit.frag, and pgs_triangle_setup.spv.h from the checkout's
-gs/shaders/triangle_setup.comp with the change below.
+pgs_sample_circuit.spv.h from pgs_sample_circuit.frag, pgs_triangle_setup.spv.h from the checkout's
+gs/shaders/triangle_setup.comp with the change below, and pgs_ubershader.spv.h from its ubershader.comp unchanged
+(glslangValidator without spirv-opt: AMD's and NVIDIA's drivers run it faster than upstream's optimized build).
 
 usage: python tools/pgs_shader.py --glslang <glslangValidator> --pgs <paraLLEl-GS checkout>
 
@@ -46,6 +47,20 @@ def compile_header(glslang, pgs, source, name, origin, defines=()):
     print("%s: %d words" % (name, len(words)))
 
 
+def compile_pinned(glslang, pgs, file, name, origin, change=None, defines=()):
+    """Compiles gs/shaders/<file> of the checkout, with an optional (old, new) source change."""
+    source = (pgs / "gs" / "shaders" / file).read_text(encoding="utf-8").replace("\r\n", "\n")
+    if change:
+        old, new = change
+        assert source.count(old) == 1, "%s does not match the pinned paraLLEl-GS" % file
+        source = source.replace(old, new)
+    source = source.replace("#version 450\n", "#version 450\n#extension GL_GOOGLE_include_directive : require\n", 1)
+    with tempfile.TemporaryDirectory() as scratch:
+        patched = pathlib.Path(scratch) / file
+        patched.write_text(source, encoding="utf-8", newline="\n")
+        compile_header(glslang, pgs, patched, name, origin, defines)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--glslang", required=True)
@@ -53,15 +68,11 @@ def main():
     args = parser.parse_args()
     compile_header(args.glslang, args.pgs, SHADERS / "pgs_sample_circuit.frag", "pgs_sample_circuit",
                    "pgs_sample_circuit.frag (PROMOTED=0)", ["-DPROMOTED=0"])
-    source = (args.pgs / "gs" / "shaders" / "triangle_setup.comp").read_text(encoding="utf-8").replace("\r\n", "\n")
-    old, new = TRIANGLE_SETUP_CHANGE
-    assert source.count(old) == 1, "triangle_setup.comp does not match the pinned paraLLEl-GS"
-    source = source.replace(old, new).replace("#version 450\n", "#version 450\n#extension GL_GOOGLE_include_directive : require\n", 1)
-    with tempfile.TemporaryDirectory() as scratch:
-        patched = pathlib.Path(scratch) / "triangle_setup.comp"
-        patched.write_text(source, encoding="utf-8", newline="\n")
-        compile_header(args.glslang, args.pgs, patched, "pgs_triangle_setup",
-                       "paraLLEl-GS gs/shaders/triangle_setup.comp, smoothed UI interpolated per sample")
+    compile_pinned(args.glslang, args.pgs, "triangle_setup.comp", "pgs_triangle_setup",
+                   "paraLLEl-GS gs/shaders/triangle_setup.comp, smoothed UI interpolated per sample", TRIANGLE_SETUP_CHANGE)
+    compile_pinned(args.glslang, args.pgs, "ubershader.comp", "pgs_ubershader",
+                   "paraLLEl-GS gs/shaders/ubershader.comp (FEEDBACK_COLOR=0, FEEDBACK_DEPTH=0)", None,
+                   ["-DFEEDBACK_COLOR=0", "-DFEEDBACK_DEPTH=0"])
 
 
 if __name__ == "__main__":
