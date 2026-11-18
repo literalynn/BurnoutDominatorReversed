@@ -543,6 +543,7 @@ void GSRenderer::init_vram(const GSOptions &options)
 	uint32_t num_pages_u32 = (num_pages + 31) / 32;
 	sync_vram_shadow_pages.resize(num_pages_u32);
 	vram_copy_write_pages.resize(num_pages_u32);
+	vram_copy_write_blocks.resize(num_pages);
 
 #if 0
 	info.size = sizeof(uint32_t);
@@ -3227,6 +3228,9 @@ void GSRenderer::rt_copy_vram(CopyTask &task)
 			memcpy(alloc.host, task.host_data.data(), desc.host_data_size);
 	}
 	pending_copies.push_back({ desc, std::move(alloc) });
+	// [Burnout] Only host uploads skip the prepare pass.
+	if (desc.trxdir.desc.XDIR != HOST_TO_LOCAL)
+		vram_copy_needs_prepare = true;
 
 	if (desc.trxreg.desc.RRW + desc.trxpos.desc.DSAX > 2048 || desc.trxreg.desc.RRH + desc.trxpos.desc.DSAY > 2048)
 	{
@@ -3234,6 +3238,7 @@ void GSRenderer::rt_copy_vram(CopyTask &task)
 		// since the writes will be scattered all over the place.
 		for (auto &v : vram_copy_write_pages)
 			v = UINT32_MAX;
+		vram_copy_needs_prepare = true;
 	}
 	else
 	{
@@ -3244,6 +3249,10 @@ void GSRenderer::rt_copy_vram(CopyTask &task)
 				uint32_t effective_page = damage_rect.base_page + y * damage_rect.page_stride + x;
 				effective_page &= vram_size / PageSize - 1;
 				vram_copy_write_pages[effective_page / 32] |= 1u << (effective_page & 31);
+				// [Burnout] Copies that share a block may share a word: the prepare pass orders their writes.
+				if (vram_copy_write_blocks[effective_page] & damage_rect.block_mask)
+					vram_copy_needs_prepare = true;
+				vram_copy_write_blocks[effective_page] |= damage_rect.block_mask;
 			}
 		}
 	}
@@ -4436,6 +4445,12 @@ void GSRenderer::flush_transfer()
 		defer([this, shadow_pages]() { rt_flush_transfer(*shadow_pages); });
 }
 
+// [Burnout] BDR_PGS_COPY_PREPARE=1 runs the copy prepare pass for every batch, as upstream does.
+static const bool bdr_copy_always_prepare = [] {
+	const char *value = getenv("BDR_PGS_COPY_PREPARE");
+	return value && *value && strcmp(value, "0") != 0;
+}();
+
 void GSRenderer::rt_flush_transfer(std::vector<uint32_t> &shadow_pages)
 {
 	if (pending_copies.empty())
@@ -4586,13 +4601,19 @@ void GSRenderer::rt_flush_transfer(std::vector<uint32_t> &shadow_pages)
 
 	// Sort copies by pipeline key.
 
-	cmd.begin_region("prepare-copy");
-	for (uint32_t i = 0; i < num_dispatches; i++)
-		emit_copy_vram(cmd, dispatch_order + dispatches[i].offset, dispatches[i].range, true);
-	cmd.end_region();
+	// [Burnout] The prepare pass links every word each copy writes, so that the copy pass lets the latest copy
+	// win where two copies write one word. When no two copies of the batch write one block, it marks no word
+	// and the copy pass, which reads the marks cleared above, writes the same: skip it.
+	if (vram_copy_needs_prepare || bdr_copy_always_prepare)
+	{
+		cmd.begin_region("prepare-copy");
+		for (uint32_t i = 0; i < num_dispatches; i++)
+			emit_copy_vram(cmd, dispatch_order + dispatches[i].offset, dispatches[i].range, true);
+		cmd.end_region();
 
-	cmd.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-	            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+		cmd.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+		            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+	}
 
 	cmd.begin_region("actual-copy");
 	for (uint32_t i = 0; i < num_dispatches; i++)
@@ -4607,6 +4628,8 @@ void GSRenderer::rt_flush_transfer(std::vector<uint32_t> &shadow_pages)
 	}
 
 	pending_copies.clear();
+	std::fill(vram_copy_write_blocks.begin(), vram_copy_write_blocks.end(), 0u);
+	vram_copy_needs_prepare = false;
 
 	cmd.barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
 	            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT,

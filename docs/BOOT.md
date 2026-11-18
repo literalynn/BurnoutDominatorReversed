@@ -170,6 +170,7 @@ Environment variables, to set before `python tools/project.py run …` (all off 
 | `BDR_PGS_VRAM_PPM=dir` | paraLLEl-GS: at each presentation, the DISPFB1 buffer as read back from its VRAM |
 | `BDR_PGS_TRACE=1` | paraLLEl-GS: prints the display registers at each presentation and the transfer registers of each local-to-host readback |
 | `BDR_PGS_RENDER_THREAD=0` | paraLLEl-GS records and submits its GPU work on the GS submission thread, as it did before it had a render thread of its own (`GsRender`), to compare the two |
+| `BDR_PGS_COPY_PREPARE=1` | paraLLEl-GS runs the prepare pass of every batch of VRAM copies, as upstream does, also when no two copies of the batch can write the same word |
 | `BDR_PGS_RECORD_FROM=N`, `BDR_PGS_RECORD_VSYNCS=M` | with `BDR_PGS_RECORD`: records only VSync ticks N to N+M, starting with the VRAM of tick N |
 | `BDR_TRACE_DMA_CHAIN=N` | prints the tags (address, id, QWC, ADDR) of up to N DMA chains whose data exceeds 512 KiB |
 | `BDR_TRACE_DMA_KICKS=first,count` | every GIF, VIF0 and VIF1 DMA start of VSync ticks first..first+count, with the bytes it queued, what each channel still has queued and the PATH3 mask |
