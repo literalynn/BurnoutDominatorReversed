@@ -2,6 +2,10 @@
 
 What changes for players, newest first. The launcher shows the entries an update brings before installing it, and each version is a release on GitHub. Technical details are in `docs/CHANGES.md` and the commit log.
 
+## 1.6.1 (November 19, 2026)
+
+- **Faster graphics, above all on small graphics chips**: several steps of the graphics card's work now do less. The program that colours the pixels is built in a way the drivers run faster, and texture copies, the search for the parts of each texture a frame reads, the sorting of triangles into screen tiles and the preparation of textures read from the sharper frame skip needless work. On a small AMD integrated chip, a race frame takes 19% less time at 1 sample a pixel (14.0 ms instead of 17.2, now under the 16.7 ms of 60 frames a second) and 22% less at the default 4 samples (48 ms instead of 62). Big graphics cards work about 5% less (an RTX 5090 at 16 samples). The picture is the same, pixel for pixel.
+
 ## 1.6.0 (November 17, 2026)
 
 - **Play in French, German, Spanish or Italian**: the European disc has the game in five languages, and a new Language setting chooses which one (in the launcher's Settings tab, or the F1 menu). It applies from the game's next start: the game reads its language once, when it starts. A save state keeps the language it was saved with. In languages other than English, the memory card messages keep the console's wording.
